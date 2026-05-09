@@ -8,6 +8,40 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 2] — 2026-05-09 — IngestionPipeline (parsing + chunking)
+
+### Added
+- `src/ingestion/embeddings.py` — `build_embedding_model()` factory
+  returning `OpenAILikeEmbedding` wired to LiteLLM proxy.
+- `src/ingestion/pipeline.py`:
+  - `build_ingestion_pipeline(embed_model=None, semantic=False,
+    cache_dir=None, extra_transformations=None)` — composes a
+    LlamaIndex `IngestionPipeline`.
+  - `read_documents(input_dir)` — `SimpleDirectoryReader` wrapper
+    used by tests and (later) the worker.
+  - Two splitter modes: `SentenceSplitter` (default, deterministic,
+    no embed dep) and `SemanticSplitterNodeParser` (opt-in with
+    `semantic=True` + embed_model).
+  - Persistent disk cache via `IngestionCache` + `SimpleKVStore`.
+  - `extra_transformations` hook reserved for Stage 7 (canonical
+    identifier injection).
+- `tests/test_ingestion/fixtures/sample.txt` — minimal multi-paragraph
+  fixture.
+- `tests/test_ingestion/test_pipeline.py` — 5 tests covering reader,
+  sentence-splitter pipeline, semantic-splitter with `MockEmbedding`,
+  cache persistence, and the `extra_transformations` hook.
+
+### Notes
+- Plan called for SemanticSplitter as default; downgraded to
+  SentenceSplitter to avoid embedding round-trip per test run.
+  Semantic mode is opt-in via the factory and exercised in tests
+  with a `MockEmbedding`.
+- Embedding *transformation* (i.e. attaching embeddings to nodes) is
+  intentionally NOT in this pipeline yet — it gets bolted on in
+  Stage 3 alongside the vector store, matching LlamaIndex's typical
+  ingestion → vector-index split.
+- Suite total: 13 tests green.
+
 ## [Stage 1] — 2026-05-09 — Minimal infra (Milvus + Postgres + LiteLLM)
 
 ### Added

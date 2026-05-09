@@ -1,0 +1,13 @@
+Enterprise Knowledge Base — Sample Document
+
+This is a multi-paragraph fixture used by Stage-2 tests to verify the
+ingestion pipeline parses text and emits chunks with metadata.
+
+The semantic splitter would normally find natural breakpoints based
+on sentence-embedding similarity. The sentence splitter, used by
+default in tests, slices the text into roughly equal-token windows
+and is fully deterministic.
+
+Both splitters preserve file_path and file_type metadata on every
+emitted node, which downstream stages (vector index, KG, agentic
+retrieval) rely on for source citation.
