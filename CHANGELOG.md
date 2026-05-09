@@ -8,6 +8,42 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 9] — 2026-05-09 — Eval gate + ops scripts
+
+### Added
+- `tests/eval/identifier_recall.py` — **ported** from
+  enterprise-kb.  CLI: `--strict`, `--json-out`, `--golden`.
+  Same acceptance thresholds: phone/email/INN/OGRN/BIC/date
+  ≥0.95 recall, contract/amount ≥0.85, address ≥0.75,
+  precision ≥0.90.
+- `tests/eval/test_identifier_recall_thresholds.py` — pytest
+  gate over the eval (CI integration).
+- `tests/eval/golden_identifiers/*.json` — 7 golden cases
+  ported (contract supply, banking details, sole proprietor,
+  dates / phones / amounts variety, negative case).
+- `scripts/merge_identifier_duplicates.py` — adapted for
+  LlamaIndex.  Pure helpers (`canonicalize_for_type`,
+  `group_by_canonical`) port verbatim; the merge-write path
+  uses Cypher (`structured_query`) directly because LlamaIndex's
+  graph-store interface lacks a single-shot
+  `amerge_entities` equivalent.  `--dry-run` default; per-group
+  failures logged + counted, run continues.
+- `tests/test_scripts/test_merge_identifier_duplicates.py` — 7
+  tests covering canonicalisation, grouping, dry-run no-op,
+  real-run cypher invocation, error tolerance.
+- `scripts/check_ingestion.py` — diagnostic over Postgres
+  (row counts by status), Milvus (collection stats), Neo4j
+  (node + relationship counts).
+
+### Notes
+- Eval result on the ported golden set: every type 100%
+  recall + 100% precision (matches enterprise-kb baseline).
+- Merge cypher is intentionally cautious: MERGEs the target,
+  redirects all in/out relations to `RELATED_TO` then
+  DETACH-DELETEs sources. Future work can preserve original
+  relation types when porting becomes critical.
+- Suite total: 107 tests green.
+
 ## [Stage 8] — 2026-05-09 — FastAPI + Taskiq worker
 
 ### Added
