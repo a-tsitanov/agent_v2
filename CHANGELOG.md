@@ -8,6 +8,36 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 3] — 2026-05-09 — Vector index + basic query engine
+
+### Added
+- `src/retrieval/vector_index.py`:
+  - `build_vector_store(overwrite=False)` — Milvus
+    `BasePydanticVectorStore` from settings (cosine similarity).
+  - `build_vector_index(store, embed_model)` — wraps any vector
+    store into `VectorStoreIndex` (tests pass `SimpleVectorStore`
+    in-memory).
+  - `index_nodes(index, nodes)` — inserts pre-chunked nodes,
+    returns count for diagnostics.
+- `src/retrieval/query_engine.py`:
+  - `build_basic_query_engine(index, llm, similarity_top_k=10)` —
+    dense retriever + LLM synthesis. Stage 5 swaps the retriever
+    underneath; this API stays stable.
+- `src/retrieval/llm.py` — `build_llm()` factory using
+  `OpenAILike` against the LiteLLM proxy.
+- `src/ingestion/run.py` — CLI to ingest a directory end-to-end:
+  read docs → pipeline → vector index. Flags:
+  `--semantic`, `--overwrite-collection`, `--recursive/--no-recursive`.
+- `tests/test_retrieval/test_vector_index.py` — 3 tests using
+  `SimpleVectorStore` + `MockEmbedding` + `MockLLM`.
+
+### Notes
+- Live Milvus deliberately not exercised in unit tests — tests use
+  the in-memory `SimpleVectorStore` so the suite stays fast and
+  hermetic. Live Milvus is verified manually via
+  `python -m src.ingestion.run`.
+- Suite total: 16 tests green.
+
 ## [Stage 2] — 2026-05-09 — IngestionPipeline (parsing + chunking)
 
 ### Added
