@@ -8,6 +8,58 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 6] — 2026-05-09 — Knowledge graph (PropertyGraphIndex)
+
+### Added
+- `docker-compose.yml` — Neo4j 5-enterprise added (ports 7474/7687,
+  apoc plugin, sane heap defaults, healthcheck via wget on 7474).
+  `neo4j_data` and `neo4j_logs` volumes added.
+- `src/graph/schema.py` — `EntityType` / `RelationType` Literal
+  unions covering Russian B2B identifier types + generic ones.
+  `DEFAULT_VALIDATION_SCHEMA` lists 13 valid (head, relation,
+  tail) triples for `SchemaLLMPathExtractor` strict-mode.
+- `src/graph/store.py` — `build_neo4j_graph_store()` factory.
+- `src/graph/index.py`:
+  - `build_kg_extractor(llm, strict=True, num_workers=2)` —
+    `SchemaLLMPathExtractor` over the typed schemas.
+  - `build_property_graph_index(graph_store, embed_model,
+    extractor, nodes=None)` — composes index from store + embed +
+    extractor; either populates from chunks or attaches to an
+    existing store.
+- `src/graph/retriever.py` — `GraphRetriever` async wrapper around
+  `PropertyGraphIndex.as_retriever`; classifies returned nodes
+  into entities / relations / chunks with the same dict shape
+  enterprise-kb's `query_graph_data` produces.
+- `src/retrieval/agent.py` — extended:
+  - `GraphRetrieverProtocol` (runtime-checkable Protocol).
+  - `_merge_graph(accumulated, fresh_entities, fresh_relations)`
+    helper — dedup entities by name, relations by
+    `src+tgt+label`.
+  - `_accumulated_hl_keywords(graph, limit)` — top-N entity names,
+    matches enterprise-kb Stage F.
+  - `agentic_search(graph_retriever=None)` — optional graph hop
+    per round; entities/relations participate in dedup + early-exit
+    decision; graph chunks fold into the final synthesis node set.
+  - `AgenticRoundStat.new_entities` and `new_relations` populated.
+- `tests/test_graph/test_schema.py` — 3 tests on Literal coverage
+  and validation schema soundness.
+- `tests/test_retrieval/test_agent_graph.py` — 7 tests covering
+  helpers (`_merge_graph`, `_accumulated_hl_keywords`) and
+  end-to-end loop with a stub `GraphRetriever`: 2-round with graph,
+  early-exit when both sources and graph stable, NO early-exit
+  when only graph grows, graph chunks merged into synthesis input.
+
+### Notes
+- Live Neo4j NOT exercised in unit tests — would need a running
+  container.  The graph integration is verified via stubs;
+  end-to-end check is the manual `python -m src.ingestion.run`
+  against the live stack (Stage 8).
+- `SchemaLLMPathExtractor` itself isn't unit-tested here either —
+  it requires a real LLM to produce triplets.  Tests confirm the
+  factory builds without error; behaviour is verified in Stage 9
+  eval against enterprise-kb on identical golden questions.
+- Suite total: 44 tests green.
+
 ## [Stage 5] — 2026-05-09 — Hybrid retrieval (BM25 + vector + RRF)
 
 ### Added
