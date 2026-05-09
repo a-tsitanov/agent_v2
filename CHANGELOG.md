@@ -8,6 +8,32 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 1] — 2026-05-09 — Minimal infra (Milvus + Postgres + LiteLLM)
+
+### Added
+- `docker-compose.yml` — etcd, minio, milvus 2.4.17, postgres 16,
+  litellm proxy.  Neo4j + RabbitMQ deferred (Stage 6 / 8).
+- `docker/litellm_config.yaml` — sample proxy config wiring LiteLLM
+  to Ollama on the host (`host.docker.internal:11434`).  Replace
+  with your upstream (OpenAI, Anthropic, Azure) for production.
+- `scripts/start.sh` — `up`/`down`/`logs`/`ps` wrapper, prints
+  service URLs after start.
+- `scripts/setup_db.py` — idempotent Postgres `documents` table
+  bootstrap + Milvus connectivity ping (collection lifecycle owned
+  by `MilvusVectorStore` from Stage 3).
+- `tests/test_scripts/test_setup_db.py` — DDL invariants, idempotency
+  contract, callable signatures.
+
+### Notes
+- `documents` schema mirrors enterprise-kb:
+  `id (UUID PK), path, department, doc_type, status, error, summary,
+  created_at, updated_at`.  Status FSM:
+  pending → processing → completed | failed.
+- Milvus collection deliberately not provisioned in setup_db —
+  LlamaIndex's `MilvusVectorStore` handles schema creation and is
+  the source of truth for fields/dim.
+- Suite total: 8 tests green.
+
 ## [Stage 0] — 2026-05-09 — Bootstrap
 
 ### Added
