@@ -8,6 +8,52 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 8] — 2026-05-09 — FastAPI + Taskiq worker
+
+### Added
+- `docker-compose.yml` — RabbitMQ 3.13 added (5672/15672 +
+  management UI, healthcheck via `rabbitmq-diagnostics ping`).
+- `src/storage/postgres.py` — `AsyncPostgres` client with
+  `insert_pending`, `update_status`, `get` ops over the
+  `documents` table.
+- `src/api/auth.py` — `require_api_key` dep returning 401 on
+  missing header / 403 on invalid key.
+- `src/api/routes/health.py` — `GET /health` (public).
+- `src/api/routes/ingest.py` — `POST /api/v1/ingest`
+  (multipart upload + 202 with `job_id`),
+  `GET /api/v1/ingest/{job_id}` (PG-backed status poll).
+- `src/api/routes/search.py` — `POST /api/v1/search`.  Dispatches
+  to `agentic_search` when `agentic=true`, otherwise single-round
+  retrieve + synthesize.  All collaborators come from dishka.
+- `src/api/main.py` — FastAPI app, lifespan-managed dishka
+  container, CORS middleware, route registration.
+- `src/di/providers.py` — `CommonProvider` (PG, LLM, embeddings),
+  `ApiProvider` (retriever, judge, synthesizer,
+  graph_retriever=None).  `build_api_container()` and
+  `build_worker_container()` factories.
+- `src/ingestion/tasks.py` — Taskiq broker
+  (``AioPikaBroker(settings.rabbitmq.url)``) and
+  `process_document(doc_id, path)` task wiring the full
+  ingestion chain (parse → chunk → canon transform → vector
+  index → optional graph injection → PG status update).
+- `scripts/smoke.sh` — health / search / errors scenarios via
+  curl + jq.
+- `tests/test_api/test_health.py` — `/health` smoke.
+- `tests/test_api/test_auth.py` — auth dep matrix.
+
+### Notes
+- `graph_retriever` provider currently returns ``None`` — wiring
+  the live PropertyGraphIndex retriever needs a populated Neo4j,
+  which the eval gate (Stage 9) will exercise.  Search route
+  handles `None` gracefully.
+- Worker task ingestion path mirrors enterprise-kb's
+  `AsyncDocumentWorker.process_document` flow but composed from
+  LlamaIndex pieces.  No taskiq enqueue call from the API route
+  yet — the prototype's worker can be invoked manually via
+  `uv run taskiq worker src.ingestion.tasks:broker` after a
+  prior CLI ingest, or extended in a follow-up.
+- Suite total: 92 tests green.
+
 ## [Stage 7] — 2026-05-09 — Identifier canonicalization
 
 ### Added
