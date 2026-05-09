@@ -8,6 +8,40 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 7] — 2026-05-09 — Identifier canonicalization
+
+### Added
+- `src/ingestion/identifiers.py` — **ported verbatim** from
+  `enterprise-kb/src/ingestion/identifiers.py`.  Same per-type
+  detectors (PhoneNumber → E.164, Email lowercase, INN/OGRN with
+  checksum, BIC, ContractNumber upper, DocumentDate ISO,
+  Amount with `тыс/млн/млрд` multipliers, PostalAddress via
+  libpostal-or-rules), same dataclass `NormalizedIdentifier`,
+  same Stage-C helpers (`dedupe_by_canonical`,
+  `build_custom_kg_payload`, `build_augment_block`).
+- `src/ingestion/identifier_transform.py`:
+  - `IdentifierCanonicalizationTransform` —
+    `TransformComponent` for `IngestionPipeline`.  Stores
+    `canonical_identifiers` in node.metadata; appends the
+    "Канонические идентификаторы:" block to node.text.
+  - `inject_canonical_entities(graph_store, nodes)` —
+    dedup-merges by (entity_type, canonical) and upserts
+    `EntityNode` objects into the property-graph store.
+- `tests/test_ingestion/test_identifiers.py` — **ported** —
+  39 tests on per-type detectors, edge cases, integration on a
+  realistic Russian contract excerpt.
+- `tests/test_ingestion/test_identifier_transform.py` — 5 tests:
+  metadata + augment block, no-op on plain text, graph
+  injection dedup, missing metadata is safe, pluggable into the
+  Stage-2 pipeline factory.
+
+### Notes
+- The deterministic identifier layer is the project's main moat
+  vs RAGFlow / vanilla LlamaIndex stacks.  Porting it 1:1 keeps
+  parity with enterprise-kb so the Stage-9 comparative eval is
+  apples-to-apples.
+- Suite total: 88 tests green.
+
 ## [Stage 6] — 2026-05-09 — Knowledge graph (PropertyGraphIndex)
 
 ### Added
