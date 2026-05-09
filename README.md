@@ -12,11 +12,26 @@ Plan: `~/.claude/plans/hashed-rolling-llama.md`.
 
 ## Status
 
-- **Stage 0 — Bootstrap** ✅ done
-- Stages 1-9 — pending; each will be unlocked individually after
-  the previous one is verified end-to-end.
+All 9 stages of the original plan are committed (one commit per
+stage, each with a section in `CHANGELOG.md`):
 
-## Quick start (Stage 0)
+- ✅ **Stage 0** — Bootstrap (skeleton, deps, settings, smoke tests)
+- ✅ **Stage 1** — Minimal infra (Milvus + Postgres + LiteLLM)
+- ✅ **Stage 2** — IngestionPipeline (parser + chunker + cache)
+- ✅ **Stage 3** — Vector index + basic query engine
+- ✅ **Stage 4** — Agentic loop (priority milestone)
+- ✅ **Stage 5** — Hybrid retrieval (BM25 + vector + RRF)
+- ✅ **Stage 6** — Knowledge graph (PropertyGraphIndex + graph-aware agent)
+- ✅ **Stage 7** — Identifier canonicalization (ported + LlamaIndex transform)
+- ✅ **Stage 8** — FastAPI + Taskiq worker + dishka DI
+- ✅ **Stage 9** — Eval gate + ops scripts
+
+**Tests:** 107 green (unit + eval gate). Live-stack integration
+(Milvus / Neo4j / RabbitMQ / LiteLLM via Docker) is exercised
+manually — see `scripts/start.sh`, `scripts/setup_db.py`,
+`scripts/smoke.sh`.
+
+## Quick start
 
 ```bash
 cd kb-llamaindex
