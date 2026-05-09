@@ -8,6 +8,52 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 4] — 2026-05-09 — Agentic loop (PRIORITY)
+
+### Added
+- `src/models/search.py` — Pydantic shapes (`SearchRequest`,
+  `SearchResponse`, `SourceCitation`, `AgenticRoundStat`) mirroring
+  enterprise-kb wire format.
+- `src/retrieval/judge.py` — `LLMJudge` with the same JSON contract
+  and defensive-fallback semantics as `enterprise-kb._judge_context`.
+  Strips markdown fences, swallows JSON parse errors and LLM
+  exceptions → `sufficient=True` with reason carrying the error
+  text.
+- `src/retrieval/agent.py` — `agentic_search()` async function:
+  - Stub-friendly via `RetrieverProtocol`, `JudgeProtocol`,
+    `SynthesizerProtocol`.
+  - Per-round node dedup by `node.node_id`, delta tracking, early
+    exit on barren follow-up rounds (round > 1 and `new_sources=0`).
+  - `AgenticRoundStat` recorded per executed round, including
+    skipped-judge entry on early-exit (`sufficient=None`,
+    `reason="no new info"`).
+  - Defensive: judge exceptions don't crash the loop.
+  - Anti-loop: `follow_up == current_query` → break.
+  - Final synthesis via `ResponseSynthesizer` over the *enriched*
+    query (original + appended unique follow-ups) and *accumulated*
+    nodes — matches enterprise-kb Stage F semantics.
+- `tests/test_retrieval/test_agent.py` — 15 tests covering helpers
+  (dedup, enriched query), end-to-end loop (1-round, 2-round,
+  max_rounds, early-exit, follow-up loop guard, dedup across
+  rounds, round_stats per round, judge defensive defaults), and
+  `LLMJudge` direct unit tests (plain JSON, markdown fences,
+  invalid JSON, LLM exception).
+
+### Notes
+- This is the project's **agentic-first** milestone — the agent
+  loop works end-to-end on stub deps, hybrid retrieval / KG /
+  canonicalisation will plug in without touching `agent.py`.
+- Plan called for `AgentWorkflow`/Workflow primitives; opted for a
+  plain async function instead — keeps the port from
+  `enterprise-kb/agent_search.py` 1:1 readable, easier to reason
+  about and benchmark. Migrating to Workflow primitives later is
+  mechanical if needed.
+- `hl_keywords` (Stage F in enterprise-kb) is intentionally absent
+  here — Stage 4 has no KG, so there are no entity names to feed
+  back. Stage 6 will introduce the graph-search tool and
+  re-enable `hl_keywords`-style enrichment.
+- Suite total: 31 tests green.
+
 ## [Stage 3] — 2026-05-09 — Vector index + basic query engine
 
 ### Added
