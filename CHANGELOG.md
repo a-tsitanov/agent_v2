@@ -8,6 +8,34 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Stage 5] — 2026-05-09 — Hybrid retrieval (BM25 + vector + RRF)
+
+### Added
+- `src/retrieval/hybrid.py`:
+  - `build_bm25_retriever(nodes, similarity_top_k)` — pure-Python
+    BM25 over an in-memory node list.
+  - `build_hybrid_retriever(vector_index, bm25_nodes, ...)` —
+    `QueryFusionRetriever` (mode `reciprocal_rerank`) over the
+    dense + BM25 retrievers.  ``num_queries=1`` disables built-in
+    query expansion (the agent loop already covers expansion).
+- `src/retrieval/reranker.py` — `build_reranker(model_name, top_n)`
+  factory for `SentenceTransformerRerank`.  Default:
+  `BAAI/bge-reranker-v2-m3`.  Heavy (~1 GB on first run), kept
+  out of the default test path.
+- `tests/test_retrieval/test_hybrid.py` — 3 tests: BM25 surfaces a
+  keyword match, hybrid combines both retrievers, reranker factory
+  importable.
+
+### Notes
+- `QueryFusionRetriever` resolves an LLM at construction even with
+  expansion disabled — the factory now takes an explicit ``llm``
+  arg so callers (and tests via `MockLLM`) avoid surprise OpenAI
+  dependency.
+- Agent module is **not modified** — Stage 5 swaps the retriever
+  the caller passes into `agentic_search`.  This is the
+  composable seam the plan promised.
+- Suite total: 34 tests green.
+
 ## [Stage 4] — 2026-05-09 — Agentic loop (PRIORITY)
 
 ### Added
