@@ -1,0 +1,83 @@
+[project]
+name = "kb-llamaindex"
+version = "0.0.1"
+description = "Greenfield LlamaIndex-based agentic RAG prototype"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    # Core LlamaIndex (0.13+ for AgentWorkflow, PropertyGraphIndex with
+    # SchemaLLMPathExtractor, IngestionPipeline cache abstractions).
+    # Sub-package upper bounds left open — uv picks newest versions
+    # compatible with core 0.13.
+    "llama-index-core>=0.13,<0.14",
+    "llama-index-vector-stores-milvus>=0.7",
+    "llama-index-graph-stores-neo4j>=0.5",
+    "llama-index-readers-file>=0.4",
+    "llama-index-embeddings-openai-like>=0.1",
+    "llama-index-llms-openai-like>=0.4",
+    "llama-index-retrievers-bm25>=0.5",
+    "llama-index-postprocessor-sbert-rerank>=0.4",
+
+    # Web layer
+    "fastapi>=0.115,<0.140",
+    "uvicorn[standard]>=0.32,<0.50",
+    "python-multipart>=0.0.20,<0.1",
+
+    # Async background tasks
+    "taskiq>=0.12,<0.14",
+    "taskiq-aio-pika>=0.6,<0.8",
+
+    # Storage clients
+    "psycopg[binary]>=3.2,<4",
+    "pymilvus>=2.4,<3",
+    "neo4j>=5.27,<7",
+
+    # DI + config + logging
+    "dishka>=1.5,<2",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    "loguru>=0.7,<1",
+    "tenacity>=9,<10",
+
+    # Identifier canonicalization (Stage 7) — pin now to lock the
+    # cross-project portability with enterprise-kb's identifier layer.
+    "phonenumbers>=9,<10",
+    "dateparser>=1.2,<2",
+]
+
+[project.optional-dependencies]
+# libpostal Python bindings — requires system libpostal-dev. Installs
+# fail without the C library, so kept optional. Stage 7 falls back to
+# rule-based normalisation when this isn't installed.
+postal = ["postal>=1.1,<2"]
+
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.24,<2",
+    "httpx>=0.27,<0.30",
+    "ruff>=0.7,<1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",  # line length — covered by formatter
+    "B008",  # FastAPI Depends() pattern triggers it falsely
+]
