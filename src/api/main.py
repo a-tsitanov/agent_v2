@@ -19,19 +19,20 @@ from src.di.providers import build_api_container
 from src.utils.logging import configure_logging
 
 
+configure_logging(level=settings.api.log_level, json_output=settings.api.log_json)
+_container = build_api_container()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    configure_logging(level=settings.api.log_level, json_output=settings.api.log_json)
     logger.info(
         "kb-llamaindex API starting  env={env}  log_level={lvl}",
         env=settings.api.env, lvl=settings.api.log_level,
     )
-    container = build_api_container()
-    setup_dishka(container, app)
     try:
         yield
     finally:
-        await container.close()
+        await _container.close()
 
 
 app = FastAPI(
@@ -46,6 +47,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Dishka adds middleware → must run before the app starts processing
+# requests, hence before `include_router` and outside `lifespan`.
+setup_dishka(_container, app)
 
 app.include_router(health.router)
 app.include_router(search.router, prefix="/api/v1")
