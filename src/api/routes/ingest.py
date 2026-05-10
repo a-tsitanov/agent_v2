@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from src.api.auth import require_api_key
 from src.config import settings
+from src.ingestion.tasks import process_document
 from src.storage.postgres import AsyncPostgres
 
 router = APIRouter(tags=["ingestion"])
@@ -66,16 +67,16 @@ async def upload_document(
     await pg.insert_pending(
         doc_id, str(target), department=department, doc_type=doc_type,
     )
+
+    # Push the actual processing onto RabbitMQ.  The taskiq broker is
+    # started in `src/api/main.py` lifespan; the worker process
+    # (``taskiq worker src.ingestion.tasks:broker``) consumes from
+    # the same queue and runs ``process_document`` end-to-end.
+    await process_document.kiq(str(doc_id), str(target))
     logger.info(
         "ingest enqueued  doc_id={d}  path={p}  dept={dept}",
         d=doc_id, p=str(target), dept=department,
     )
-
-    # Defer task enqueue to keep this module decoupled from the
-    # taskiq broker singleton — the FastAPI app's startup hook
-    # wires in a Depends-injected dispatcher when needed.  For the
-    # prototype the worker polls Postgres for `pending` rows
-    # (out of scope here) OR the user invokes the worker manually.
     return IngestEnqueuedResponse(job_id=doc_id)
 
 

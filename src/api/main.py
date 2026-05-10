@@ -16,6 +16,7 @@ from loguru import logger
 from src.api.routes import health, ingest, search
 from src.config import settings
 from src.di.providers import build_api_container
+from src.ingestion.tasks import broker as taskiq_broker
 from src.utils.logging import configure_logging
 
 
@@ -29,9 +30,15 @@ async def lifespan(_: FastAPI):
         "kb-llamaindex API starting  env={env}  log_level={lvl}",
         env=settings.api.env, lvl=settings.api.log_level,
     )
+    # Taskiq client-side init — without this `.kiq(...)` calls from
+    # routes raise "broker is not started".  Worker processes
+    # start the broker themselves on launch, so this is needed only
+    # in the API.
+    await taskiq_broker.startup()
     try:
         yield
     finally:
+        await taskiq_broker.shutdown()
         await _container.close()
 
 
