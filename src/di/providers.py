@@ -23,6 +23,8 @@ from llama_index.core.response_synthesizers import (
     get_response_synthesizer,
 )
 
+from loguru import logger
+
 from src.ingestion.embeddings import build_embedding_model
 from src.retrieval.agent import (
     GraphRetrieverProtocol,
@@ -79,12 +81,37 @@ class ApiProvider(Provider):
         )
 
     @provide
-    def graph_retriever(self) -> GraphRetrieverProtocol | None:
-        # Stage 6 wiring: build PropertyGraphIndex from existing store.
-        # Returning None for now keeps the search route working when
-        # Neo4j is offline; live wiring lands together with Stage 9
-        # comparative eval.
-        return None
+    def graph_retriever(
+        self, embed_model: BaseEmbedding, llm: LLM,
+    ) -> GraphRetrieverProtocol | None:
+        """Attach to the already-populated Neo4j graph store.
+
+        Falls back to ``None`` when Neo4j is unreachable — search
+        still works on vector chunks alone in that case.  The
+        agent loop handles ``graph_retriever=None`` natively.
+        """
+        try:
+            from src.graph.index import (
+                build_kg_extractor,
+                build_property_graph_index,
+            )
+            from src.graph.retriever import GraphRetriever
+            from src.graph.store import build_neo4j_graph_store
+
+            graph_store = build_neo4j_graph_store()
+            pg_index = build_property_graph_index(
+                graph_store=graph_store,
+                embed_model=embed_model,
+                extractor=build_kg_extractor(llm),
+                nodes=None,  # attach to existing populated store
+            )
+            return GraphRetriever(pg_index)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "graph_retriever disabled (Neo4j unreachable?): {err}",
+                err=exc,
+            )
+            return None
 
 
 def build_api_container():

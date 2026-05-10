@@ -27,6 +27,7 @@ from src.ingestion.pipeline import (
     build_ingestion_pipeline,
     read_documents,
 )
+from src.retrieval.llm import build_llm
 from src.retrieval.vector_index import (
     build_vector_index,
     build_vector_store,
@@ -71,13 +72,39 @@ async def process_document(doc_id: str, path: str) -> None:
         index = build_vector_index(store, embed_model)
         index_nodes(index, nodes)
 
-        # Graph injection — best-effort.  Logged on failure so the
-        # main vector-only path still completes.
+        # Graph build — best-effort, two phases:
+        #   1. Deterministic canonical injection: phone E.164, INN,
+        #      OGRN, ... are upserted as labelled nodes BEFORE the
+        #      LLM extractor runs so it can attach relations to them.
+        #   2. SchemaLLMPathExtractor over the chunks pulls
+        #      free-form entities (Person, Organization, Event, ...)
+        #      AND relations between them via an LLM call per chunk.
+        # Both phases are wrapped in try/except so a Neo4j or LLM
+        # outage doesn't block the vector-only path from completing.
         try:
+            from src.graph.index import (
+                build_kg_extractor,
+                build_property_graph_index,
+            )
             from src.graph.store import build_neo4j_graph_store
 
             graph_store = build_neo4j_graph_store()
             inject_canonical_entities(graph_store, nodes)
+            try:
+                extractor = build_kg_extractor(build_llm())
+                build_property_graph_index(
+                    graph_store=graph_store,
+                    embed_model=embed_model,
+                    extractor=extractor,
+                    nodes=nodes,
+                )
+                logger.info(
+                    "graph LLM extraction done  doc_id={d}", d=doc_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "graph LLM extraction failed: {err}", err=exc,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("graph injection failed: {err}", err=exc)
 

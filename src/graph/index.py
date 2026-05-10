@@ -16,13 +16,17 @@ happens in the worker (Stage 8) against the real LiteLLM proxy.
 
 from __future__ import annotations
 
-from typing import get_args
+from typing import Literal, get_args
 
 from llama_index.core import PropertyGraphIndex
 from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.graph_stores.types import PropertyGraphStore
-from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
+from llama_index.core.indices.property_graph import (
+    SchemaLLMPathExtractor,
+    SimpleLLMPathExtractor,
+)
 from llama_index.core.llms import LLM
+from llama_index.core.schema import TransformComponent
 
 from src.graph.schema import (
     DEFAULT_VALIDATION_SCHEMA,
@@ -30,28 +34,82 @@ from src.graph.schema import (
     RelationType,
 )
 
+KGExtractor = TransformComponent
+
+
+ExtractorMode = Literal["simple", "schema"]
+
 
 def build_kg_extractor(
     llm: LLM,
     *,
-    strict: bool = True,
+    mode: ExtractorMode = "simple",
+    strict: bool = False,
     num_workers: int = 2,
-) -> SchemaLLMPathExtractor:
-    """SchemaLLMPathExtractor over our typed entity/relation set.
+) -> KGExtractor:
+    """Build a KG path extractor.
 
-    ``strict=True`` discards triples that don't fit
-    ``DEFAULT_VALIDATION_SCHEMA`` — recommended for the production
-    path where we want consistent Neo4j labels.  Set ``False`` for
-    bring-up to inspect what the LLM proposes.
+    Two modes:
+
+    - ``simple`` (default) — ``SimpleLLMPathExtractor``.  Uses a
+      plain prompt + regex parsing for triples.  Tolerant of
+      small-model output (llama3.1:8b, qwen2.5:3b...).  Entity
+      types end up as generic ``EntityNode``; relations as plain
+      labels — the deterministic identifier transform in
+      Stage 7 still gives us typed nodes for phones/INNs/etc.
+
+    - ``schema`` — ``SchemaLLMPathExtractor`` over our typed
+      ``EntityType``/``RelationType`` Literal unions.  Requires a
+      function-calling-capable LLM (GPT-4-class, Claude, large
+      Llama 3.1+).  Small models choke on the strict JSON schema —
+      LlamaIndex's validator swallows ``TypeError`` from
+      malformed triples and silently returns zero triples.  We
+      discovered this empirically with llama3.1:8b; switch
+      ``mode="schema"`` only with a stronger backend.
+
+    ``strict`` only affects schema mode.
     """
-    return SchemaLLMPathExtractor(
+    if mode == "schema":
+        return SchemaLLMPathExtractor(
+            llm=llm,
+            possible_entities=list(get_args(EntityType)),  # type: ignore[arg-type]
+            possible_relations=list(get_args(RelationType)),  # type: ignore[arg-type]
+            kg_validation_schema=DEFAULT_VALIDATION_SCHEMA if strict else None,
+            strict=strict,
+            num_workers=num_workers,
+        )
+    return SimpleLLMPathExtractor(
         llm=llm,
-        possible_entities=list(get_args(EntityType)),  # type: ignore[arg-type]
-        possible_relations=list(get_args(RelationType)),  # type: ignore[arg-type]
-        kg_validation_schema=DEFAULT_VALIDATION_SCHEMA if strict else None,
-        strict=strict,
         num_workers=num_workers,
+        max_paths_per_chunk=10,
+        extract_prompt=_RU_TRIPLET_EXTRACT_PROMPT,
     )
+
+
+# Russian-tuned triplet prompt.  The stock LlamaIndex prompt has
+# Alice/Bob/Philz examples that small models like llama3.1:8b
+# sometimes literally echo back as "Subject/Predicate/Object" when
+# they don't understand the task.  This version uses a Russian
+# business example so the model anchors on the right pattern.
+_RU_TRIPLET_EXTRACT_PROMPT = (
+    "Извлеки до {max_knowledge_triplets} триплетов знаний из текста.\n"
+    "Каждый триплет в формате (субъект, связь, объект) на отдельной строке.\n"
+    "Субъект и объект — конкретные сущности из текста (люди, организации,\n"
+    "телефоны, ИНН, договоры, адреса, даты, суммы — НЕ слова "
+    "«субъект»/«объект»).\n"
+    "Связь — глагол или короткая фраза, описывающая отношение.\n"
+    "Не используй стоп-слова. Не выдумывай сущности, которых нет в тексте.\n"
+    "---------------------\n"
+    "Пример:\n"
+    "Текст: ООО Альфа заключило договор № 17-К с ИП Иванов на сумму 500000 руб.\n"
+    "Триплеты:\n"
+    "(ООО Альфа, заключило договор, № 17-К)\n"
+    "(№ 17-К, между, ИП Иванов)\n"
+    "(№ 17-К, сумма, 500000 руб)\n"
+    "---------------------\n"
+    "Текст: {text}\n"
+    "Триплеты:\n"
+)
 
 
 def build_property_graph_index(

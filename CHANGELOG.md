@@ -8,6 +8,55 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [post-Stage-9 fixes] — 2026-05-11 — Live KG extraction wired
+
+### Fixed
+- **KG extraction never ran at runtime.** Worker's
+  `process_document` did `inject_canonical_entities` but never
+  called the `SchemaLLMPathExtractor`/`PropertyGraphIndex` → 0
+  relations in Neo4j.  Now invokes
+  `build_property_graph_index(nodes=...)` after canonical
+  injection so LLM-extracted triples land alongside the
+  deterministic canon-nodes.
+- **`graph_retriever` provider returned None.** Wrapped Neo4j
+  PropertyGraphIndex construction; falls back to None on
+  Neo4j outage.  Agent search now sees real entities + relations
+  per round when graph is online.
+- **SchemaLLMPathExtractor incompatible with llama3.1:8b.** Its
+  Pydantic validator catches only `KeyError/ValueError`; small
+  models emit malformed triplet JSON that raises `TypeError`,
+  killing the whole structured_predict.  Even when using
+  function-calling mode (`is_function_calling_model=True`),
+  llama3.1:8b often skips the tool call.
+  → Default extractor switched to `SimpleLLMPathExtractor`
+  (regex-based, tolerant).  Stricter `SchemaLLMPathExtractor` is
+  still available via `build_kg_extractor(mode="schema",
+  strict=True)` for GPT-4-class or 70B+ backends.
+- **Russian-tuned extract prompt.** Stock LlamaIndex prompt
+  contains English Alice/Bob/Philz examples that small models
+  literally echo as "Subject/Predicate/Object" placeholders.
+  Replaced with a Russian B2B example
+  (`ООО Альфа → договор № 17-К → ИП Иванов`).  Empirical result
+  on llama3.1:8b: 18 entities + 9 typed relations from a
+  5-line contract excerpt (vs 0 with the stock prompt).
+- **`build_kg_extractor` API extended** with `mode: ExtractorMode
+  = "simple" | "schema"` for future swaps.
+
+### Added
+- `scripts/diag_kg.py` — diagnostic that runs the extractor on a
+  hard-coded chunk and prints entities + relations.  Helpful when
+  swapping LLMs to verify they still produce structured output.
+
+### Notes
+- `SimpleLLMPathExtractor` returns entities with generic label
+  `entity` and relations with the LLM-emitted verb as label.  We
+  rely on Stage 7's canonical-identifier injection (which
+  upserts EntityNodes with **typed** labels via PropertyGraphStore
+  directly) for phone/INN/OGRN/etc.  Free-form Person /
+  Organization / Event nodes from the LLM remain untyped — this is
+  the tradeoff vs strict SchemaLLM mode.
+- Suite total: 107 tests green (unchanged).
+
 ## [Stage 9] — 2026-05-09 — Eval gate + ops scripts
 
 ### Added

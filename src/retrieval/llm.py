@@ -18,5 +18,10 @@ def build_llm() -> LLM:
         timeout=cfg.timeout_s,
         max_retries=cfg.max_retries,
         is_chat_model=True,
+        # Default off — the project uses SimpleLLMPathExtractor for
+        # KG extraction (regex-based parsing, no tool calls).  Flip
+        # to True if you swap in SchemaLLMPathExtractor with a
+        # function-calling capable model (GPT-4, Claude, large
+        # Llama 3.1+ via Ollama).
         is_function_calling_model=False,
     )
