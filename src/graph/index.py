@@ -46,6 +46,7 @@ def build_kg_extractor(
     mode: ExtractorMode = "simple",
     strict: bool = False,
     num_workers: int = 2,
+    extract_prompt: str | None = None,
 ) -> KGExtractor:
     """Build a KG path extractor.
 
@@ -68,6 +69,13 @@ def build_kg_extractor(
       ``mode="schema"`` only with a stronger backend.
 
     ``strict`` only affects schema mode.
+
+    ``extract_prompt`` overrides the default multilingual template
+    (Simple mode only).  Pass a string template — see
+    ``_MULTILINGUAL_TRIPLET_EXTRACT_PROMPT`` for the placeholder
+    contract (must include ``{max_knowledge_triplets}`` and
+    ``{text}``).  Use this to lock to a single language if the
+    multilingual default leaks predicates across languages.
     """
     if mode == "schema":
         return SchemaLLMPathExtractor(
@@ -82,33 +90,59 @@ def build_kg_extractor(
         llm=llm,
         num_workers=num_workers,
         max_paths_per_chunk=10,
-        extract_prompt=_RU_TRIPLET_EXTRACT_PROMPT,
+        extract_prompt=extract_prompt or _MULTILINGUAL_TRIPLET_EXTRACT_PROMPT,
     )
 
 
-# Russian-tuned triplet prompt.  The stock LlamaIndex prompt has
-# Alice/Bob/Philz examples that small models like llama3.1:8b
-# sometimes literally echo back as "Subject/Predicate/Object" when
-# they don't understand the task.  This version uses a Russian
-# business example so the model anchors on the right pattern.
-_RU_TRIPLET_EXTRACT_PROMPT = (
-    "Извлеки до {max_knowledge_triplets} триплетов знаний из текста.\n"
-    "Каждый триплет в формате (субъект, связь, объект) на отдельной строке.\n"
-    "Субъект и объект — конкретные сущности из текста (люди, организации,\n"
-    "телефоны, ИНН, договоры, адреса, даты, суммы — НЕ слова "
-    "«субъект»/«объект»).\n"
-    "Связь — глагол или короткая фраза, описывающая отношение.\n"
-    "Не используй стоп-слова. Не выдумывай сущности, которых нет в тексте.\n"
-    "---------------------\n"
-    "Пример:\n"
-    "Текст: ООО Альфа заключило договор № 17-К с ИП Иванов на сумму 500000 руб.\n"
-    "Триплеты:\n"
+# Multilingual triplet prompt.  Instructions are in English (best
+# small-model compliance), few-shot examples cover three languages
+# so the model anchors on the «keep entity names in original
+# language» pattern.  The stock LlamaIndex prompt only had English
+# Alice/Bob/Philz which (a) broke RU/JA/DE input and (b) made
+# llama3.1:8b sometimes echo "Subject/Predicate/Object" verbatim.
+#
+# To swap for a single-language workload, override
+# ``extract_prompt=`` when calling ``build_kg_extractor`` (or pass
+# ``SimpleLLMPathExtractor`` your own template directly).
+_MULTILINGUAL_TRIPLET_EXTRACT_PROMPT = (
+    "Extract up to {max_knowledge_triplets} knowledge triplets from the text below.\n"
+    "Each triplet must be on its own line in the format: "
+    "(subject, predicate, object)\n"
+    "\n"
+    "Rules:\n"
+    "1. Subject and object MUST be concrete entities from the text "
+    "(people, organizations, phone numbers, IDs, contract numbers, "
+    "addresses, dates, amounts, locations, events, concepts).\n"
+    "2. Predicate is a short verb phrase describing the relation.\n"
+    "3. Keep entity names in the ORIGINAL language of the source text "
+    "(do NOT translate company names, person names, addresses, etc.).\n"
+    "4. The predicate itself can be in English OR in the source language "
+    "— prefer the source language for readability.\n"
+    "5. Do not invent entities not present in the text.\n"
+    "6. Skip stop-words and pronouns as standalone subjects/objects.\n"
+    "7. Do NOT output literal placeholders like \"Subject\"/\"Object\" — "
+    "they are template markers, not values to copy.\n"
+    "\n"
+    "--- Examples covering multiple languages ---\n"
+    "Text: Alice is Bob's mother and works at Acme Corp.\n"
+    "Triplets:\n"
+    "(Alice, is mother of, Bob)\n"
+    "(Alice, works at, Acme Corp)\n"
+    "\n"
+    "Text: ООО Альфа заключило договор № 17-К с ИП Иванов на сумму 500000 руб.\n"
+    "Triplets:\n"
     "(ООО Альфа, заключило договор, № 17-К)\n"
     "(№ 17-К, между, ИП Иванов)\n"
     "(№ 17-К, сумма, 500000 руб)\n"
-    "---------------------\n"
-    "Текст: {text}\n"
-    "Триплеты:\n"
+    "\n"
+    "Text: Die Firma Müller GmbH hat ihren Sitz in München und wurde 2010 gegründet.\n"
+    "Triplets:\n"
+    "(Müller GmbH, Sitz in, München)\n"
+    "(Müller GmbH, gegründet in, 2010)\n"
+    "\n"
+    "--- Now extract from the following text ---\n"
+    "Text: {text}\n"
+    "Triplets:\n"
 )
 
 
