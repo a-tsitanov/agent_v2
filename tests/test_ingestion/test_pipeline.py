@@ -37,7 +37,7 @@ def test_read_documents_loads_text_fixture() -> None:
 
 def test_sentence_splitter_pipeline_emits_chunks() -> None:
     docs = read_documents(FIXTURES, required_exts=[".txt"])
-    pipeline = build_ingestion_pipeline()  # default = SentenceSplitter
+    pipeline = build_ingestion_pipeline(translate_to_russian=False)  # default = SentenceSplitter
     nodes = pipeline.run(documents=docs)
 
     assert len(nodes) >= 1
@@ -56,6 +56,7 @@ def test_semantic_splitter_pipeline_runs_with_mock_embedding() -> None:
     pipeline = build_ingestion_pipeline(
         embed_model=MockEmbedding(embed_dim=8),
         semantic=True,
+        translate_to_russian=False,
     )
     nodes = pipeline.run(documents=docs)
     assert len(nodes) >= 1
@@ -64,7 +65,9 @@ def test_semantic_splitter_pipeline_runs_with_mock_embedding() -> None:
 def test_pipeline_cache_persists_to_disk(tmp_path: Path) -> None:
     docs = read_documents(FIXTURES, required_exts=[".txt"])
     cache_dir = tmp_path / "cache"
-    pipeline = build_ingestion_pipeline(cache_dir=cache_dir)
+    pipeline = build_ingestion_pipeline(
+        cache_dir=cache_dir, translate_to_russian=False,
+    )
 
     pipeline.run(documents=docs)
     pipeline.persist(persist_dir=str(cache_dir))
@@ -88,6 +91,7 @@ def test_extra_transformations_are_applied() -> None:
     docs = read_documents(FIXTURES, required_exts=[".txt"])
     pipeline = build_ingestion_pipeline(
         extra_transformations=[_TagTransform()],
+        translate_to_russian=False,
     )
     nodes = pipeline.run(documents=docs)
     assert all(n.metadata.get("stage7_tag") == "applied" for n in nodes)

@@ -26,7 +26,7 @@ from src.retrieval.vector_index import build_vector_index, index_nodes
 
 def _ingest(docs: list[Document]):
     """Run pipeline + build vector index, return both nodes and index."""
-    pipeline = build_ingestion_pipeline()
+    pipeline = build_ingestion_pipeline(translate_to_russian=False)
     nodes = pipeline.run(documents=docs)
     embed_model = MockEmbedding(embed_dim=8)
     index = build_vector_index(SimpleVectorStore(), embed_model)

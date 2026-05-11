@@ -140,6 +140,15 @@ class IngestionSettings(BaseSettings):
     breakpoint_percentile: int = 95
     batch_size: int = 10
     cache_dir: str = "/app/data/ingestion_cache"
+    # When True, ingest pipeline runs a per-chunk LLM translation
+    # step that fills node.metadata["translated_text"] with a
+    # Russian rendering of the original.  Original chunk text is
+    # NOT mutated — Milvus / Neo4j :Chunk nodes keep the source
+    # language for citation fidelity.  The KG extractor then reads
+    # the translated text so entities + descriptions land in
+    # Russian, enabling cross-lingual graph dedup.
+    translate_to_russian: bool = True
+    translation_concurrency: int = 4
 
 
 class AgentSettings(BaseSettings):

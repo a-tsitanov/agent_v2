@@ -92,7 +92,12 @@ class LightRAGExtractor(TransformComponent):
     examples: list[str] = Field(default_factory=lambda: list(EXAMPLES_DEFAULT))
     num_workers: int = 4
     gleaning_passes: int = 0
-    language: str = "the source-text language"
+    # Default to Russian — the ingest pipeline normalises chunk
+    # text to Russian via `TranslateToRussianTransform` so the
+    # entire knowledge graph is uniformly Russian.  Override only
+    # for tests / benchmarks that intentionally extract from
+    # source-language text.
+    language: str = "Russian"
 
     # ── TransformComponent contract ─────────────────────────────────
 
@@ -123,7 +128,14 @@ class LightRAGExtractor(TransformComponent):
     # ── per-chunk extract + gleaning ─────────────────────────────────
 
     async def _aextract(self, node: BaseNode) -> BaseNode:
-        chunk_text = node.get_content(metadata_mode=MetadataMode.LLM)
+        # Prefer the translated text (Russian) when the ingest
+        # pipeline ran `TranslateToRussianTransform`; fall back to
+        # raw chunk text when translation was skipped (config off
+        # or chunk already Russian and pipeline noop'd).
+        chunk_text = (
+            (node.metadata or {}).get("translated_text")
+            or node.get_content(metadata_mode=MetadataMode.LLM)
+        )
         entity_types_str = ", ".join(self.entity_types)
         examples_rendered = render_examples(
             self.examples,

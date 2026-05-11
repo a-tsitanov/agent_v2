@@ -169,6 +169,76 @@ async def test_orphan_endpoint_synthesises_entity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reads_translated_text_when_present() -> None:
+    """When `IngestionPipeline` runs `TranslateToRussianTransform`,
+    each chunk carries `node.metadata['translated_text']` (Russian).
+    LightRAGExtractor must feed THAT into the LLM, not the original
+    `node.text`."""
+    captured: dict[str, str] = {}
+
+    @dataclass
+    class _SpyLLM:
+        responses: list[str]
+
+        async def achat(self, messages: list[ChatMessage], **_) -> object:
+            # Capture what the extractor sent so the test can assert
+            # it pulled from translated_text.
+            captured["user"] = messages[-1].content or ""
+            text = self.responses.pop(0) if self.responses else ""
+
+            class _R:
+                class _M:
+                    content = text
+
+                message = _M()
+
+            return _R()
+
+    payload = _build_payload(
+        entities=[("Foo", "Concept", "Some russian description.")],
+        relations=[],
+    )
+    extractor = LightRAGExtractor(llm=_SpyLLM(responses=[payload]), num_workers=1)
+    node = TextNode(id_="c-tr", text="ORIGINAL ENGLISH TEXT")
+    node.metadata["translated_text"] = "RU_TRANSLATED_BODY"
+    await extractor.acall([node])
+    assert "RU_TRANSLATED_BODY" in captured["user"]
+    assert "ORIGINAL ENGLISH TEXT" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_node_text_without_translation() -> None:
+    """Without `translated_text` metadata (e.g. translation off, or
+    chunk skipped) extractor must read `node.text` as before."""
+    captured: dict[str, str] = {}
+
+    @dataclass
+    class _SpyLLM:
+        responses: list[str]
+
+        async def achat(self, messages: list[ChatMessage], **_) -> object:
+            captured["user"] = messages[-1].content or ""
+            text = self.responses.pop(0) if self.responses else ""
+
+            class _R:
+                class _M:
+                    content = text
+
+                message = _M()
+
+            return _R()
+
+    payload = _build_payload(
+        entities=[("X", "Concept", "d.")],
+        relations=[],
+    )
+    extractor = LightRAGExtractor(llm=_SpyLLM(responses=[payload]), num_workers=1)
+    node = TextNode(id_="c-noTrans", text="english only")
+    await extractor.acall([node])
+    assert "english only" in captured["user"]
+
+
+@pytest.mark.asyncio
 async def test_multi_chunk_parallel_extraction() -> None:
     """Verify multiple chunks run through the extractor cleanly."""
     payloads = [

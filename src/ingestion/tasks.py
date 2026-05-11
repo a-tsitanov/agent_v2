@@ -128,8 +128,10 @@ async def process_document(doc_id: str, path: str) -> None:
     try:
         await pg.update_status(job_uuid, status="processing")
 
-        # 1. parse + chunk + identifier-canon (canon is built-in)
-        pipeline = build_ingestion_pipeline()
+        # 1. parse + chunk + identifier-canon + (optional) RU translation.
+        # `translator_llm` is the same project LLM as the KG extractor:
+        # cheap on gpt-4o-mini and centralises the LiteLLM proxy hop.
+        pipeline = build_ingestion_pipeline(translator_llm=llm)
         docs = read_documents(target.parent, recursive=False)
         docs = [d for d in docs if d.metadata.get("file_path") == str(target)]
         if not docs:
@@ -162,7 +164,7 @@ async def process_document(doc_id: str, path: str) -> None:
                 extractor = build_kg_extractor(llm, mode="lightrag")
                 nodes = await extractor.acall(nodes)
                 merged_entities, merged_relations = await merge_kg_extraction(
-                    nodes, llm,
+                    nodes, llm, language="Russian",
                 )
                 # PropertyGraphIndex writes every chunk's metadata
                 # onto its `:Chunk` node in Neo4j.  Neo4j rejects

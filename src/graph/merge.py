@@ -164,7 +164,7 @@ async def merge_kg_extraction(
     force_summary_on_count: int = DEFAULT_FORCE_SUMMARY_ON_COUNT,
     force_summary_on_chars: int = DEFAULT_FORCE_SUMMARY_ON_CHARS,
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS,
-    language: str = "the source-text language",
+    language: str = "Russian",
 ) -> tuple[list[EntityNode], list[Relation]]:
     """Merge per-chunk extraction into a deduplicated graph patch.
 

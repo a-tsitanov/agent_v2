@@ -37,7 +37,7 @@ def _three_docs() -> list[Document]:
 
 def test_index_nodes_returns_count_inserted() -> None:
     docs = _three_docs()
-    pipeline = build_ingestion_pipeline()
+    pipeline = build_ingestion_pipeline(translate_to_russian=False)
     nodes = pipeline.run(documents=docs)
 
     embed_model = MockEmbedding(embed_dim=8)
@@ -56,7 +56,7 @@ def test_index_nodes_handles_empty_input() -> None:
 
 def test_basic_query_engine_returns_source_nodes() -> None:
     docs = _three_docs()
-    pipeline = build_ingestion_pipeline()
+    pipeline = build_ingestion_pipeline(translate_to_russian=False)
     nodes = pipeline.run(documents=docs)
 
     embed_model = MockEmbedding(embed_dim=8)

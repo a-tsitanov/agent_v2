@@ -35,6 +35,7 @@ from src.config import settings
 from src.ingestion.identifier_transform import (
     IdentifierCanonicalizationTransform,
 )
+from src.ingestion.translate_transform import TranslateToRussianTransform
 
 
 def _build_splitter(
@@ -86,6 +87,8 @@ def build_ingestion_pipeline(
     semantic: bool = False,
     cache_dir: str | Path | None = None,
     with_identifier_canon: bool = True,
+    translate_to_russian: bool | None = None,
+    translator_llm: object | None = None,
     extra_transformations: list[TransformComponent] | None = None,
 ) -> IngestionPipeline:
     """Compose the project's ingestion pipeline.
@@ -93,28 +96,45 @@ def build_ingestion_pipeline(
     Args:
         embed_model: required when `semantic=True` (the semantic
             splitter calls embeddings to detect breakpoints).
-            Ignored when `semantic=False`.
         semantic: switch from `SentenceSplitter` to
-            `SemanticSplitterNodeParser`.  Off by default — the
-            embed round-trip per chunk-decision rarely pays off on
-            short documents.
+            `SemanticSplitterNodeParser`.  Off by default.
         cache_dir: when set, persists transformation outputs so
             re-ingest of unchanged documents skips chunking +
             identifier extraction.
         with_identifier_canon: when True (default), the canonical
             identifier transform (phone → E.164, INN with checksum,
             etc.) runs between the splitter and any extra transforms.
-            Turn off only for benchmarks that need to compare
-            against a pipeline without identifier injection.
-        extra_transformations: appended AFTER the identifier
-            transform.  The worker uses this hook to add KG
-            extractor + description enricher.
+        translate_to_russian: when True, inserts a
+            `TranslateToRussianTransform` AFTER identifier-canon —
+            populates `node.metadata["translated_text"]` so the KG
+            extractor can produce Russian-normalised entities while
+            Milvus / Neo4j chunks keep the original language.
+            Defaults to `settings.ingestion.translate_to_russian`.
+            Requires `translator_llm`; raises ValueError otherwise.
+        translator_llm: LLM client used by the translator transform.
+            Only required when `translate_to_russian` is True.
+        extra_transformations: appended LAST.  The worker uses this
+            hook to add ad-hoc transforms.
     """
     transformations: list[TransformComponent] = [
         _build_splitter(semantic=semantic, embed_model=embed_model),
     ]
     if with_identifier_canon:
         transformations.append(IdentifierCanonicalizationTransform())
+    translate_flag = (
+        translate_to_russian
+        if translate_to_russian is not None
+        else settings.ingestion.translate_to_russian
+    )
+    if translate_flag:
+        if translator_llm is None:
+            raise ValueError(
+                "translate_to_russian=True requires translator_llm"
+            )
+        transformations.append(TranslateToRussianTransform(
+            llm=translator_llm,
+            num_workers=settings.ingestion.translation_concurrency,
+        ))
     if extra_transformations:
         transformations.extend(extra_transformations)
     cache_obj = _build_cache(cache_dir)

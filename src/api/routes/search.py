@@ -39,9 +39,20 @@ async def search(
         with trace_request("search", req.query):
             with record_timed("tool_call", tool_name="vector_retrieve"):
                 nodes = await retriever.aretrieve(req.query)
+            # Inject a Russian-output instruction into the synthesizer
+            # query.  LlamaIndex's default ResponseSynthesizer prompts
+            # are English-leaning; without this it sometimes answers
+            # in English when context chunks are English.  The graph
+            # is normalised to Russian, queries are Russian, so the
+            # answer must be Russian too.
+            ru_query = (
+                "Ответь на следующий вопрос на русском языке, "
+                "сохраняя имена собственные и идентификаторы дословно "
+                f"из исходного языка контекста: {req.query}"
+            )
             with record_timed("synthesize", n_sources=len(nodes)):
                 response = await synthesizer.asynthesize(
-                    query=req.query, nodes=nodes,
+                    query=ru_query, nodes=nodes,
                 )
         latency_ms = (time.monotonic() - t0) * 1000.0
         return SearchResponse(

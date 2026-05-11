@@ -118,6 +118,7 @@ def test_transform_pluggable_into_ingestion_pipeline() -> None:
     ]
     pipeline = build_ingestion_pipeline(
         extra_transformations=[IdentifierCanonicalizationTransform()],
+        translate_to_russian=False,
     )
     out = pipeline.run(documents=docs)
     assert len(out) >= 1
