@@ -43,6 +43,43 @@ from src.storage.postgres import AsyncPostgres
 broker = AioPikaBroker(settings.rabbitmq.url)
 
 
+# Neo4j accepts only primitive properties + arrays of primitives —
+# nested maps / lists-of-maps cause `Neo.ClientError.Statement.TypeError`
+# when PropertyGraphIndex writes a `:Chunk` node.  Our pipeline
+# attaches `canonical_identifiers` as `list[dict]` for downstream
+# retrievers (Milvus tolerates it via JSON serialisation), so we
+# scrub the offending keys off the in-memory nodes right before the
+# graph step.  Milvus has already received the full metadata in
+# step 2; the strip is graph-store-only.
+_NEO4J_UNSAFE_METADATA_KEYS: frozenset[str] = frozenset({
+    "canonical_identifiers",
+})
+
+
+def _is_neo4j_safe(value):
+    """A value Neo4j will accept as a node property — primitives
+    or flat arrays of primitives."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(
+            v is None or isinstance(v, (str, int, float, bool))
+            for v in value
+        )
+    return False
+
+
+def _strip_neo4j_unsafe_metadata(nodes) -> None:
+    """In-place: drop metadata keys whose values Neo4j would reject."""
+    for n in nodes:
+        md = getattr(n, "metadata", None)
+        if not md:
+            continue
+        for key in list(md.keys()):
+            if key in _NEO4J_UNSAFE_METADATA_KEYS or not _is_neo4j_safe(md[key]):
+                md.pop(key, None)
+
+
 @broker.task
 async def process_document(doc_id: str, path: str) -> None:
     """Run the full ingestion chain for one uploaded file.
@@ -105,6 +142,15 @@ async def process_document(doc_id: str, path: str) -> None:
                 merged_entities, merged_relations = await merge_kg_extraction(
                     nodes, llm,
                 )
+                # PropertyGraphIndex writes every chunk's metadata
+                # onto its `:Chunk` node in Neo4j.  Neo4j rejects
+                # nested types ("Property values can only be of
+                # primitive types or arrays thereof") so strip any
+                # metadata value that isn't a Neo4j-friendly scalar
+                # right before that call.  Milvus already received
+                # the original metadata in step 2; this only affects
+                # the graph store.
+                _strip_neo4j_unsafe_metadata(nodes)
                 await asyncio.to_thread(
                     build_property_graph_index,
                     graph_store=graph_store,
