@@ -44,6 +44,10 @@ from tests.eval.answer_quality import (  # noqa: E402
     load_golden_cases,
     score_case,
 )
+from tests.eval.medical_fixture import (  # noqa: E402
+    KNOWN_QUESTION_TYPES,
+    load_medical_golden_cases,
+)
 
 
 # `legacy` exercises the judge-based path via the same /search endpoint
@@ -106,6 +110,25 @@ def _score_response(case, *, endpoint: str, response: dict | None) -> CaseScore:
 
 async def run(args: argparse.Namespace) -> int:
     cases = load_golden_cases(args.golden)
+    if args.medical_sample:
+        qt_filter = (
+            {t.strip() for t in args.medical_types.split(",") if t.strip()}
+            if args.medical_types else None
+        )
+        if qt_filter and not qt_filter.issubset(KNOWN_QUESTION_TYPES):
+            unknown = qt_filter - KNOWN_QUESTION_TYPES
+            raise ValueError(
+                f"unknown medical question_type(s): {unknown}.  "
+                f"valid: {sorted(KNOWN_QUESTION_TYPES)}"
+            )
+        medical = load_medical_golden_cases(
+            limit=args.medical_sample,
+            question_types=qt_filter,
+            sample_seed=args.medical_seed,
+        )
+        print(f"  + {len(medical)} medical cases "
+              f"(seed={args.medical_seed}, types={qt_filter or 'all'})")
+        cases = list(cases) + medical
     endpoints = [e.strip() for e in args.endpoints.split(",") if e.strip()]
     if args.include_legacy and "legacy" not in endpoints:
         endpoints.append("legacy")
@@ -202,6 +225,25 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--golden", type=Path, default=GOLDEN_DIR_DEFAULT)
     p.add_argument("--json-out", type=Path, default=None)
     p.add_argument("--strict", action="store_true")
+    # Medical benchmark — pulled from tests/eval/corpora/medical/
+    # (2 062 Q&A from the Medical KG-RAG benchmark).  Opt-in,
+    # since the full set is too large for default CI runs.
+    p.add_argument(
+        "--medical-sample", type=int, default=0,
+        help="add N medical Q&A cases (0 = skip; up to 2062).",
+    )
+    p.add_argument(
+        "--medical-types", default="",
+        help=(
+            "comma-separated subset of medical question_types "
+            "(Fact Retrieval, Complex Reasoning, Contextual Summarize, "
+            "Creative Generation).  Default: all."
+        ),
+    )
+    p.add_argument(
+        "--medical-seed", type=int, default=42,
+        help="deterministic shuffle seed for medical sampling.",
+    )
     return p.parse_args()
 
 
