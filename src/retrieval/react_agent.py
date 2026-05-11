@@ -40,6 +40,7 @@ from src.models.search import (
     AgenticStepStat,
     SearchResponse,
 )
+from src.observability.trace import record_event, record_timed
 from src.retrieval._common import deduplicate_nodes, node_to_citation
 
 
@@ -260,9 +261,10 @@ async def agentic_react_search(
 
     for step_i in range(1, max_iterations + 1):
         try:
-            response = await llm.achat_with_tools(
-                tools=tools, chat_history=messages,
-            )
+            with record_timed("llm_call", step=step_i, kind="agent_reasoning"):
+                response = await llm.achat_with_tools(
+                    tools=tools, chat_history=messages,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("agent step failed: {err}", err=exc)
             break
@@ -298,7 +300,11 @@ async def agentic_react_search(
                 obs = f"unknown tool: {tc.tool_name}"
             else:
                 try:
-                    output = await tool.acall(**tc.tool_kwargs)
+                    with record_timed(
+                        "tool_call", step=step_i,
+                        tool_name=tc.tool_name, tool_args=tc.tool_kwargs,
+                    ):
+                        output = await tool.acall(**tc.tool_kwargs)
                     obs = str(output)
                 except Exception as exc:  # noqa: BLE001
                     obs = f"tool error: {exc}"
@@ -324,7 +330,8 @@ async def agentic_react_search(
             break
 
     # ── synthesis ────────────────────────────────────────────────────
-    answer_response = await synthesize(query, accumulated_sources)
+    with record_timed("synthesize", n_sources=len(accumulated_sources)):
+        answer_response = await synthesize(query, accumulated_sources)
     answer_text = (
         getattr(answer_response, "response", None)
         or str(answer_response)

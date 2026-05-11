@@ -1,0 +1,14 @@
+{
+  "id": "qa-transcript-004",
+  "doc_type": "transcript",
+  "category": "open_ended_summary",
+  "query": "Резюмируй ключевые жалобы клиентов за последний месяц.",
+  "must_include_facts": [
+    "жалобы"
+  ],
+  "must_include_entities": [
+    "клиент"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Cross-transcript summarization; recall-heavy."
+}

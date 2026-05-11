@@ -1,0 +1,12 @@
+{
+  "id": "qa-transcript-003",
+  "doc_type": "transcript",
+  "category": "product_lookup",
+  "query": "О каком продукте клиент упоминает в разговоре?",
+  "must_include_facts": [],
+  "must_include_entities": [
+    "продукт"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Product entity extraction; tests Product type in KG."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "qa-transcript-005",
+  "doc_type": "transcript",
+  "category": "negative_lookup",
+  "query": "Были ли звонки с жалобами на проблемы с поставкой оборудования?",
+  "must_include_facts": [],
+  "must_include_entities": [],
+  "uncertainty_ok_for": [
+    "поставка оборудования"
+  ],
+  "notes": "Negative: corpus has no equipment-supply complaints — tests UNCERTAIN handling."
+}

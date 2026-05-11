@@ -1,0 +1,14 @@
+{
+  "id": "qa-report-005",
+  "doc_type": "report",
+  "category": "concept_lookup",
+  "query": "Какие концепции продуктовой стратегии упоминаются в отчёте?",
+  "must_include_facts": [
+    "продуктовая стратегия"
+  ],
+  "must_include_entities": [
+    "стратегия"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Concept extraction; tests Concept/Topic entity recall in KG."
+}

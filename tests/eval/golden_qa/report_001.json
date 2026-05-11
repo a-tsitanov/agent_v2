@@ -1,0 +1,16 @@
+{
+  "id": "qa-report-001",
+  "doc_type": "report",
+  "category": "single_fact",
+  "query": "Какие выводы автор делает о росте конверсии в Q1 2024?",
+  "must_include_facts": [
+    "рост конверсии",
+    "Q1 2024"
+  ],
+  "must_include_entities": [
+    "конверсия",
+    "Q1 2024"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Single-fact lookup in an analytical report — should be answered by /search alone."
+}

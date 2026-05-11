@@ -1,0 +1,14 @@
+{
+  "id": "qa-email-004",
+  "doc_type": "email",
+  "category": "thread_summary",
+  "query": "Резюмируй переписку по проекту X за последние две недели.",
+  "must_include_facts": [
+    "проект X"
+  ],
+  "must_include_entities": [
+    "проект X"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Thread summarization across multiple emails; tests recall under date filter."
+}

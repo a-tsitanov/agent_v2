@@ -16,6 +16,7 @@ from loguru import logger
 
 from src.api.auth import require_api_key
 from src.models.search import SearchRequest, SearchResponse, SourceCitation
+from src.observability.trace import record_timed, trace_request
 from src.retrieval.agent import RetrieverProtocol, SynthesizerProtocol
 
 router = APIRouter(tags=["search"])
@@ -35,8 +36,13 @@ async def search(
 ) -> SearchResponse:
     try:
         t0 = time.monotonic()
-        nodes = await retriever.aretrieve(req.query)
-        response = await synthesizer.asynthesize(query=req.query, nodes=nodes)
+        with trace_request("search", req.query):
+            with record_timed("tool_call", tool_name="vector_retrieve"):
+                nodes = await retriever.aretrieve(req.query)
+            with record_timed("synthesize", n_sources=len(nodes)):
+                response = await synthesizer.asynthesize(
+                    query=req.query, nodes=nodes,
+                )
         latency_ms = (time.monotonic() - t0) * 1000.0
         return SearchResponse(
             query=req.query,

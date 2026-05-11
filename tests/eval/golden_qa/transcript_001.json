@@ -1,0 +1,14 @@
+{
+  "id": "qa-transcript-001",
+  "doc_type": "transcript",
+  "category": "single_fact",
+  "query": "Какую проблему описывает клиент в звонке от 12 марта?",
+  "must_include_facts": [
+    "12 марта"
+  ],
+  "must_include_entities": [
+    "клиент"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Issue extraction from a support transcript; date-filtered lookup."
+}

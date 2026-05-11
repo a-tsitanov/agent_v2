@@ -14,6 +14,7 @@ from loguru import logger
 
 from src.api.auth import require_api_key
 from src.models.search import AgentSearchRequest, SearchResponse
+from src.observability.trace import trace_request
 from src.retrieval.agent import (
     GraphRetrieverProtocol,
     RetrieverProtocol,
@@ -42,15 +43,16 @@ async def search_agent(
         return await synthesizer.asynthesize(query=query, nodes=nodes)
 
     try:
-        return await agentic_react_search(
-            llm=llm,
-            retriever=retriever,
-            graph_retriever=graph_retriever,
-            synthesize=synth,
-            query=req.query,
-            max_iterations=req.max_iterations,
-            mode="agent",
-        )
+        with trace_request("agent", req.query):
+            return await agentic_react_search(
+                llm=llm,
+                retriever=retriever,
+                graph_retriever=graph_retriever,
+                synthesize=synth,
+                query=req.query,
+                max_iterations=req.max_iterations,
+                mode="agent",
+            )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

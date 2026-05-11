@@ -1,0 +1,16 @@
+{
+  "id": "qa-email-001",
+  "doc_type": "email",
+  "category": "single_fact",
+  "query": "О чём шла переписка между Ивановым и Петровым в треде про договор?",
+  "must_include_facts": [
+    "договор"
+  ],
+  "must_include_entities": [
+    "Иванов",
+    "Петров",
+    "договор"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Single-hop Person+Topic; tests Person entity extraction."
+}

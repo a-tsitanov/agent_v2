@@ -1,0 +1,13 @@
+{
+  "id": "qa-report-004",
+  "doc_type": "report",
+  "category": "negative_lookup",
+  "query": "Какие данные есть в отчёте о когорте пользователей старше 65 лет?",
+  "must_include_facts": [],
+  "must_include_entities": [],
+  "uncertainty_ok_for": [
+    "когорта 65+",
+    "пользователи старше 65 лет"
+  ],
+  "notes": "Negative: corpus has no such cohort — /selfrag should produce [UNCERTAIN], /search/agent may hallucinate."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "qa-email-005",
+  "doc_type": "email",
+  "category": "negative_lookup",
+  "query": "Какие письма были отправлены в адрес отдела безопасности?",
+  "must_include_facts": [],
+  "must_include_entities": [],
+  "uncertainty_ok_for": [
+    "отдел безопасности"
+  ],
+  "notes": "Negative: corpus has no security-dept correspondence — /selfrag should emit [UNCERTAIN]."
+}

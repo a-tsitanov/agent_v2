@@ -1,0 +1,15 @@
+{
+  "id": "qa-report-003",
+  "doc_type": "report",
+  "category": "open_ended_summary",
+  "query": "Резюмируй ключевые выводы аналитического отчёта за Q1 2024.",
+  "must_include_facts": [
+    "Q1 2024",
+    "выводы"
+  ],
+  "must_include_entities": [
+    "Q1 2024"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Open-ended — recall-heavy; /selfrag may regress slightly here due to refinement caution."
+}

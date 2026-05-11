@@ -1,0 +1,15 @@
+{
+  "id": "qa-transcript-002",
+  "doc_type": "transcript",
+  "category": "multi_hop",
+  "query": "Как агент службы поддержки решил проблему с возвратом средств?",
+  "must_include_facts": [
+    "возврат средств"
+  ],
+  "must_include_entities": [
+    "возврат",
+    "поддержка"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Issue → Resolution multi-hop; tests RESOLVED_BY relation."
+}

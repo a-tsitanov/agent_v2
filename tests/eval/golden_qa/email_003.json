@@ -1,0 +1,14 @@
+{
+  "id": "qa-email-003",
+  "doc_type": "email",
+  "category": "identifier_lookup",
+  "query": "Какой телефон указан в подписи письма от Сидорова?",
+  "must_include_facts": [
+    "+7"
+  ],
+  "must_include_entities": [
+    "Сидоров"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Identifier extraction (E.164 phone); tests canon-identifier ingestion."
+}

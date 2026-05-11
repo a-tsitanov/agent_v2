@@ -19,6 +19,7 @@ from src.models.search import (
     SearchResponse,
     SelfRAGSearchRequest,
 )
+from src.observability.trace import trace_request
 from src.retrieval.agent import GraphRetrieverProtocol, RetrieverProtocol
 from src.retrieval.react_agent import agentic_react_search
 from src.retrieval.reflective_synth import reflective_synthesize
@@ -53,15 +54,16 @@ async def search_selfrag(
         return answer
 
     try:
-        result = await agentic_react_search(
-            llm=llm,
-            retriever=retriever,
-            graph_retriever=graph_retriever,
-            synthesize=synth,
-            query=req.query,
-            max_iterations=req.max_iterations,
-            mode="selfrag",
-        )
+        with trace_request("selfrag", req.query):
+            result = await agentic_react_search(
+                llm=llm,
+                retriever=retriever,
+                graph_retriever=graph_retriever,
+                synthesize=synth,
+                query=req.query,
+                max_iterations=req.max_iterations,
+                mode="selfrag",
+            )
         ra = last_reflective["answer"]
         if ra is not None:
             result.answer_detail = ReflectiveAnswerDetail(

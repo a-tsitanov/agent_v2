@@ -39,6 +39,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from src.models.search import ReflectiveCitation, ReflectiveUncertainty
+from src.observability.trace import record_event, record_timed
 from src.retrieval._common import deduplicate_nodes
 
 
@@ -227,13 +228,24 @@ async def reflective_synthesize(
         ]
 
         try:
-            response = await llm.achat(messages)
+            with record_timed(
+                "llm_call", round=round_i, kind="reflective_draft",
+            ):
+                response = await llm.achat(messages)
         except Exception as exc:  # noqa: BLE001
             logger.warning("reflective draft failed: {err}", err=exc)
             break
 
         draft = (response.message.content or "").strip()
         needs, _, _ = parse_markers(draft)
+        record_event(
+            "refinement_round",
+            payload={
+                "round": round_i,
+                "needs": len(needs),
+                "n_context_nodes": len(accumulated),
+            },
+        )
 
         if not needs:
             break
@@ -248,7 +260,10 @@ async def reflective_synthesize(
 
         for need in needs[:5]:  # don't blow up budget on a draft full of NEEDs
             try:
-                extra = await retriever.aretrieve(need)
+                with record_timed(
+                    "tool_call", tool_name="retrieve_for_need", query=need,
+                ):
+                    extra = await retriever.aretrieve(need)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "reflective retrieve for need={n} failed: {err}",

@@ -1,0 +1,17 @@
+{
+  "id": "qa-report-002",
+  "doc_type": "report",
+  "category": "multi_hop",
+  "query": "Какие метрики выросли в Q1 и какие изменения в продукте этому способствовали?",
+  "must_include_facts": [
+    "конверсия",
+    "redesign onboarding",
+    "Q1"
+  ],
+  "must_include_entities": [
+    "конверсия",
+    "onboarding"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Multi-hop — links Metric → EventOrAction; /agent should win over /search."
+}

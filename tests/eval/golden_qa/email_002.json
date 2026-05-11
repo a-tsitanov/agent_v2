@@ -1,0 +1,15 @@
+{
+  "id": "qa-email-002",
+  "doc_type": "email",
+  "category": "multi_hop",
+  "query": "Кто инициировал обсуждение проблемы с задержкой платежей и какие сроки были согласованы?",
+  "must_include_facts": [
+    "задержка платежей",
+    "сроки"
+  ],
+  "must_include_entities": [
+    "задержка платежей"
+  ],
+  "uncertainty_ok_for": [],
+  "notes": "Multi-hop Person → Issue → Resolution; agent path should outperform plain retrieve."
+}
