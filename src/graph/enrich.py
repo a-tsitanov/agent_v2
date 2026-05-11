@@ -35,8 +35,13 @@ from llama_index.core.schema import BaseNode, TransformComponent
 from loguru import logger
 from pydantic import ConfigDict
 
+from src.retrieval._common import strip_thinking
+
 
 _DESCRIBE_SYSTEM_PROMPT = (
+    # `/no_think` skips qwen3's chain-of-thought block, which the
+    # extractor would otherwise pull as part of the description.
+    "/no_think\n"
     "You write concise factual descriptions of entities based ONLY "
     "on a given text excerpt.  Output a single sentence of 10-30 "
     "words.  Keep entity names and quoted text in their ORIGINAL "
@@ -60,7 +65,7 @@ async def _describe_entity(
                 ChatMessage(role=MessageRole.USER, content=user),
             ]
         )
-        text = (resp.message.content or "").strip()
+        text = strip_thinking(resp.message.content or "").strip()
         if not text or text.upper().startswith("NO_INFO"):
             return ""
         # Clip pathological outputs (one line, reasonable length).

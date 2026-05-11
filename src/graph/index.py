@@ -26,6 +26,9 @@ from llama_index.core.indices.property_graph import (
     SchemaLLMPathExtractor,
     SimpleLLMPathExtractor,
 )
+from llama_index.core.indices.property_graph.utils import (
+    default_parse_triplets_fn,
+)
 from llama_index.core.llms import LLM
 from llama_index.core.schema import TransformComponent
 
@@ -34,6 +37,19 @@ from src.graph.schema import (
     EntityType,
     RelationType,
 )
+from src.retrieval._common import strip_thinking
+
+
+def _parse_triplets_strip_thinking(response: str, **kwargs):
+    """Wrap the upstream parser with a `<think>...</think>` stripper.
+
+    Qwen3 emits thinking blocks where it rehearses the few-shot
+    examples we pass — the upstream parser is naive line-level regex,
+    so it pulls those rehearsals as if they were extracted triplets.
+    Stripping first gives clean output and reduces false positives
+    to near-zero on qwen3:8b.
+    """
+    return default_parse_triplets_fn(strip_thinking(response), **kwargs)
 
 KGExtractor = TransformComponent
 
@@ -100,6 +116,7 @@ def build_kg_extractor(
         num_workers=num_workers,
         max_paths_per_chunk=10,
         extract_prompt=extract_prompt or _MULTILINGUAL_TRIPLET_EXTRACT_PROMPT,
+        parse_fn=_parse_triplets_strip_thinking,
     )
 
 
@@ -110,6 +127,9 @@ def build_kg_extractor(
 # the source language" + "use concrete values, not template
 # placeholders".
 _MULTILINGUAL_TRIPLET_EXTRACT_PROMPT = (
+    # `/no_think` is qwen3's directive to skip chain-of-thought
+    # generation.  Other models will see it as inert text — safe.
+    "/no_think\n"
     "Extract up to {max_knowledge_triplets} knowledge triplets from the text below.\n"
     "Each triplet must be on its own line in the format: "
     "(subject, predicate, object)\n"

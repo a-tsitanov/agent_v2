@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 
 from src.models.search import ReflectiveCitation, ReflectiveUncertainty
 from src.observability.trace import record_event, record_timed
-from src.retrieval._common import deduplicate_nodes
+from src.retrieval._common import deduplicate_nodes, strip_thinking
 
 
 # ── protocols ────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ async def reflective_synthesize(
             logger.warning("reflective draft failed: {err}", err=exc)
             break
 
-        draft = (response.message.content or "").strip()
+        draft = strip_thinking(response.message.content or "").strip()
         needs, _, _ = parse_markers(draft)
         record_event(
             "refinement_round",
