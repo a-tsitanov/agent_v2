@@ -127,7 +127,7 @@ services:
     restart: unless-stopped
 
   # ── LLM proxy: LiteLLM (OpenAI-compatible front-door) ───────────────
-  # Routes all LLM and embedding calls.  Default config uses Ollama
+  # Routes all LLM and embedding calls.  Default config uses OpenAI
   # upstream — adjust docker/litellm_config.yaml for production.
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
@@ -138,6 +138,11 @@ services:
       - "4000:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-litellm-stub}
+      # Pass the host OPENAI_API_KEY into the container so the
+      # `os.environ/OPENAI_API_KEY` refs in
+      # docker/litellm_config.yaml resolve at runtime.  Leave the
+      # host value empty when proxying to a local model instead.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request,sys; urllib.request.urlopen(\"http://localhost:4000/health/liveliness\", timeout=2).read()' || exit 1"]
       interval: 10s
