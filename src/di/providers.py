@@ -34,6 +34,7 @@ from src.retrieval.agent import (
 from src.retrieval.judge import LLMJudge
 from src.retrieval.llm import build_llm
 from src.retrieval.vector_index import build_vector_index, build_vector_store
+from src.storage.chunk_repository import ChunkRepository
 from src.storage.postgres import AsyncPostgres
 
 
@@ -89,6 +90,15 @@ class ApiProvider(Provider):
         return get_response_synthesizer(
             llm=llm, response_mode=ResponseMode.COMPACT,
         )
+
+    @provide
+    def chunk_repository(self, postgres: AsyncPostgres) -> ChunkRepository:
+        """Doc-id keyed access to chunks (Milvus) + source files
+        (Postgres → upload dir).  Used by the ReAct agent's
+        `get_chunks_by_doc_id` and `read_full_document` tools so
+        the agent can fetch full-document context that vector
+        retrieval can't surface on its own."""
+        return ChunkRepository(pg=postgres)
 
     @provide
     def graph_retriever(

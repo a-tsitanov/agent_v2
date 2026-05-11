@@ -222,3 +222,92 @@ async def test_graph_search_tool_runs_when_graph_retriever_provided() -> None:
     obs = result.agentic_step_stats[0].observation_summary
     assert "Topic X" in obs
     assert "MENTIONED_BY" in obs
+
+
+# ── chunk_repository tools (D2) ─────────────────────────────────────
+
+
+@dataclass
+class _StubChunkRepo:
+    chunks: list[dict] = field(default_factory=list)
+    doc_text: str = ""
+    calls: list[str] = field(default_factory=list)
+
+    async def aget_chunks_by_doc_id(self, doc_id, *, limit=50, offset=0):
+        self.calls.append(f"chunks:{doc_id}")
+        return self.chunks
+
+    async def aread_document_text(self, doc_id, *, max_chars=20000):
+        self.calls.append(f"read:{doc_id}")
+        return self.doc_text or None
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_by_doc_id_routes_to_repository() -> None:
+    repo = _StubChunkRepo(chunks=[
+        {"chunk_id": "c1", "text": "first chunk", "doc_id": "d1",
+         "position": 0, "file_path": "/x"},
+        {"chunk_id": "c2", "text": "second chunk", "doc_id": "d1",
+         "position": 1, "file_path": "/x"},
+    ])
+    llm = _ScriptedLLM(plan=[
+        ("get_chunks_by_doc_id", {"doc_id": "d1"}),
+        ("submit_answer", {"query_recap": "X", "gathered_source_ids": ["c1", "c2"]}),
+    ])
+    synth = _StubSynth()
+
+    result = await agentic_react_search(
+        llm=llm, retriever=_StubRetriever(),
+        graph_retriever=None, synthesize=synth,
+        query="all chunks of d1", max_iterations=4,
+        chunk_repository=repo,
+    )
+
+    assert repo.calls == ["chunks:d1"]
+    # Chunks accumulated as sources → synthesizer gets them.
+    assert synth.received["n_nodes"] == 2  # type: ignore[index]
+    # And the tool observation summary contains the chunk content.
+    step = result.agentic_step_stats[0]
+    assert step.tool_name == "get_chunks_by_doc_id"
+    assert "first chunk" in step.observation_summary
+
+
+@pytest.mark.asyncio
+async def test_read_full_document_returns_file_text() -> None:
+    repo = _StubChunkRepo(doc_text="Full document body verbatim.")
+    llm = _ScriptedLLM(plan=[
+        ("read_full_document", {"doc_id": "d1"}),
+        ("submit_answer", {"query_recap": "x", "gathered_source_ids": []}),
+    ])
+    synth = _StubSynth()
+
+    result = await agentic_react_search(
+        llm=llm, retriever=_StubRetriever(),
+        graph_retriever=None, synthesize=synth,
+        query="read whole doc", max_iterations=4,
+        chunk_repository=repo,
+    )
+
+    assert repo.calls == ["read:d1"]
+    step = result.agentic_step_stats[0]
+    assert step.tool_name == "read_full_document"
+    assert "Full document body verbatim." in step.observation_summary
+
+
+@pytest.mark.asyncio
+async def test_chunk_tools_return_error_without_repository() -> None:
+    """If chunk_repository=None, the tools must still respond
+    gracefully — not crash the loop."""
+    llm = _ScriptedLLM(plan=[
+        ("read_full_document", {"doc_id": "d1"}),
+        ("submit_answer", {"query_recap": "x", "gathered_source_ids": []}),
+    ])
+    synth = _StubSynth()
+    result = await agentic_react_search(
+        llm=llm, retriever=_StubRetriever(),
+        graph_retriever=None, synthesize=synth,
+        query="x", max_iterations=3,
+        chunk_repository=None,  # explicitly absent
+    )
+    obs = result.agentic_step_stats[0].observation_summary
+    assert "unavailable" in obs.lower()

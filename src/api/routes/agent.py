@@ -21,6 +21,7 @@ from src.retrieval.agent import (
     SynthesizerProtocol,
 )
 from src.retrieval.react_agent import agentic_react_search
+from src.storage.chunk_repository import ChunkRepository
 
 router = APIRouter(tags=["search"])
 
@@ -38,6 +39,7 @@ async def search_agent(
     retriever: FromDishka[RetrieverProtocol],
     synthesizer: FromDishka[SynthesizerProtocol],
     graph_retriever: FromDishka[GraphRetrieverProtocol | None],
+    chunk_repository: FromDishka[ChunkRepository],
 ) -> SearchResponse:
     async def synth(query: str, nodes):
         return await synthesizer.asynthesize(query=query, nodes=nodes)
@@ -52,6 +54,7 @@ async def search_agent(
                 query=req.query,
                 max_iterations=req.max_iterations,
                 mode="agent",
+                chunk_repository=chunk_repository,
             )
     except HTTPException:
         raise

@@ -23,6 +23,7 @@ from src.observability.trace import trace_request
 from src.retrieval.agent import GraphRetrieverProtocol, RetrieverProtocol
 from src.retrieval.react_agent import agentic_react_search
 from src.retrieval.reflective_synth import reflective_synthesize
+from src.storage.chunk_repository import ChunkRepository
 
 router = APIRouter(tags=["search"])
 
@@ -39,6 +40,7 @@ async def search_selfrag(
     llm: FromDishka[LLM],
     retriever: FromDishka[RetrieverProtocol],
     graph_retriever: FromDishka[GraphRetrieverProtocol | None],
+    chunk_repository: FromDishka[ChunkRepository],
 ) -> SearchResponse:
     last_reflective: dict = {"answer": None}
 
@@ -63,6 +65,7 @@ async def search_selfrag(
                 query=req.query,
                 max_iterations=req.max_iterations,
                 mode="selfrag",
+                chunk_repository=chunk_repository,
             )
         ra = last_reflective["answer"]
         if ra is not None:
