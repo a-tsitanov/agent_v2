@@ -1,16 +1,25 @@
-"""`POST /api/v1/agent` — ReAct agent with tool calls (R7).
+"""`POST /api/v1/agent` — ReAct agent with tool calls.
 
-Skeleton handler. R7 fills in `agentic_react_search` and wires it
-through dishka.  Until then this endpoint returns 503 so the API
-surface and contract are visible from day one.
+Outer loop is `agentic_react_search`; inner generator is the plain
+project synthesizer (use `/api/v1/selfrag` for the reflective
+variant — same outer loop, reflective synthesizer in place of plain).
 """
 
 from __future__ import annotations
 
+from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import APIRouter, Depends, HTTPException, status
+from llama_index.core.llms import LLM
+from loguru import logger
 
 from src.api.auth import require_api_key
 from src.models.search import AgentSearchRequest, SearchResponse
+from src.retrieval.agent import (
+    GraphRetrieverProtocol,
+    RetrieverProtocol,
+    SynthesizerProtocol,
+)
+from src.retrieval.react_agent import agentic_react_search
 
 router = APIRouter(tags=["search"])
 
@@ -21,13 +30,32 @@ router = APIRouter(tags=["search"])
     dependencies=[Depends(require_api_key)],
     summary="ReAct agent (tool calls + tool-decided termination)",
 )
-async def search_agent(req: AgentSearchRequest) -> SearchResponse:
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=(
-            "ReAct agent endpoint will be wired in R7. "
-            "Use /api/v1/search for plain hybrid retrieve, or "
-            "/api/v1/selfrag for the full reflective stack "
-            "(also pending R8)."
-        ),
-    )
+@inject
+async def search_agent(
+    req: AgentSearchRequest,
+    llm: FromDishka[LLM],
+    retriever: FromDishka[RetrieverProtocol],
+    synthesizer: FromDishka[SynthesizerProtocol],
+    graph_retriever: FromDishka[GraphRetrieverProtocol | None],
+) -> SearchResponse:
+    async def synth(query: str, nodes):
+        return await synthesizer.asynthesize(query=query, nodes=nodes)
+
+    try:
+        return await agentic_react_search(
+            llm=llm,
+            retriever=retriever,
+            graph_retriever=graph_retriever,
+            synthesize=synth,
+            query=req.query,
+            max_iterations=req.max_iterations,
+            mode="agent",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("agent search failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent search failed: {exc}",
+        ) from exc
