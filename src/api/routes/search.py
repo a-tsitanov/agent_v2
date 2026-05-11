@@ -1,8 +1,9 @@
-"""Search endpoint — hybrid query engine for ``agentic=False``,
-``agentic_search`` for ``agentic=True``.
+"""`POST /api/v1/search` — plain hybrid retrieve + single synthesize.
 
-Concrete retrieval / synthesis collaborators are wired through
-dishka so tests can override them with stubs.
+No agentic loop, no judge, no reflective synthesis.  Use this
+endpoint when you want a fast, deterministic-ish answer over the
+vector index alone.  See `/api/v1/agent` (R7) for tool-using ReAct
+agent and `/api/v1/selfrag` (R8) for ReAct + reflective synthesis.
 """
 
 from __future__ import annotations
@@ -15,13 +16,7 @@ from loguru import logger
 
 from src.api.auth import require_api_key
 from src.models.search import SearchRequest, SearchResponse, SourceCitation
-from src.retrieval.agent import (
-    GraphRetrieverProtocol,
-    JudgeProtocol,
-    RetrieverProtocol,
-    SynthesizerProtocol,
-    agentic_search,
-)
+from src.retrieval.agent import RetrieverProtocol, SynthesizerProtocol
 
 router = APIRouter(tags=["search"])
 
@@ -30,30 +25,15 @@ router = APIRouter(tags=["search"])
     "/search",
     response_model=SearchResponse,
     dependencies=[Depends(require_api_key)],
-    summary="Hybrid semantic search",
+    summary="Hybrid retrieve + single synthesize (no agent, no judge)",
 )
 @inject
 async def search(
     req: SearchRequest,
     retriever: FromDishka[RetrieverProtocol],
-    judge: FromDishka[JudgeProtocol],
     synthesizer: FromDishka[SynthesizerProtocol],
-    graph_retriever: FromDishka[GraphRetrieverProtocol | None],
 ) -> SearchResponse:
     try:
-        if req.agentic:
-            return await agentic_search(
-                retriever=retriever,
-                judge=judge,
-                synthesizer=synthesizer,
-                graph_retriever=graph_retriever,
-                query=req.query,
-                max_rounds=req.agentic_max_rounds,
-                mode=req.mode,
-            )
-
-        # Non-agentic path: single-round retrieve + synthesize.  Same
-        # retriever as agentic mode — keeps the comparison fair.
         t0 = time.monotonic()
         nodes = await retriever.aretrieve(req.query)
         response = await synthesizer.asynthesize(query=req.query, nodes=nodes)

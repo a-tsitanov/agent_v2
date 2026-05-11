@@ -1,17 +1,20 @@
 """LlamaIndex ``IngestionPipeline`` factory.
 
-Stage 2 covers parsing + chunking + caching.  Embedding-attaching
-transformation is added in Stage 3 once the vector store is wired —
-keeping concerns split makes the pipeline easier to reason about
-when iterating on either chunking quality or vector indexing.
+The pipeline applies (in order):
+  1. Splitter — `SentenceSplitter` (default) or
+     `SemanticSplitterNodeParser` (opt-in via `semantic=True`,
+     requires `embed_model`).
+  2. `IdentifierCanonicalizationTransform` (default on) — populates
+     `node.metadata["canonical_identifiers"]` and appends a
+     canonical-identifier block to `node.text` so the LLM extractor
+     downstream sees them.
+  3. `extra_transformations` (callers can append more, e.g. KG
+     extractor + description enricher in the worker).
 
-The factory exposes two splitter modes:
-  * ``SentenceSplitter`` (default) — fast, deterministic, no embed
-    dependency.  Used by tests and for early bring-up.
-  * ``SemanticSplitterNodeParser`` (opt-in via ``semantic=True``) —
-    splits at embedding-similarity breakpoints.  Higher chunk
-    quality but requires a working ``embed_model`` and adds an
-    embedding round-trip per ingest.
+Embedding generation is NOT part of the pipeline — it happens at
+the vector-index insertion step (`src.retrieval.vector_index.
+index_nodes`), since the same embedding model is also needed for
+retrieval and tests sometimes mock it independently.
 """
 
 from __future__ import annotations
@@ -29,6 +32,9 @@ from llama_index.core.schema import TransformComponent
 from llama_index.core.storage.kvstore import SimpleKVStore
 
 from src.config import settings
+from src.ingestion.identifier_transform import (
+    IdentifierCanonicalizationTransform,
+)
 
 
 def _build_splitter(
@@ -79,32 +85,49 @@ def build_ingestion_pipeline(
     embed_model: BaseEmbedding | None = None,
     semantic: bool = False,
     cache_dir: str | Path | None = None,
+    with_identifier_canon: bool = True,
     extra_transformations: list[TransformComponent] | None = None,
 ) -> IngestionPipeline:
-    """Compose an ``IngestionPipeline`` for the project.
+    """Compose the project's ingestion pipeline.
 
     Args:
-        embed_model: required if ``semantic=True``, ignored otherwise.
-            Embeddings as a transformation step are attached in Stage 3
-            (vector index) — at this stage we only chunk.
-        semantic: switch to ``SemanticSplitterNodeParser`` instead of
-            ``SentenceSplitter``.  Off by default — the cost (embed
-            round-trip per chunk decision) outweighs the recall win on
+        embed_model: required when `semantic=True` (the semantic
+            splitter calls embeddings to detect breakpoints).
+            Ignored when `semantic=False`.
+        semantic: switch from `SentenceSplitter` to
+            `SemanticSplitterNodeParser`.  Off by default — the
+            embed round-trip per chunk-decision rarely pays off on
             short documents.
         cache_dir: when set, persists transformation outputs so
-            re-ingest of unchanged documents skips chunking.
-        extra_transformations: hook for stages that bolt on more
-            transforms (Stage 7 plugs in the canonical-identifier
-            transform here).
+            re-ingest of unchanged documents skips chunking +
+            identifier extraction.
+        with_identifier_canon: when True (default), the canonical
+            identifier transform (phone → E.164, INN with checksum,
+            etc.) runs between the splitter and any extra transforms.
+            Turn off only for benchmarks that need to compare
+            against a pipeline without identifier injection.
+        extra_transformations: appended AFTER the identifier
+            transform.  The worker uses this hook to add KG
+            extractor + description enricher.
     """
     transformations: list[TransformComponent] = [
         _build_splitter(semantic=semantic, embed_model=embed_model),
     ]
+    if with_identifier_canon:
+        transformations.append(IdentifierCanonicalizationTransform())
     if extra_transformations:
         transformations.extend(extra_transformations)
+    cache_obj = _build_cache(cache_dir)
     return IngestionPipeline(
         transformations=transformations,
-        cache=_build_cache(cache_dir),
+        cache=cache_obj,
+        # Without explicit `cache_dir` we don't want LlamaIndex's
+        # default in-memory cache: it hashes by `transformation.to_dict()`
+        # which collapses to identical strings for custom
+        # `TransformComponent` subclasses (no class-name in the dict),
+        # so the cache short-circuits later transforms with the
+        # output of an earlier one.  Disabling avoids the collision.
+        disable_cache=cache_obj is None,
     )
 
 

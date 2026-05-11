@@ -1,18 +1,18 @@
-"""dishka DI providers.
+"""Dishka DI providers.
 
 Two containers:
   * **API** — long-lived: PG client, retriever, judge, synthesizer,
-    graph retriever (optional).
-  * **Worker** — long-lived: PG client, ingestion pipeline, vector
-    index, KG extractor + index.
+    graph retriever (optional, falls back to None when Neo4j is
+    unreachable).
+  * **Worker** — long-lived: PG client + shared LLM/embed singletons.
+    Ingestion pipeline is built ad-hoc inside the worker task since
+    its transformations vary per call.
 
-Both share a ``CommonProvider`` for cross-cutting components (LLM,
-embedding model).  Tests construct a custom container with stubs.
+Both share `CommonProvider` for cross-cutting LLM and embedding
+singletons.
 """
 
 from __future__ import annotations
-
-from typing import AsyncIterator
 
 from dishka import AnyOf, Provider, Scope, make_async_container, provide
 from llama_index.core.embeddings import BaseEmbedding
@@ -22,7 +22,6 @@ from llama_index.core.response_synthesizers import (
     ResponseMode,
     get_response_synthesizer,
 )
-
 from loguru import logger
 
 from src.ingestion.embeddings import build_embedding_model
@@ -39,7 +38,7 @@ from src.storage.postgres import AsyncPostgres
 
 
 class CommonProvider(Provider):
-    """Shared singletons (LLM, embeddings, PG)."""
+    """Shared singletons available to both API and worker."""
 
     scope = Scope.APP
 
@@ -57,15 +56,26 @@ class CommonProvider(Provider):
 
 
 class ApiProvider(Provider):
-    """Retrieval / synthesis singletons for the API process."""
+    """Retrieval / synthesis singletons for the API process.
+
+    The three search endpoints (`/search`, `/agent`, `/selfrag`) all
+    consume from this provider; routing to plain vs agentic logic
+    lives in the route handlers, not in the provider.
+    """
 
     scope = Scope.APP
 
     @provide
     def retriever(self, embed_model: BaseEmbedding) -> RetrieverProtocol:
-        # Vector retriever as the default "fast path".  Stage 5
-        # hybrid retriever can be plugged here once the live BM25
-        # docstore is sourced from Milvus.
+        """Dense-vector retriever over the project Milvus collection.
+
+        Hybrid (BM25 + vector RRF) is implemented in
+        `src.retrieval.hybrid.build_hybrid_retriever` but NOT wired
+        here yet — production BM25 needs a separate docstore /
+        sparse index decision (in-memory BM25 from Milvus walks
+        doesn't scale).  Until that decision lands, dense-only is
+        the API's retriever.
+        """
         store = build_vector_store()
         index = build_vector_index(store, embed_model)
         return index.as_retriever(similarity_top_k=10)
@@ -86,9 +96,9 @@ class ApiProvider(Provider):
     ) -> GraphRetrieverProtocol | None:
         """Attach to the already-populated Neo4j graph store.
 
-        Falls back to ``None`` when Neo4j is unreachable — search
-        still works on vector chunks alone in that case.  The
-        agent loop handles ``graph_retriever=None`` natively.
+        Falls back to `None` when Neo4j is unreachable — every
+        agentic path (legacy judge loop, ReAct R7, Self-RAG R8)
+        handles `graph_retriever=None` natively.
         """
         try:
             from src.graph.index import (
@@ -119,8 +129,10 @@ def build_api_container():
 
 
 def build_worker_container():
-    """Worker DI is intentionally minimal at Stage 8 — the worker
-    runs the ingestion pipeline directly via top-level functions.
-    Reserved here so future stages can plug PropertyGraphIndex
-    builders without changing the signature."""
+    """Worker container — currently exposes only `CommonProvider`.
+
+    The worker task (`src/ingestion/tasks.py:process_document`)
+    composes its pipeline and graph extractor inline since the
+    set of transformations is task-dependent.
+    """
     return make_async_container(CommonProvider())

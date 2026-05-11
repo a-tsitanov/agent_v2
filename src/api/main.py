@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from src.api.routes import health, ingest, search
+from src.api.routes import agent, health, ingest, search, selfrag
 from src.config import settings
 from src.di.providers import build_api_container
 from src.ingestion.tasks import broker as taskiq_broker
@@ -61,4 +61,6 @@ setup_dishka(_container, app)
 
 app.include_router(health.router)
 app.include_router(search.router, prefix="/api/v1")
+app.include_router(agent.router, prefix="/api/v1")
+app.include_router(selfrag.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
