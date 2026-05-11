@@ -54,7 +54,38 @@ def _parse_triplets_strip_thinking(response: str, **kwargs):
 KGExtractor = TransformComponent
 
 
-ExtractorMode = Literal["simple", "schema"]
+ExtractorMode = Literal["lightrag", "simple", "schema"]
+
+
+class NoOpKGExtractor(TransformComponent):
+    """Identity extractor used when KG_NODES_KEY metadata is already
+    populated upstream and we just want `PropertyGraphIndex` to persist
+    + embed those triples without re-running the LLM.
+
+    Background: `PropertyGraphIndex._insert_nodes` pops `KG_NODES_KEY`
+    off each input node *after* running its `kg_extractors`.  That
+    pop happens regardless of who put the data there, so the worker
+    flow needs to populate the metadata first, then pass a noop
+    extractor:
+
+        1. LightRAGExtractor.acall(nodes)  → fills KG_NODES_KEY /
+           KG_RELATIONS_KEY with descriptions inline
+        2. merge_kg_extraction(nodes, llm)  → returns deduplicated
+           cross-chunk EntityNode/Relation lists (separate concern)
+        3. PropertyGraphIndex(nodes=..., kg_extractors=[NoOpKGExtractor()])
+           → pops per-chunk metadata, creates Chunk(:MENTIONS)→Entity
+             edges, embeds entities for the vector retriever
+        4. graph_store.upsert_nodes(merged_entities)
+           graph_store.upsert_relations(merged_relations)
+           → overwrites the per-chunk descriptions with cross-chunk
+             merged ones (upsert merges by name).
+    """
+
+    def __call__(self, nodes, **kwargs):  # type: ignore[override]
+        return nodes
+
+    async def acall(self, nodes, **kwargs):  # type: ignore[override]
+        return nodes
 
 
 _ENTITY_DESCRIPTION_PROP: tuple[str, str] = (
@@ -69,34 +100,48 @@ _ENTITY_DESCRIPTION_PROP: tuple[str, str] = (
 def build_kg_extractor(
     llm: LLM,
     *,
-    mode: ExtractorMode = "simple",
+    mode: ExtractorMode = "lightrag",
     strict: bool = False,
-    num_workers: int = 2,
+    num_workers: int = 4,
     extract_prompt: str | None = None,
+    gleaning_passes: int = 0,
 ) -> KGExtractor:
     """Build a KG path extractor.
 
-    Two modes:
+    Three modes:
 
-    - ``simple`` (default) — ``SimpleLLMPathExtractor``: plain prompt
-      + regex parsing.  Works reliably with qwen3:8b and the
-      baseline llama3.1:8b.  Entity types collapse to `entity`;
-      descriptions are added in a separate second pass by
-      `enrich_entities_with_descriptions` (see
-      `src/graph/enrich.py`).
+    - ``lightrag`` (default) — ``LightRAGExtractor``: one LLM call
+      per chunk produces entities (name + type + description) +
+      relations (src + tgt + keywords + description) in a single
+      structured response.  Algorithm ported from HKUDS/LightRAG
+      (see ``src/graph/lightrag_prompts.py``).  Descriptions are
+      populated inline — NO separate enrichment pass needed.
+      Cross-chunk consolidation lives in
+      ``src/graph/merge.py:merge_kg_extraction``.
+    - ``simple`` — ``SimpleLLMPathExtractor``: plain prompt + regex
+      parsing.  Kept as the R9 regression baseline.  Entity types
+      collapse to ``entity``; descriptions are empty without a
+      follow-up enrichment step (no longer wired in the worker).
     - ``schema`` (experimental) — ``SchemaLLMPathExtractor`` over the
-      universal typed `EntityType` / `RelationType` Literal unions
-      from `src/graph/schema.py`. Requires a function-calling-
-      capable LLM, but empirically qwen3:8b via Ollama → LiteLLM
-      sometimes silently returns zero triplets when the underlying
-      tool-call payload isn't well-formed.  Use with a stronger
-      backend (gpt-4o-class) or larger qwen3 (14b+).  `strict=True`
-      enforces `DEFAULT_VALIDATION_SCHEMA` triple templates.
+      universal typed ``EntityType`` / ``RelationType`` Literal unions.
+      Requires a function-calling-capable LLM; reliable on
+      gpt-4o-mini, flaky on qwen3:8b via LiteLLM.
+
+    ``gleaning_passes`` is only consumed by the ``lightrag`` mode
+    (LightRAG default is 1; we default to 0 to keep cost down and
+    let R9 eval decide).
 
     ``extract_prompt`` overrides the default multilingual template
-    (Simple mode only).  Pass a string template that includes the
-    `{max_knowledge_triplets}` and `{text}` placeholders.
+    (Simple mode only).
     """
+    if mode == "lightrag":
+        from src.graph.lightrag_extract import LightRAGExtractor
+
+        return LightRAGExtractor(
+            llm=llm,
+            num_workers=num_workers,
+            gleaning_passes=gleaning_passes,
+        )
     if mode == "schema":
         return SchemaLLMPathExtractor(
             llm=llm,

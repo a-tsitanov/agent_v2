@@ -2,7 +2,7 @@
 
 The worker is intentionally thin — it composes existing factory
 helpers (`build_ingestion_pipeline`, `build_vector_index`,
-`build_kg_extractor`, `EntityDescriptionEnricher`) against live
+`build_kg_extractor`, `merge_kg_extraction`) against live
 storage backends.  Identifier canonicalization is built into
 `build_ingestion_pipeline` by default — no need to pass it as an
 extra transformation any more.
@@ -22,8 +22,12 @@ from loguru import logger
 from taskiq_aio_pika import AioPikaBroker
 
 from src.config import settings
-from src.graph.enrich import EntityDescriptionEnricher
-from src.graph.index import build_kg_extractor, build_property_graph_index
+from src.graph.index import (
+    NoOpKGExtractor,
+    build_kg_extractor,
+    build_property_graph_index,
+)
+from src.graph.merge import merge_kg_extraction
 from src.graph.store import build_neo4j_graph_store
 from src.ingestion.embeddings import build_embedding_model
 from src.ingestion.identifier_transform import inject_canonical_entities
@@ -86,25 +90,37 @@ async def process_document(doc_id: str, path: str) -> None:
             graph_store = build_neo4j_graph_store()
             inject_canonical_entities(graph_store, nodes)
             try:
-                extractor = build_kg_extractor(llm)
-                # `PropertyGraphIndex(nodes=...)` constructor runs the
-                # kg_extractors synchronously via `asyncio.run`; that
-                # blows up inside our running event loop, so offload to
-                # a worker thread (which gets its own loop).
+                # LightRAG-style flow (see NoOpKGExtractor docstring):
+                #   1. extractor: one LLM call/chunk → KG_NODES_KEY /
+                #      KG_RELATIONS_KEY with entity descriptions inline
+                #   2. cross-chunk merger: dedup by name, concat or
+                #      LLM-summary descriptions, dedup relations
+                #   3. PropertyGraphIndex with NoOp extractor: pops
+                #      per-chunk metadata, creates Chunk(:MENTIONS)→
+                #      Entity edges, embeds entities for retrieval
+                #   4. upsert merged entities+relations: overwrites
+                #      per-chunk descriptions with cross-chunk merged
+                extractor = build_kg_extractor(llm, mode="lightrag")
+                nodes = await extractor.acall(nodes)
+                merged_entities, merged_relations = await merge_kg_extraction(
+                    nodes, llm,
+                )
                 await asyncio.to_thread(
                     build_property_graph_index,
                     graph_store=graph_store,
                     embed_model=embed_model,
-                    extractor=extractor,
+                    extractor=NoOpKGExtractor(),
                     nodes=nodes,
                 )
-                # Second pass: fill description on each entity.  Use
-                # the async path directly — `__call__` would also hit
-                # the `asyncio.run` trap.
-                await EntityDescriptionEnricher(llm=llm).acall(nodes)
+                if merged_entities:
+                    graph_store.upsert_nodes(merged_entities)
+                if merged_relations:
+                    graph_store.upsert_relations(merged_relations)
                 logger.info(
-                    "graph extraction + enrichment done  doc_id={d}",
+                    "graph done  doc_id={d}  entities={e}  relations={r}",
                     d=doc_id,
+                    e=len(merged_entities),
+                    r=len(merged_relations),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

@@ -24,11 +24,21 @@ from src.graph.schema import (
 )
 
 
-def test_default_mode_is_simple() -> None:
-    """Default mode is `simple` — empirically the most reliable on
-    qwen3:8b via Ollama.  Schema mode kept as opt-in for stronger
-    backends (gpt-4o, qwen3:14b+)."""
+def test_default_mode_is_lightrag() -> None:
+    """Default mode is `lightrag` — single LLM call per chunk yields
+    entities + types + descriptions + relations in one shot, then a
+    cross-chunk merge step consolidates duplicates.  See
+    `src/graph/lightrag_prompts.py` for the algorithm origin and
+    `src/graph/merge.py` for the merger."""
+    from src.graph.lightrag_extract import LightRAGExtractor
+
     extractor = build_kg_extractor(MockLLM())
+    assert isinstance(extractor, LightRAGExtractor)
+
+
+def test_simple_mode_returns_simple_extractor() -> None:
+    """`simple` mode is kept as the R9 regression baseline."""
+    extractor = build_kg_extractor(MockLLM(), mode="simple")
     assert isinstance(extractor, SimpleLLMPathExtractor)
 
 
