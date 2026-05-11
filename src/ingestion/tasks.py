@@ -14,6 +14,7 @@ Run::
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -71,7 +72,9 @@ async def process_document(doc_id: str, path: str) -> None:
         if not docs:
             raise FileNotFoundError(f"file not in reader output: {target}")
 
-        nodes = pipeline.run(documents=docs)
+        # `pipeline.arun` is the async variant — sync `.run` internally
+        # calls `asyncio.run` and explodes inside the taskiq event loop.
+        nodes = await pipeline.arun(documents=docs)
 
         # 2. vector indexing
         store = build_vector_store()
@@ -84,14 +87,21 @@ async def process_document(doc_id: str, path: str) -> None:
             inject_canonical_entities(graph_store, nodes)
             try:
                 extractor = build_kg_extractor(llm)
-                build_property_graph_index(
+                # `PropertyGraphIndex(nodes=...)` constructor runs the
+                # kg_extractors synchronously via `asyncio.run`; that
+                # blows up inside our running event loop, so offload to
+                # a worker thread (which gets its own loop).
+                await asyncio.to_thread(
+                    build_property_graph_index,
                     graph_store=graph_store,
                     embed_model=embed_model,
                     extractor=extractor,
                     nodes=nodes,
                 )
-                # Second pass: fill description on each entity
-                EntityDescriptionEnricher(llm=llm)(nodes)
+                # Second pass: fill description on each entity.  Use
+                # the async path directly — `__call__` would also hit
+                # the `asyncio.run` trap.
+                await EntityDescriptionEnricher(llm=llm).acall(nodes)
                 logger.info(
                     "graph extraction + enrichment done  doc_id={d}",
                     d=doc_id,
