@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from src.api.routes import agent, health, ingest, search, selfrag
+from src.api.routes import legacy_agent as legacy_agent_routes
 from src.config import settings
 from src.di.providers import build_api_container
 from src.ingestion.tasks import broker as taskiq_broker
@@ -64,3 +65,10 @@ app.include_router(search.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(selfrag.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
+
+# R10: legacy judge-based agent is mounted only when explicitly
+# enabled — gives us a comparative baseline for the answer-quality
+# eval without exposing it to ordinary traffic.
+if settings.agent.enable_legacy_agent:
+    app.include_router(legacy_agent_routes.router, prefix="/api/v1")
+    logger.info("legacy /api/v1/legacy/agent route mounted")

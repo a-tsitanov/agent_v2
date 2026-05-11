@@ -1,33 +1,34 @@
-"""Agentic multi-hop search loop.
+"""Legacy judge-based agentic search loop (R10 baseline).
 
-Direct port of ``enterprise-kb/src/retrieval/agent_search.py``,
-restructured around LlamaIndex primitives:
+**Status**: kept as a comparative baseline for R9 answer-quality
+eval.  Production traffic flows through `/api/v1/agent`
+(`src/retrieval/react_agent.py`) and `/api/v1/selfrag`
+(`src/retrieval/reflective_synth.py`).  This module is exposed
+under `/api/v1/legacy/agent` only when `AGENT_ENABLE_LEGACY_AGENT=true`.
 
-  * Retriever — replaces ``HybridSearcher.search(skip_rag=True)``.
-    Stage 4 ships a vector-only retriever; Stage 5 swaps in a hybrid
-    retriever without touching this module.
-  * LLMJudge — replaces ``_judge_context``.  Same JSON contract, same
-    defensive fallbacks.
-  * ResponseSynthesizer — replaces ``HybridSearcher._ask_rag``.
+The legacy loop has a structural asymmetry the ReAct path
+eliminates: an LLM judge evaluates context from outside, then a
+*different* synthesizer-call writes the answer — so the judge can
+say "sufficient" while the synthesizer would actually need more
+context, and vice versa.  R7+R8 collapse both decisions into the
+same LLM via tool calls.
 
-Stage 6 will plug a graph-search tool here (entities / relations
-accumulation, ``hl_keywords`` for the final synthesis).  Until then
-the agent runs on chunks alone — which is exactly the LightRAG
-``mode="naive"`` regime, intentionally simple to make the agentic
-control flow the only variable in early benchmarks.
-
-Logic invariants preserved from enterprise-kb:
+Logic invariants preserved (unchanged since the original port):
   * dedup ``all_sources`` by ``node.node_id`` after every round;
   * compute deltas; if round > 1 and all deltas are zero — skip the
-    judge LLM call and exit (Stage G);
+    judge LLM call and exit;
   * record ``AgenticRoundStat`` per executed round, including a
-    skipped-judge entry on early-exit (Stage H);
+    skipped-judge entry on early-exit;
   * defensive judge — ANY parse / LLM error → sufficient=True;
   * if judge proposes a follow-up identical to the current query —
     break (anti-loop guard);
   * final synthesis runs on the *enriched query* (original + appended
     follow-ups) with the *accumulated* nodes — never starts from
-    scratch (Stage F).
+    scratch.
+
+When `graph_retriever` is provided, each round also queries the
+knowledge graph; entities and relations are deduped across rounds
+and contribute to the early-exit decision.
 """
 
 from __future__ import annotations

@@ -75,7 +75,42 @@ POST /api/v1/selfrag ──► same ReAct loop + Reflective synth (R8):
          [UNCERTAIN:why] → known gap, no hallucination
     2. parses, retrieves for NEED markers, redrafts
     3. terminates after max_refinements (default 3)
+
+POST /api/v1/legacy/agent  ──► judge-based loop (R10 baseline):
+  Only mounted when AGENT_ENABLE_LEGACY_AGENT=true.  Kept as a
+  comparative baseline for the answer-quality eval —
+  `run_answer_eval.py --include-legacy` exercises this route to
+  validate that R7+R8 outperform the legacy judge across
+  single-fact, multi-hop, and summary categories.
 ```
+
+## Observability
+
+Every request bound to one of the three (or four) endpoints is
+wrapped in a `trace_request(endpoint, query)` context manager from
+`src/observability/trace.py`.  Inside the trace:
+
+* `record_event("tool_call", payload={"tool_name": "..."})` fires
+  for every retriever / graph / synthesizer call.
+* `record_event("llm_call", payload={"kind": "reasoning"})` fires
+  for every ReAct or refinement LLM call.
+* `record_event("refinement_round", ...)` fires per Self-RAG
+  refinement loop iteration.
+* `record_timed(...)` is the timing variant — wraps a block and
+  records its wall duration as the event's `duration_ms`.
+
+`Trace.summary()` aggregates totals + tool breakdown.  The
+collector is contextvar-scoped so concurrent requests stay
+isolated and async tasks inherit the trace automatically.
+
+The R9 answer-quality eval (`tests/eval/answer_quality.py` +
+`run_answer_eval.py`) is deterministic and offline — it grades
+endpoint responses by substring fact recall, entity recall,
+citation precision, hallucination upper bound, and
+uncertainty honesty.  Run it across `/search`, `/agent`,
+`/selfrag` (and optionally `--include-legacy`) to compare
+strategies on the project's 15 golden Q&A cases (5 per
+doc_type).
 
 ## Layer responsibilities
 

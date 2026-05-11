@@ -47,3 +47,17 @@ async def test_selfrag_route_registered() -> None:
             "/api/v1/selfrag", json={"query": "hello"},
         )
     assert resp.status_code in (401, 422)
+
+
+@pytest.mark.asyncio
+async def test_legacy_route_404_by_default() -> None:
+    """R10: legacy /api/v1/legacy/agent is mounted only when
+    AGENT_ENABLE_LEGACY_AGENT=true.  Default off → 404."""
+    from src.api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/legacy/agent", json={"query": "hello"},
+        )
+    assert resp.status_code == 404

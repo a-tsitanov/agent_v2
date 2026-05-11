@@ -158,6 +158,11 @@ class AgentSettings(BaseSettings):
     # Reflective synthesis (R8): how many draft → critique → retrieve
     # → redraft rounds the synthesizer attempts.
     max_refinements: int = Field(default=3, ge=0, le=10)
+    # R10: legacy judge-based agentic_search remains in the codebase
+    # as a comparative baseline for R9 eval.  Routed under
+    # `/api/v1/legacy/agent` only when this flag is true.  Default
+    # off — production traffic should go through /agent or /selfrag.
+    enable_legacy_agent: bool = False
 
 
 # ── composed top-level settings ──────────────────────────────────────

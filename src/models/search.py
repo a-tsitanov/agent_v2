@@ -18,9 +18,9 @@ from pydantic import BaseModel, Field
 class SearchRequest(BaseModel):
     """`/api/v1/search` — hybrid retrieve + single synthesize.
 
-    The ``agentic`` / ``agentic_max_rounds`` fields are kept as the
-    transition contract; R4 splits agentic dispatch into the
-    `/agent` and `/selfrag` endpoints and removes these fields.
+    No agentic flags here.  Agentic dispatch lives on dedicated
+    routes: `/api/v1/agent` for ReAct (R7) and `/api/v1/selfrag`
+    for ReAct + reflective synthesis (R8).
     """
 
     query: str
@@ -36,10 +36,6 @@ class SearchRequest(BaseModel):
     created_before: int | None = None
     response_type: str = "Multiple Paragraphs"
     include_references: bool = False
-
-    # legacy — removed in R4 when route split lands
-    agentic: bool = False
-    agentic_max_rounds: int = Field(3, ge=1, le=5)
 
 
 class AgentSearchRequest(BaseModel):
@@ -77,7 +73,8 @@ class AgenticRoundStat(BaseModel):
     """Per-round telemetry from the legacy judge-based loop.
 
     ``sufficient=None`` when judge was skipped (early-exit on
-    no-new-info).  Kept for legacy `agentic_search` until R10.
+    no-new-info).  Kept for `agentic_search` (mounted as a baseline
+    on `/api/v1/legacy/agent` when AGENT_ENABLE_LEGACY_AGENT=true).
     """
 
     round: int
@@ -155,7 +152,8 @@ class SearchResponse(BaseModel):
     sources: list[SourceCitation] = Field(default_factory=list)
     latency_ms: float = 0.0
 
-    # legacy judge-based loop (R10 will retire or flag-gate)
+    # legacy judge-based loop telemetry — only populated by the
+    # `/api/v1/legacy/agent` route (gated by AGENT_ENABLE_LEGACY_AGENT).
     agentic_rounds: int | None = None
     follow_up_queries: list[str] | None = None
     agentic_round_stats: list[AgenticRoundStat] | None = None
