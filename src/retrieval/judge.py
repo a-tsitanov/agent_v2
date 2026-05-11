@@ -1,15 +1,24 @@
-"""LLM-judge for ``agentic_search``.
+"""LLM-judge for legacy `agentic_search`.
 
-The judge looks at the original query and the accumulated retrieved
-context across rounds and decides whether the agent has enough to
-answer.  The prompt and JSON contract mirror enterprise-kb's
-``_JUDGE_PROMPT`` so the two builds can be benchmarked apples-to-apples.
+The judge evaluates whether the accumulated retrieved context is
+enough to answer the original query.  Two execution paths:
 
-Defensive parsing: ANY error (LLM exception, malformed JSON,
-markdown-fenced JSON, missing fields) collapses to
-``sufficient=True`` so the caller exits the loop cleanly instead of
-crashing the whole request.  The exception text lands in ``reason``
-for diagnostics.
+* ``LLMJudge.via_structured`` — preferred.  Uses
+  ``llm.astructured_predict(JudgeOutput, prompt)`` (function calling
+  on qwen3:8b+).  Returns a ``JudgeOutput`` Pydantic.
+* ``LLMJudge.__call__`` (legacy) — text-based path.  Asks the LLM
+  to emit JSON in chat completion, strips markdown fences, parses.
+  Defensive: any error → ``sufficient=True`` so the caller exits
+  cleanly.  Kept for compat with smaller models and as fallback
+  when ``LITELLM_FUNCTION_CALLING=false``.
+
+Both paths return the same dict shape (the legacy loop in
+``agentic_search`` doesn't care which path was taken).
+
+This module is on the R10 chopping block — when the ReAct +
+reflective agents (R7/R8) prove themselves on golden eval, the
+judge loop becomes optional baseline and these helpers can move to
+a `legacy/` namespace or be deleted.
 """
 
 from __future__ import annotations
@@ -19,10 +28,13 @@ from typing import Any
 
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.llms import LLM
+from llama_index.core.prompts import PromptTemplate
 from llama_index.core.schema import NodeWithScore
 from loguru import logger
 
-_JUDGE_PROMPT = (
+from src.models.search import JudgeOutput
+
+_JUDGE_PROMPT_TEXT = (
     "You are a search quality judge. Given the original query and the "
     "retrieved text chunks, decide whether there is enough information "
     "to fully answer the query.\n\n"
@@ -33,6 +45,19 @@ _JUDGE_PROMPT = (
     "- If not sufficient, write a concise follow-up search query that "
     "would retrieve the missing information.\n"
     "- The follow-up query must be different from previous queries.\n"
+)
+
+_STRUCTURED_PROMPT = PromptTemplate(
+    "You are a search quality judge. Given the original query and the "
+    "retrieved text chunks, decide whether there is enough information "
+    "to fully answer the query.\n\n"
+    "Original query: {query}\n\n"
+    "Retrieved context (chunks: {chunk_count}):\n{chunks}\n\n"
+    "Rules:\n"
+    "- If sufficient, set follow_up_query to an empty string.\n"
+    "- If not sufficient, write a concise follow-up search query that "
+    "would retrieve the missing information.\n"
+    "- The follow-up query must be different from previous queries."
 )
 
 
@@ -54,18 +79,51 @@ def _build_chunks_str(
 
 
 class LLMJudge:
-    """Callable wrapper around the project LLM."""
+    """Two-path LLM judge wrapper."""
 
     def __init__(self, llm: LLM) -> None:
         self._llm = llm
+
+    async def via_structured(
+        self,
+        original_query: str,
+        accumulated_sources: list[NodeWithScore],
+    ) -> dict[str, Any]:
+        """Function-calling path (qwen3+/gpt-4-class).
+
+        On any failure falls back to the text-based path to preserve
+        the "judge never raises" contract.
+        """
+        chunks_ctx = _build_chunks_str(accumulated_sources)
+        try:
+            output: JudgeOutput = await self._llm.astructured_predict(
+                JudgeOutput,
+                _STRUCTURED_PROMPT,
+                query=original_query,
+                chunk_count=len(accumulated_sources),
+                chunks=chunks_ctx,
+            )
+            return {
+                "sufficient": bool(output.sufficient),
+                "follow_up_query": str(output.follow_up_query or ""),
+                "reason": str(output.reason or ""),
+            }
+        except Exception as exc:  # noqa: BLE001 — fall back
+            logger.warning(
+                "structured judge failed → text fallback: {err}", err=exc,
+            )
+            return await self.__call__(original_query, accumulated_sources)
 
     async def __call__(
         self,
         original_query: str,
         accumulated_sources: list[NodeWithScore],
     ) -> dict[str, Any]:
-        """Returns ``{"sufficient": bool, "follow_up_query": str,
-        "reason": str}`` — never raises."""
+        """Text-based path (works with any chat LLM).
+
+        Returns ``{"sufficient": bool, "follow_up_query": str,
+        "reason": str}`` — never raises.
+        """
         chunks_ctx = _build_chunks_str(accumulated_sources)
         user = (
             f"Original query: {original_query}\n\n"
@@ -75,7 +133,7 @@ class LLMJudge:
         try:
             resp = await self._llm.achat(
                 messages=[
-                    ChatMessage(role=MessageRole.SYSTEM, content=_JUDGE_PROMPT),
+                    ChatMessage(role=MessageRole.SYSTEM, content=_JUDGE_PROMPT_TEXT),
                     ChatMessage(role=MessageRole.USER, content=user),
                 ]
             )
