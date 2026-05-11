@@ -85,9 +85,11 @@ def test_to_golden_case_shape() -> None:
     assert gc.category == "single_fact"  # mapped from Fact Retrieval
     # Acronyms pulled into must_include_entities
     assert "BCC" in gc.must_include_entities
-    # Evidence phrase carried as fact
-    assert any("most common type of skin cancer" in f
-               for f in gc.must_include_facts)
+    # Evidence keywords carried as facts (not the full sentence)
+    facts_lc = {f.lower() for f in gc.must_include_facts}
+    assert "bcc" in facts_lc
+    assert "skin" in facts_lc
+    assert "cancer" in facts_lc
 
 
 def test_to_golden_case_handles_multi_relation() -> None:
@@ -104,7 +106,15 @@ def test_to_golden_case_handles_multi_relation() -> None:
     )
     gc = to_golden_case(qa)
     assert gc.category == "multi_hop"
-    assert len(gc.must_include_facts) == 2  # two semicolon-separated relations
+    # Facts are now per-keyword (not per-sentence) so the answer
+    # text can be paraphrased without losing fact_recall.
+    facts_lc = {f.lower() for f in gc.must_include_facts}
+    assert "uv" in facts_lc or "radiation" in facts_lc or "exposure" in facts_lc
+    assert "bcc" in facts_lc
+    assert "skin" in facts_lc
+    # Stopwords and medical filler should be filtered out.
+    assert "the" not in facts_lc
+    assert "factor" not in facts_lc
 
 
 def test_load_medical_golden_cases_defaults() -> None:
@@ -137,8 +147,35 @@ def test_score_perfect_medical_answer() -> None:
         sources=[{"chunk_id": "c1",
                   "content": "Basal cell carcinoma (BCC) is the most common type of skin cancer."}],
     )
+    # Every keyword from evidence_relations is present in the
+    # answer → fact_recall pegged to 1.0.
     assert score.fact_recall == 1.0
     assert score.entity_recall == 1.0
+
+
+def test_paraphrased_correct_answer_now_scores() -> None:
+    """Regression: a correct answer phrased differently from the
+    evidence sentence used to score 0% fact_recall under the old
+    sentence-level substring matcher.  Per-keyword facts fix it."""
+    qa = MedicalQA(
+        id="m-paraphrase", source="Medical",
+        question="What are the two main treatment phases for primary CNS lymphoma?",
+        answer="Treatment is typically given in phases: induction and consolidation.",
+        question_type="Fact Retrieval",
+        evidence="Treatment is typically given in phases: induction and consolidation",
+        evidence_relations="Treatment is typically given in phases: induction and consolidation",
+    )
+    gc = to_golden_case(qa)
+    paraphrased = (
+        "The two main treatment phases for primary CNS lymphoma are "
+        "induction and consolidation."
+    )
+    score = score_case(
+        gc, endpoint="agent",
+        answer_text=paraphrased,
+        sources=[{"chunk_id": "c1", "content": qa.evidence}],
+    )
+    assert score.fact_recall == 1.0, score.fact_recall
 
 
 def test_score_wrong_medical_answer() -> None:

@@ -130,13 +130,65 @@ def load_medical_qas(
 
 
 def _evidence_phrases(qa: MedicalQA) -> list[str]:
-    """Split `evidence_relations` (semicolon-separated short claims)
-    into individual phrases for fact_recall scoring."""
+    """Extract substring-matchable medical keywords from
+    `evidence_relations`.
+
+    The upstream Medical benchmark ships evidence as full
+    sentences ("Treatment is typically given in phases: induction
+    and consolidation") or JSON-y lists ("Biomarker: [\"BRAF gene
+    mutation\", \"RET gene fusion\"]").  Whole-sentence substring
+    matching against the model's paraphrased answer fails almost
+    always — the model is correct ("the two main treatment phases
+    are induction and consolidation"), just rephrased.
+
+    We therefore pull medical-significant content words /
+    multi-word terms out of `evidence_relations` and use those as
+    individual facts.  Each must appear in the answer for full
+    fact_recall on that case.
+
+    Filters: drop short tokens (<3 chars), drop common English
+    stopwords, drop generic medical filler like "patient" /
+    "type".  Keep acronyms (BCC, BRAF, CEA, NTRK), drugs, and
+    domain nouns.
+    """
+    import re
+
     raw = (qa.evidence_relations or qa.evidence or "").strip()
     if not raw:
         return []
-    phrases = [p.strip() for p in raw.split(";")]
-    return [p for p in phrases if p]
+
+    # Tokenize on any non-alphanumeric (keeps acronyms intact).
+    tokens = re.findall(r"[A-Za-z0-9]+", raw)
+    seen: set[str] = set()
+    out: list[str] = []
+    for tok in tokens:
+        low = tok.lower()
+        if len(tok) < 3:
+            continue
+        if low in _EVIDENCE_STOPWORDS:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        # Preserve original casing — acronyms (BCC, CEA) score
+        # exact, other tokens match case-insensitively via the
+        # scorer's lower-case substring.
+        out.append(tok)
+    return out
+
+
+# English stopwords + generic medical filler that adds no signal
+# when checking whether the answer "got the fact".
+_EVIDENCE_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "at",
+    "by", "for", "with", "is", "are", "was", "were", "be", "as",
+    "it", "this", "that", "these", "those", "from", "into", "such",
+    "but", "not", "no", "than", "then", "also", "any", "all", "may",
+    "can", "if", "given", "typically", "listed", "include", "includes",
+    "considered", "used", "based", "main", "common", "primary",
+    "method", "methods", "factor", "factors", "type", "types",
+    "diagnostic", "biomarker", "biomarkers",
+})
 
 
 def _entity_candidates(qa: MedicalQA) -> list[str]:

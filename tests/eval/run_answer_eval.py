@@ -63,6 +63,7 @@ ENDPOINT_MAP = {
 
 async def _hit_endpoint(
     client: httpx.AsyncClient, endpoint: str, query: str, api_key: str,
+    timeout_s: float = 120.0,
 ) -> dict | None:
     """Returns parsed JSON or None on failure (logged)."""
     path = ENDPOINT_MAP[endpoint]
@@ -71,7 +72,7 @@ async def _hit_endpoint(
             path,
             json={"query": query},
             headers={"X-API-Key": api_key},
-            timeout=120.0,
+            timeout=timeout_s,
         )
         resp.raise_for_status()
         return resp.json()
@@ -139,17 +140,53 @@ async def run(args: argparse.Namespace) -> int:
           flush=True)
 
     scores: list[CaseScore] = []
+    raw_responses: list[dict] = []
     async with httpx.AsyncClient(base_url=args.api_url) as client:
         for i, case in enumerate(cases, 1):
             print(f"  [{i}/{len(cases)}] {case.id} ({case.doc_type}/{case.category})"
                   f": {case.query[:80]}", flush=True)
             for ep in endpoints:
                 t_ep = time.monotonic()
-                resp = await _hit_endpoint(client, ep, case.query, args.api_key)
+                # /search is single-shot — 120s tops on qwen3:8b.
+                # /agent and /selfrag chain multiple LLM calls
+                # (reasoning + tool round-trips + final synth +
+                # reflective re-drafts), so they need a much
+                # larger budget on CPU-bound stacks.
+                per_ep_timeout = (
+                    args.search_timeout if ep == "search"
+                    else args.agentic_timeout
+                )
+                resp = await _hit_endpoint(
+                    client, ep, case.query, args.api_key,
+                    timeout_s=per_ep_timeout,
+                )
                 dt = time.monotonic() - t_ep
                 ok = "ok" if resp is not None else "fail"
                 print(f"        {ep:8s} {ok:4s}  {dt:6.1f}s", flush=True)
                 scores.append(_score_response(case, endpoint=ep, response=resp))
+                # Persist the raw answer + sources so we can diff
+                # endpoints on the same query and inspect failures
+                # post-hoc without re-running.
+                raw_responses.append({
+                    "case_id": case.id,
+                    "endpoint": ep,
+                    "elapsed_s": round(dt, 2),
+                    "answer": (resp or {}).get("answer", "")[:2000],
+                    # Keep source content (truncated) so the
+                    # hallucination heuristic survives offline
+                    # rescoring without re-hitting the API.
+                    "sources": [
+                        {"chunk_id": s.get("chunk_id"),
+                         "content": (s.get("content") or "")[:1500]}
+                        for s in ((resp or {}).get("sources") or [])
+                    ],
+                    "agentic_steps": [
+                        {"step": s.get("step"), "tool": s.get("tool_name"),
+                         "args": s.get("tool_args")}
+                        for s in ((resp or {}).get("agentic_step_stats") or [])
+                    ],
+                    "answer_detail": (resp or {}).get("answer_detail"),
+                })
 
     # ── aggregations ────────────────────────────────────────────────
     by_endpoint = aggregate_by(scores, "endpoint")
@@ -190,6 +227,7 @@ async def run(args: argparse.Namespace) -> int:
             "by_category": by_category,
             "by_endpoint_and_doc": by_endpoint_and_doc,
             "raw_scores": [s.__dict__ for s in scores],
+            "raw_responses": raw_responses,
             "violations": violations,
         }
         Path(args.json_out).write_text(
@@ -256,6 +294,19 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--medical-seed", type=int, default=42,
         help="deterministic shuffle seed for medical sampling.",
+    )
+    p.add_argument(
+        "--search-timeout", type=float, default=180.0,
+        help="httpx timeout (s) for /search calls.",
+    )
+    p.add_argument(
+        "--agentic-timeout", type=float, default=900.0,
+        help=(
+            "httpx timeout (s) for /agent and /selfrag calls. "
+            "Long-form Creative Generation answers on qwen3:8b CPU "
+            "can take 5-15 minutes through the multi-LLM-call agentic "
+            "stack — default is generous on purpose."
+        ),
     )
     return p.parse_args()
 
