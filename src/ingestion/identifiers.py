@@ -205,14 +205,18 @@ def _extract_bic(text: str) -> list[NormalizedIdentifier]:
 
 # ── ContractNumber ───────────────────────────────────────────────────
 #
-# Heuristic: ``№`` (or ``No.`` / ``N``) followed by 2-30 alphanumeric +
-# separator characters. The marker is required to avoid extracting
-# every dashed alphanumeric token in the document (would catch a lot
-# of noise — invoice numbers without context, version strings, etc.).
+# Heuristic: ``№`` (Russian marker) or literal ``No.``/``N.`` followed
+# by an alphanumeric token of 2-30 chars.
+#
+# Constraints to avoid false positives on plain prose:
+#   * NO case-insensitive flag — body-text "no symptoms" / "no warranties"
+#     would otherwise match and pull arbitrary capitalised words.
+#   * The captured token MUST contain at least one digit (real contract
+#     IDs always do — pure alpha tokens are section headings,
+#     not contract refs).
 
 _CONTRACT_RE = re.compile(
-    r"(?:№|\bNo\.?\b)\s*([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9./\-]{1,29})",
-    re.IGNORECASE,
+    r"(?:№|\bNo\.|\bN\.)\s*([A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9./\-]{1,29})",
 )
 
 
@@ -225,6 +229,8 @@ def _extract_contracts(text: str) -> list[NormalizedIdentifier]:
     out: list[NormalizedIdentifier] = []
     for m in _CONTRACT_RE.finditer(text):
         original = m.group(1)
+        if not any(ch.isdigit() for ch in original):
+            continue  # alpha-only tokens are not contract numbers
         out.append(
             NormalizedIdentifier(
                 entity_type="ContractNumber",

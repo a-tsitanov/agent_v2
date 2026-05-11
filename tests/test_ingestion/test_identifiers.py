@@ -171,6 +171,33 @@ def test_contract_no_marker_no_match() -> None:
     assert contracts == []
 
 
+def test_contract_english_negation_no_false_positive() -> None:
+    """Body-text 'no symptoms' / 'no warranties' must not match —
+    the regex earlier ran with IGNORECASE and pulled section
+    headings out of medical/legal prose as contract numbers."""
+    text = (
+        "The patient reports no symptoms. There are NO WARRANTIES "
+        "of merchantability. No radiation has been administered."
+    )
+    contracts = _by_type(extract_identifiers(text), "ContractNumber")
+    assert contracts == []
+
+
+def test_contract_alpha_only_token_rejected() -> None:
+    """`No. SYMPTOMS` should not match — captured token has no digit."""
+    text = "No. SYMPTOMS noted in the consult note."
+    contracts = _by_type(extract_identifiers(text), "ContractNumber")
+    assert contracts == []
+
+
+def test_contract_english_marker_with_digit() -> None:
+    """Legit `No. 17-K` style references must still extract."""
+    text = "See contract No. 17-K dated 2024-03-15."
+    contracts = _by_type(extract_identifiers(text), "ContractNumber")
+    assert len(contracts) == 1
+    assert contracts[0].canonical == "17-K"
+
+
 # ── DocumentDate ─────────────────────────────────────────────────────
 
 
