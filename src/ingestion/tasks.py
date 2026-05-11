@@ -22,6 +22,11 @@ from loguru import logger
 from taskiq_aio_pika import AioPikaBroker
 
 from src.config import settings
+from llama_index.core.graph_stores.types import (
+    KG_NODES_KEY,
+    KG_RELATIONS_KEY,
+)
+
 from src.graph.index import (
     NoOpKGExtractor,
     build_kg_extractor,
@@ -55,6 +60,16 @@ _NEO4J_UNSAFE_METADATA_KEYS: frozenset[str] = frozenset({
     "canonical_identifiers",
 })
 
+# These metadata keys carry LlamaIndex objects (EntityNode, Relation)
+# that PropertyGraphIndex.`_insert_nodes` pops BEFORE writing the
+# chunk to Neo4j.  They look "neo4j-unsafe" to a naive value check,
+# but stripping them breaks PropertyGraphIndex's own assertion
+# (`metadata.get(KG_NODES_KEY) is not None`).
+_PRESERVE_METADATA_KEYS: frozenset[str] = frozenset({
+    KG_NODES_KEY,
+    KG_RELATIONS_KEY,
+})
+
 
 def _is_neo4j_safe(value):
     """A value Neo4j will accept as a node property — primitives
@@ -70,12 +85,19 @@ def _is_neo4j_safe(value):
 
 
 def _strip_neo4j_unsafe_metadata(nodes) -> None:
-    """In-place: drop metadata keys whose values Neo4j would reject."""
+    """In-place: drop metadata keys whose values Neo4j would reject.
+
+    Preserves `KG_NODES_KEY` / `KG_RELATIONS_KEY` (LlamaIndex's
+    extraction artifacts) — PropertyGraphIndex itself pops those
+    before writing to Neo4j.
+    """
     for n in nodes:
         md = getattr(n, "metadata", None)
         if not md:
             continue
         for key in list(md.keys()):
+            if key in _PRESERVE_METADATA_KEYS:
+                continue
             if key in _NEO4J_UNSAFE_METADATA_KEYS or not _is_neo4j_safe(md[key]):
                 md.pop(key, None)
 
