@@ -1,51 +1,73 @@
 # kb-llamaindex
 
-Greenfield reference RAG built on **LlamaIndex 0.13+** to compare
-against the production LightRAG stack in `enterprise-kb`. Focus of
-the prototype is **agentic search** — the multi-hop loop with an
-LLM judge, accumulated context, and per-round telemetry — which
-becomes the first end-to-end working feature (Stage 4) before
-hybrid retrieval, KG, canonicalisation, API, and eval are layered
-on top.
+Production-bound RAG service built on **LlamaIndex 0.13+** with three
+parallel search endpoints — plain hybrid retrieve, ReAct agent, and
+Self-RAG-style reflective synthesis — running on local Ollama via
+LiteLLM proxy.
+
+Recommended model: **`qwen3:8b`** (reliable tool calling + structured
+output).  Escalation path to `qwen3:14b` / `32b` if quality on your
+corpus demands it — see `docs/MODELS.md` (created by R6).
 
 Plan: `~/.claude/plans/hashed-rolling-llama.md`.
 
 ## Status
 
-All 9 stages of the original plan are committed (one commit per
-stage, each with a section in `CHANGELOG.md`):
+Prototype build (9 stages) shipped 2026-05-09 and live-tested.  Now
+in **refactor + production-architecture phase** (stages R1-R10):
 
-- ✅ **Stage 0** — Bootstrap (skeleton, deps, settings, smoke tests)
-- ✅ **Stage 1** — Minimal infra (Milvus + Postgres + LiteLLM)
-- ✅ **Stage 2** — IngestionPipeline (parser + chunker + cache)
-- ✅ **Stage 3** — Vector index + basic query engine
-- ✅ **Stage 4** — Agentic loop (priority milestone)
-- ✅ **Stage 5** — Hybrid retrieval (BM25 + vector + RRF)
-- ✅ **Stage 6** — Knowledge graph (PropertyGraphIndex + graph-aware agent)
-- ✅ **Stage 7** — Identifier canonicalization (ported + LlamaIndex transform)
-- ✅ **Stage 8** — FastAPI + Taskiq worker + dishka DI
-- ✅ **Stage 9** — Eval gate + ops scripts
+- **R1 — Model migration to qwen3:8b** — current.
+- R2 — Function calling + structured output.
+- R3 — Universal entity types + rich entity descriptions in graph.
+- R4 — DI hygiene + split `/search` into 3 endpoints
+  (`/search`, `/agent`, `/selfrag`).
+- R5 — Test coverage (≥115 green).
+- R6 — `docs/MODELS.md`, `docs/ARCHITECTURE.md`.
+- R7 — ReAct agent (`POST /api/v1/agent`).
+- R8 — Reflective synthesis (`POST /api/v1/selfrag`).
+- R9 — Observability + answer-quality eval over multi-domain
+  golden Q&A.
+- R10 — Decommission legacy judge-based path.
 
-**Tests:** 107 green (unit + eval gate). Live-stack integration
-(Milvus / Neo4j / RabbitMQ / LiteLLM via Docker) is exercised
-manually — see `scripts/start.sh`, `scripts/setup_db.py`,
-`scripts/smoke.sh`.
+History of the initial 9-stage build is in `CHANGELOG.md`.
+
+## Prerequisites
+
+- Docker Compose stack (etcd / minio / milvus / postgres / neo4j /
+  rabbitmq / litellm).
+- **Ollama running on the host** with required models pulled:
+  ```bash
+  ollama pull qwen3:8b
+  ollama pull nomic-embed-text
+  ```
+  LiteLLM proxy inside Docker reaches Ollama via
+  `host.docker.internal:11434` — see `docker/litellm_config.yaml`.
+- Python 3.12.
 
 ## Quick start
 
 ```bash
 cd kb-llamaindex
 cp .env.example .env
+uv sync --extra dev
 
-# uv (recommended) — installs into .venv automatically
-uv sync --all-extras --dev
+bash scripts/start.sh                  # bring up docker stack
+uv run python -m scripts.setup_db      # init PG schema + Milvus ping
 
-# or pip
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+# Ingest a directory
+uv run python -m src.ingestion.run ./tests/test_ingestion/fixtures/
 
-pytest                           # smoke tests on Stage-0 scaffold
+# Serve API + worker
+uv run uvicorn src.api.main:app --port 8000 &
+uv run taskiq worker src.ingestion.tasks:broker --workers 1 &
+
+# Search (three endpoints land in R7-R8; until then only /search works)
+curl -X POST localhost:8000/api/v1/search \
+  -H "X-API-Key: dev-local-key" -H "Content-Type: application/json" \
+  -d '{"query": "..."}'
+
+# Tests
+uv run pytest -q
 ```
 
 ## Directory layout
@@ -57,19 +79,37 @@ kb-llamaindex/
 ├── src/
 │   ├── config.py                # nested pydantic-settings
 │   ├── utils/logging.py         # loguru bootstrap
-│   ├── api/                     # FastAPI app (Stage 8)
-│   ├── ingestion/               # IngestionPipeline (Stages 2, 7)
-│   ├── retrieval/               # vector + hybrid + agent (Stages 3-5)
-│   ├── graph/                   # PropertyGraphIndex (Stage 6)
-│   └── models/                  # Pydantic response shapes
-├── tests/
-│   └── test_smoke.py            # Stage-0 smoke tests
-├── scripts/                     # populated from Stage 1 onward
-└── docs/
+│   ├── api/
+│   │   ├── main.py              # FastAPI app, lifespan
+│   │   └── routes/
+│   │       ├── search.py        # /api/v1/search (plain hybrid)
+│   │       ├── agent.py         # /api/v1/agent (ReAct, R7)
+│   │       ├── selfrag.py       # /api/v1/selfrag (Reflective, R8)
+│   │       └── ingest.py        # /api/v1/ingest
+│   ├── di/providers.py          # dishka wiring
+│   ├── ingestion/               # IngestionPipeline + identifier canon
+│   ├── retrieval/               # vector + hybrid + agent + judge
+│   ├── graph/                   # PropertyGraphIndex + schema
+│   ├── models/                  # Pydantic request/response shapes
+│   └── storage/postgres.py      # documents-table client
+├── tests/                       # unit + eval suites
+├── scripts/                     # start, setup_db, ingest, smoke, diag
+├── docker/                      # compose + LiteLLM config
+└── docs/                        # ARCHITECTURE, MODELS (created by R6)
 ```
 
-## Reference
+## Domain
 
-Logic is ported from `enterprise-kb/` where the LightRAG version
-already encodes lessons paid for. Concrete pointers are in
-`~/.claude/projects/-Users-a-tsitanov-projects-enterprise-kb/memory/project_kb_llamaindex_prototype.md`.
+The system is built for a heterogeneous corpus:
+
+- Analytical reports (long-form prose with concepts, metrics,
+  findings).
+- Email correspondence (`.eml` with headers + threaded body).
+- Support call transcripts (speaker-turns, issues, resolutions).
+
+EntityType taxonomy (set in R3) is universal — `Person`,
+`Organization`, `Concept`, `Metric`, `Topic`, `Issue`,
+`Resolution`, `EventOrAction`, `Product`, `Document` — plus
+identifier types (`PhoneNumber`, `Email`, `INN`, etc.) that are
+detected deterministically by the canonicalisation transform when
+they appear.

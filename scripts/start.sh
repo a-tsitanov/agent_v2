@@ -18,7 +18,13 @@ case "${1:-up}" in
     echo "  Milvus      → localhost:19530 (gRPC), localhost:9091 (HTTP)"
     echo "  MinIO       → http://localhost:9001 (minioadmin / minioadmin)"
     echo "  Postgres    → localhost:5432 (postgres / postgres)"
+    echo "  Neo4j       → http://localhost:7474 (neo4j / changeme)"
+    echo "  RabbitMQ    → http://localhost:15672 (guest / guest)"
     echo "  LiteLLM     → http://localhost:4000"
+    echo
+    echo "Make sure Ollama is running on the host with required models:"
+    echo "  ollama pull qwen3:8b nomic-embed-text"
+    echo "  (optional) ollama pull llama3.1:8b   # baseline for R9 eval"
     echo
     echo "After services are healthy:"
     echo "  uv run python -m scripts.setup_db"

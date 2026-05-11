@@ -8,6 +8,51 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [R1] — 2026-05-11 — Model migration to qwen3:8b
+
+### Changed
+- Default LLM model in `.env`, `.env.example`,
+  `src/config.py:LiteLLMSettings.llm_model`,
+  `docker/litellm_config.yaml` → `qwen3:8b`.
+  Rationale: qwen3:8b has reliable Hermes-style tool calling +
+  structured output, required by R7 (ReAct agent) and R8
+  (reflective synthesis).
+- `LITELLM_TIMEOUT_S` raised 600 → 900 (qwen3:8b is slightly
+  slower per token).
+- `docker/litellm_config.yaml` — keeps `llama3.1:8b` as
+  baseline (commented escalation targets `qwen3:14b`/`32b`
+  for `docs/MODELS.md` from R6).
+- `scripts/start.sh` — startup banner reminds the operator to
+  pull `qwen3:8b` and `nomic-embed-text` into Ollama before
+  running the stack.
+- `README.md` — rewritten: recommended model + R1-R10 refactor
+  status + 3-endpoint architecture preview + multi-domain
+  context (reports / emails / transcripts).
+
+### Added
+- `AgentSettings.max_iterations` and `max_refinements` env
+  knobs (`AGENT_MAX_ITERATIONS`, `AGENT_MAX_REFINEMENTS`).
+  Reserved for R7 (ReAct iteration cap) and R8 (reflective
+  redraft cap); not yet used in code.
+
+### Cleanup (refactoring mandate)
+- `.env.example` — removed stage-numbered comments
+  ("used from Stage 8 onward" etc.); subsystem headers now
+  describe purpose only.
+- `src/config.py:AgentSettings` docstring no longer references
+  Stage 4 by name.
+
+### Verified
+- `pytest -q` — 107/107 green.
+- Live smoke against running compose:
+  - `llm.acomplete("2+2?")` → "четыре" (qwen3:8b reachable via
+    LiteLLM proxy).
+  - `embed_model.aget_text_embedding(...)` → 768-dim vector.
+- `scripts/diag_kg.py` on Russian contract excerpt with
+  qwen3:8b → **16 entities + 8 relations** (target was ≥10
+  entities + ≥5 relations).  llama3.1:8b previously produced
+  14 + 7 on the same text — qwen3:8b is marginally better.
+
 ## [post-Stage-9 fixes] — 2026-05-11 — Live KG extraction wired
 
 ### Fixed

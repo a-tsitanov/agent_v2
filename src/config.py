@@ -108,10 +108,16 @@ class LiteLLMSettings(BaseSettings):
 
     base_url: str = "http://localhost:4000"
     api_key: SecretStr = SecretStr("sk-litellm-stub")
-    llm_model: str = "qwen2.5:3b"
+    # Default model: qwen3:8b.  Has reliable tool calling (Hermes-
+    # style) and structured output — required by R7/R8 (ReAct agent
+    # and reflective synthesis).  Smaller models (qwen2.5:3b,
+    # llama3.1:8b) work for plain retrieve+synthesize but fail
+    # function-calling reliability tests; see docs/MODELS.md for
+    # escalation path.
+    llm_model: str = "qwen3:8b"
     embedding_model: str = "nomic-embed-text"
     embedding_dim: int = 768
-    timeout_s: float = 600.0
+    timeout_s: float = 900.0
     max_retries: int = 2
 
 
@@ -137,14 +143,21 @@ class IngestionSettings(BaseSettings):
 
 
 class AgentSettings(BaseSettings):
-    """Agentic-search loop knobs (Stage 4)."""
+    """Knobs for the agentic search endpoints (`/agent`, `/selfrag`)."""
 
     model_config = SettingsConfigDict(
         env_prefix="AGENT_", env_file=".env", extra="ignore"
     )
 
+    # Legacy judge-based loop (kept for R9 baseline eval).
     max_rounds: int = Field(default=3, ge=1, le=10)
     top_k: int = 10
+    # ReAct loop (R7): how many tool-call iterations before forcing
+    # `submit_answer`.
+    max_iterations: int = Field(default=8, ge=1, le=20)
+    # Reflective synthesis (R8): how many draft → critique → retrieve
+    # → redraft rounds the synthesizer attempts.
+    max_refinements: int = Field(default=3, ge=0, le=10)
 
 
 # ── composed top-level settings ──────────────────────────────────────

@@ -5,10 +5,35 @@
 # AND a DATABASE_URL so LiteLLM can validate keys.
 
 model_list:
+  # Primary: qwen3:8b — reliable tool calling and structured output
+  # via Hermes-style integration.  Default LLM for the project.
+  - model_name: qwen3:8b
+    litellm_params:
+      model: ollama_chat/qwen3:8b
+      api_base: http://host.docker.internal:11434
+
+  # Baseline: llama3.1:8b — kept for R9 comparative eval.  Function
+  # calling unreliable on this model; useful only for `/api/v1/search`
+  # (non-agentic) and `legacy_agentic_search` (judge-based).
   - model_name: llama3.1:8b
     litellm_params:
       model: ollama_chat/llama3.1:8b
       api_base: http://host.docker.internal:11434
+
+  # Escalation targets (uncomment after pulling the corresponding
+  # weights into Ollama):
+  # - model_name: qwen3:14b
+  #   litellm_params:
+  #     model: ollama_chat/qwen3:14b
+  #     api_base: http://host.docker.internal:11434
+  # - model_name: qwen3:32b
+  #   litellm_params:
+  #     model: ollama_chat/qwen3:32b
+  #     api_base: http://host.docker.internal:11434
+
+  # Embeddings.  nomic-embed-text is 768-dim — must match MILVUS_DIM.
+  # Swap to bge-m3 (1024) for stronger multilingual retrieval; remember
+  # to update MILVUS_DIM and recreate the Milvus collection.
   - model_name: nomic-embed-text
     litellm_params:
       model: ollama/nomic-embed-text
