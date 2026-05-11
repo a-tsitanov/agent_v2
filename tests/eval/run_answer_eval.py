@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -109,7 +110,7 @@ def _score_response(case, *, endpoint: str, response: dict | None) -> CaseScore:
 
 
 async def run(args: argparse.Namespace) -> int:
-    cases = load_golden_cases(args.golden)
+    cases = [] if args.no_golden else list(load_golden_cases(args.golden))
     if args.medical_sample:
         qt_filter = (
             {t.strip() for t in args.medical_types.split(",") if t.strip()}
@@ -134,14 +135,20 @@ async def run(args: argparse.Namespace) -> int:
         endpoints.append("legacy")
 
     print(f"Running {len(cases)} cases × {len(endpoints)} endpoints "
-          f"→ {len(cases) * len(endpoints)} calls\n")
+          f"→ {len(cases) * len(endpoints)} calls\n",
+          flush=True)
 
     scores: list[CaseScore] = []
     async with httpx.AsyncClient(base_url=args.api_url) as client:
-        for case in cases:
-            print(f"  → {case.id} ({case.doc_type}/{case.category}): {case.query}")
+        for i, case in enumerate(cases, 1):
+            print(f"  [{i}/{len(cases)}] {case.id} ({case.doc_type}/{case.category})"
+                  f": {case.query[:80]}", flush=True)
             for ep in endpoints:
+                t_ep = time.monotonic()
                 resp = await _hit_endpoint(client, ep, case.query, args.api_key)
+                dt = time.monotonic() - t_ep
+                ok = "ok" if resp is not None else "fail"
+                print(f"        {ep:8s} {ok:4s}  {dt:6.1f}s", flush=True)
                 scores.append(_score_response(case, endpoint=ep, response=resp))
 
     # ── aggregations ────────────────────────────────────────────────
@@ -223,6 +230,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--endpoints", default="search,agent,selfrag")
     p.add_argument("--include-legacy", action="store_true")
     p.add_argument("--golden", type=Path, default=GOLDEN_DIR_DEFAULT)
+    p.add_argument(
+        "--no-golden", action="store_true",
+        help="skip the hand-crafted golden_qa cases; useful when "
+             "the loaded corpus only covers one of the doc_types "
+             "(e.g. medical-only).",
+    )
     p.add_argument("--json-out", type=Path, default=None)
     p.add_argument("--strict", action="store_true")
     # Medical benchmark — pulled from tests/eval/corpora/medical/
