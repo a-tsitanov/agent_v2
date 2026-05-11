@@ -131,7 +131,13 @@ async def process_document(doc_id: str, path: str) -> None:
         # 1. parse + chunk + identifier-canon + (optional) RU translation.
         # `translator_llm` is the same project LLM as the KG extractor:
         # cheap on gpt-4o-mini and centralises the LiteLLM proxy hop.
-        pipeline = build_ingestion_pipeline(translator_llm=llm)
+        # `embed_model` is required only when semantic chunking is on
+        # — passed unconditionally so toggling INGESTION_SEMANTIC_CHUNKING
+        # at runtime doesn't need a code change.
+        pipeline = build_ingestion_pipeline(
+            embed_model=embed_model,
+            translator_llm=llm,
+        )
         docs = read_documents(target.parent, recursive=False)
         docs = [d for d in docs if d.metadata.get("file_path") == str(target)]
         if not docs:

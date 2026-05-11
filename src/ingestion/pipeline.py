@@ -84,7 +84,7 @@ def _build_cache(cache_dir: str | Path | None) -> IngestionCache | None:
 def build_ingestion_pipeline(
     *,
     embed_model: BaseEmbedding | None = None,
-    semantic: bool = False,
+    semantic: bool | None = None,
     cache_dir: str | Path | None = None,
     with_identifier_canon: bool = True,
     translate_to_russian: bool | None = None,
@@ -96,8 +96,11 @@ def build_ingestion_pipeline(
     Args:
         embed_model: required when `semantic=True` (the semantic
             splitter calls embeddings to detect breakpoints).
-        semantic: switch from `SentenceSplitter` to
-            `SemanticSplitterNodeParser`.  Off by default.
+        semantic: when True, swap `SentenceSplitter` for
+            `SemanticSplitterNodeParser`.  Defaults to
+            `settings.ingestion.semantic_chunking`.  When True,
+            `embed_model` must be supplied — raises ValueError
+            otherwise.
         cache_dir: when set, persists transformation outputs so
             re-ingest of unchanged documents skips chunking +
             identifier extraction.
@@ -116,8 +119,13 @@ def build_ingestion_pipeline(
         extra_transformations: appended LAST.  The worker uses this
             hook to add ad-hoc transforms.
     """
+    semantic_flag = (
+        semantic
+        if semantic is not None
+        else settings.ingestion.semantic_chunking
+    )
     transformations: list[TransformComponent] = [
-        _build_splitter(semantic=semantic, embed_model=embed_model),
+        _build_splitter(semantic=semantic_flag, embed_model=embed_model),
     ]
     if with_identifier_canon:
         transformations.append(IdentifierCanonicalizationTransform())

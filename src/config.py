@@ -149,6 +149,14 @@ class IngestionSettings(BaseSettings):
     # Russian, enabling cross-lingual graph dedup.
     translate_to_russian: bool = True
     translation_concurrency: int = 4
+    # When True, swap the default SentenceSplitter for a
+    # SemanticSplitterNodeParser that embeds each sentence and cuts
+    # the document at high-distance boundaries (topic shifts) instead
+    # of at fixed token counts.  Trades extra embedding calls per
+    # ingest (~1 per sentence) for chunks aligned with semantic
+    # structure — typically better retrieval precision on documents
+    # with heterogeneous sections.  See docs/DEPLOYMENT.md.
+    semantic_chunking: bool = False
 
 
 class AgentSettings(BaseSettings):
