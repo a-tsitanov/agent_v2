@@ -85,22 +85,42 @@ def _description_for(
     return f"{entity_type} extracted from {doc_id}; canonical={canonical}."
 
 
+def _snippet_around(
+    text: str, span: list[int] | tuple[int, int] | None,
+    window: int = 80,
+) -> str:
+    """Cut ±`window` chars around the identifier span; collapse whitespace."""
+    if not text or not span or len(span) < 2:
+        return ""
+    start = max(0, int(span[0]) - window)
+    end = min(len(text), int(span[1]) + window)
+    snippet = text[start:end].replace("\n", " ").strip()
+    return " ".join(snippet.split())  # collapse runs of spaces
+
+
 def inject_canonical_entities(
     graph_store: PropertyGraphStore,
     nodes: list[BaseNode],
 ) -> int:
     """Push canonical identifier nodes into the property-graph store.
 
-    Reads ``canonical_identifiers`` previously stored on each node by
-    ``IdentifierCanonicalizationTransform`` and upserts a
-    deduplicated set of ``EntityNode`` objects.  Idempotent at the
-    graph-store level — ``upsert_nodes`` merges by name.
+    Reads `canonical_identifiers` placed on each node by
+    `IdentifierCanonicalizationTransform` and upserts a deduplicated
+    set of `EntityNode`.  Idempotent at the graph-store level —
+    `upsert_nodes` merges by name.
+
+    `description` on each entity is a real text snippet (±80 chars
+    around the original mention) rather than a templated string —
+    this is what makes the canonical node useful at query time and
+    matches LightRAG's behaviour where every entity carries its
+    source-context.
 
     Returns the count of unique entity nodes upserted.
     """
     seen: dict[tuple[str, str], EntityNode] = {}
     for node in nodes:
         idents = node.metadata.get(_METADATA_KEY) or []
+        node_text = node.get_content() if hasattr(node, "get_content") else ""
         doc_id = (
             node.metadata.get("doc_id")
             or node.metadata.get("file_path")
@@ -110,17 +130,20 @@ def inject_canonical_entities(
             key = (ident["entity_type"], ident["canonical"])
             if key in seen:
                 continue
+            snippet = _snippet_around(node_text, ident.get("span"))
+            fallback_desc = _description_for(
+                ident["canonical"],
+                ident["entity_type"],
+                ident.get("original", ""),
+                str(doc_id),
+            )
+            description = snippet or fallback_desc
             seen[key] = EntityNode(
                 name=ident["canonical"],
                 label=ident["entity_type"],
                 properties={
                     "source_id": doc_id,
-                    "description": _description_for(
-                        ident["canonical"],
-                        ident["entity_type"],
-                        ident.get("original", ""),
-                        str(doc_id),
-                    ),
+                    "description": description,
                     "original": ident.get("original", ""),
                 },
             )

@@ -46,20 +46,28 @@ async def main() -> None:
     except Exception:
         traceback.print_exc()
 
-    print("\n=== 2. extractor run (Simple mode, regex-parsed) ===")
-    extractor = build_kg_extractor(llm, mode="simple", num_workers=1)
-    node = TextNode(text=TEXT, metadata={"doc_id": "diag-1"})
-    out = await extractor.acall([node], show_progress=False)
-    kg_nodes = out[0].metadata.get(KG_NODES_KEY, [])
-    kg_rels = out[0].metadata.get(KG_RELATIONS_KEY, [])
-    print(f"  entities: {len(kg_nodes)}")
-    for e in kg_nodes:
-        print(f"    {(e.label or '(none)'):20s}  {e.name!r}")
-    print(f"  relations: {len(kg_rels)}")
-    for r in kg_rels:
-        src = next((e.name for e in kg_nodes if e.id == r.source_id), "?")
-        tgt = next((e.name for e in kg_nodes if e.id == r.target_id), "?")
-        print(f"    {r.label:20s}  {src!r} -> {tgt!r}")
+    for mode_name in ("schema", "simple"):
+        print(f"\n=== extractor run (mode={mode_name}) ===")
+        extractor = build_kg_extractor(llm, mode=mode_name, num_workers=1)
+        node = TextNode(text=TEXT, metadata={"doc_id": "diag-1"})
+        out = await extractor.acall([node], show_progress=False)
+        kg_nodes = out[0].metadata.get(KG_NODES_KEY, [])
+        kg_rels = out[0].metadata.get(KG_RELATIONS_KEY, [])
+        print(f"  entities: {len(kg_nodes)}")
+        for e in kg_nodes:
+            desc = (e.properties or {}).get("description", "")
+            desc_excerpt = desc[:80] + "..." if len(desc) > 80 else desc
+            label = e.label or "(none)"
+            print(f"    {label:18s} {e.name!r:40s} desc={desc_excerpt!r}")
+        print(f"  relations: {len(kg_rels)}")
+        for r in kg_rels:
+            src = next(
+                (e.name for e in kg_nodes if e.id == r.source_id), "?",
+            )
+            tgt = next(
+                (e.name for e in kg_nodes if e.id == r.target_id), "?",
+            )
+            print(f"    {r.label:18s} {src!r} -> {tgt!r}")
 
 
 if __name__ == "__main__":

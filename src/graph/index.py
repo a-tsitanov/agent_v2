@@ -1,22 +1,23 @@
-"""``PropertyGraphIndex`` factory + ``SchemaLLMPathExtractor`` wiring.
+"""`PropertyGraphIndex` factory and KG extractor wiring.
 
-Stage 6 KG path:
-  * Extractor — ``SchemaLLMPathExtractor`` with our typed entity /
-    relation schemas (``src/graph/schema.py``).  Strict
-    extraction → predictable Neo4j labels, easier downstream
-    Cypher.
-  * Store — Neo4j in production, SimplePropertyGraphStore in tests.
-  * Index — composes both, attached to the IngestionPipeline as
-    a sink alongside the vector index.
+Layers:
+  * **Extractor** — typed `SchemaLLMPathExtractor` (default) or the
+    looser `SimpleLLMPathExtractor` (fallback).  Schema mode emits
+    typed entities + a `description` property per entity — the
+    foundation of LightRAG-style rich semantic graphs.
+  * **Store** — Neo4j in production, `SimplePropertyGraphStore` in
+    unit tests.
+  * **Index** — composes both; attached to the ingestion pipeline
+    alongside the vector index.
 
-The extractor uses an LLM under the hood, so heavy under unit
-tests.  Tests pass ``MockLLM`` to verify the wiring; live extraction
-happens in the worker (Stage 8) against the real LiteLLM proxy.
+Both extractors run an LLM internally — unit tests stub or mock.
+Live runs use the project LLM via LiteLLM proxy (qwen3:8b by
+default, which reliably emits structured output for schema mode).
 """
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import Literal
 
 from llama_index.core import PropertyGraphIndex
 from llama_index.core.embeddings import BaseEmbedding
@@ -40,6 +41,15 @@ KGExtractor = TransformComponent
 ExtractorMode = Literal["simple", "schema"]
 
 
+_ENTITY_DESCRIPTION_PROP: tuple[str, str] = (
+    "description",
+    "A 1-2 sentence factual description of the entity drawn ONLY from "
+    "the source text. State what the entity is, what it does, and any "
+    "specific attributes mentioned. Do NOT invent facts. Keep names "
+    "and quotes in the original language of the source.",
+)
+
+
 def build_kg_extractor(
     llm: LLM,
     *,
@@ -52,36 +62,35 @@ def build_kg_extractor(
 
     Two modes:
 
-    - ``simple`` (default) — ``SimpleLLMPathExtractor``.  Uses a
-      plain prompt + regex parsing for triples.  Tolerant of
-      small-model output (llama3.1:8b, qwen2.5:3b...).  Entity
-      types end up as generic ``EntityNode``; relations as plain
-      labels — the deterministic identifier transform in
-      Stage 7 still gives us typed nodes for phones/INNs/etc.
-
-    - ``schema`` — ``SchemaLLMPathExtractor`` over our typed
-      ``EntityType``/``RelationType`` Literal unions.  Requires a
-      function-calling-capable LLM (GPT-4-class, Claude, large
-      Llama 3.1+).  Small models choke on the strict JSON schema —
-      LlamaIndex's validator swallows ``TypeError`` from
-      malformed triples and silently returns zero triples.  We
-      discovered this empirically with llama3.1:8b; switch
-      ``mode="schema"`` only with a stronger backend.
-
-    ``strict`` only affects schema mode.
+    - ``simple`` (default) — ``SimpleLLMPathExtractor``: plain prompt
+      + regex parsing.  Works reliably with qwen3:8b and the
+      baseline llama3.1:8b.  Entity types collapse to `entity`;
+      descriptions are added in a separate second pass by
+      `enrich_entities_with_descriptions` (see
+      `src/graph/enrich.py`).
+    - ``schema`` (experimental) — ``SchemaLLMPathExtractor`` over the
+      universal typed `EntityType` / `RelationType` Literal unions
+      from `src/graph/schema.py`. Requires a function-calling-
+      capable LLM, but empirically qwen3:8b via Ollama → LiteLLM
+      sometimes silently returns zero triplets when the underlying
+      tool-call payload isn't well-formed.  Use with a stronger
+      backend (gpt-4o-class) or larger qwen3 (14b+).  `strict=True`
+      enforces `DEFAULT_VALIDATION_SCHEMA` triple templates.
 
     ``extract_prompt`` overrides the default multilingual template
-    (Simple mode only).  Pass a string template — see
-    ``_MULTILINGUAL_TRIPLET_EXTRACT_PROMPT`` for the placeholder
-    contract (must include ``{max_knowledge_triplets}`` and
-    ``{text}``).  Use this to lock to a single language if the
-    multilingual default leaks predicates across languages.
+    (Simple mode only).  Pass a string template that includes the
+    `{max_knowledge_triplets}` and `{text}` placeholders.
     """
     if mode == "schema":
         return SchemaLLMPathExtractor(
             llm=llm,
-            possible_entities=list(get_args(EntityType)),  # type: ignore[arg-type]
-            possible_relations=list(get_args(RelationType)),  # type: ignore[arg-type]
+            # Pass the Literal type itself — SchemaLLMPathExtractor
+            # builds a dynamic Pydantic model from it.  Passing a list
+            # silently works only when strict=False; with validation
+            # schema it can break Pydantic dynamic-class generation.
+            possible_entities=EntityType,  # type: ignore[arg-type]
+            possible_relations=RelationType,  # type: ignore[arg-type]
+            possible_entity_props=[_ENTITY_DESCRIPTION_PROP],
             kg_validation_schema=DEFAULT_VALIDATION_SCHEMA if strict else None,
             strict=strict,
             num_workers=num_workers,
@@ -94,51 +103,54 @@ def build_kg_extractor(
     )
 
 
-# Multilingual triplet prompt.  Instructions are in English (best
-# small-model compliance), few-shot examples cover three languages
-# so the model anchors on the «keep entity names in original
-# language» pattern.  The stock LlamaIndex prompt only had English
-# Alice/Bob/Philz which (a) broke RU/JA/DE input and (b) made
-# llama3.1:8b sometimes echo "Subject/Predicate/Object" verbatim.
-#
-# To swap for a single-language workload, override
-# ``extract_prompt=`` when calling ``build_kg_extractor`` (or pass
-# ``SimpleLLMPathExtractor`` your own template directly).
+# Multilingual triplet prompt — used ONLY by Simple mode.  English
+# instructions + few-shots in four flavours covering the project's
+# heterogeneous corpus: B2B contract, support transcript, email,
+# analytical report.  The model anchors on "keep entity names in
+# the source language" + "use concrete values, not template
+# placeholders".
 _MULTILINGUAL_TRIPLET_EXTRACT_PROMPT = (
     "Extract up to {max_knowledge_triplets} knowledge triplets from the text below.\n"
     "Each triplet must be on its own line in the format: "
     "(subject, predicate, object)\n"
     "\n"
     "Rules:\n"
-    "1. Subject and object MUST be concrete entities from the text "
-    "(people, organizations, phone numbers, IDs, contract numbers, "
-    "addresses, dates, amounts, locations, events, concepts).\n"
+    "1. Subject and object MUST be concrete entities from the text — "
+    "people, organizations, topics, concepts, products, issues, "
+    "events, IDs, addresses, dates, amounts.\n"
     "2. Predicate is a short verb phrase describing the relation.\n"
     "3. Keep entity names in the ORIGINAL language of the source text "
-    "(do NOT translate company names, person names, addresses, etc.).\n"
-    "4. The predicate itself can be in English OR in the source language "
-    "— prefer the source language for readability.\n"
+    "(do NOT translate company / person / topic names).\n"
+    "4. Predicate can be in source language or English — prefer source.\n"
     "5. Do not invent entities not present in the text.\n"
     "6. Skip stop-words and pronouns as standalone subjects/objects.\n"
     "7. Do NOT output literal placeholders like \"Subject\"/\"Object\" — "
-    "they are template markers, not values to copy.\n"
+    "those are template markers, not values to copy.\n"
     "\n"
-    "--- Examples covering multiple languages ---\n"
-    "Text: Alice is Bob's mother and works at Acme Corp.\n"
-    "Triplets:\n"
-    "(Alice, is mother of, Bob)\n"
-    "(Alice, works at, Acme Corp)\n"
-    "\n"
+    "--- Examples (multiple languages, document types) ---\n"
     "Text: ООО Альфа заключило договор № 17-К с ИП Иванов на сумму 500000 руб.\n"
     "Triplets:\n"
     "(ООО Альфа, заключило договор, № 17-К)\n"
     "(№ 17-К, между, ИП Иванов)\n"
     "(№ 17-К, сумма, 500000 руб)\n"
     "\n"
-    "Text: Die Firma Müller GmbH hat ihren Sitz in München und wurde 2010 gegründet.\n"
+    "Text: From: alice@example.com, Subject: Q1 review. The team agreed "
+    "that the launch should be postponed to April.\n"
     "Triplets:\n"
-    "(Müller GmbH, Sitz in, München)\n"
-    "(Müller GmbH, gegründet in, 2010)\n"
+    "(alice@example.com, discussed, Q1 review)\n"
+    "(the team, agreed on, postponing the launch to April)\n"
+    "\n"
+    "Text: Agent: Hello, how can I help? Customer: My order #4521 "
+    "never arrived. Agent: I'll issue a refund.\n"
+    "Triplets:\n"
+    "(Customer, reported, order #4521 never arrived)\n"
+    "(Agent, resolved, refund for order #4521)\n"
+    "\n"
+    "Text: The report shows conversion grew 12% in Q1 driven by "
+    "onboarding redesign.\n"
+    "Triplets:\n"
+    "(conversion, grew 12% in, Q1)\n"
+    "(conversion growth, driven by, onboarding redesign)\n"
     "\n"
     "--- Now extract from the following text ---\n"
     "Text: {text}\n"

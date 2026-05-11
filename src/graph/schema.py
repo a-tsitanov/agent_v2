@@ -1,58 +1,76 @@
-"""Pydantic-typed schema for ``SchemaLLMPathExtractor``.
+"""Pydantic-typed schema for `SchemaLLMPathExtractor`.
 
-Bound to LlamaIndex 0.13's ``SchemaLLMPathExtractor`` which expects
-``possible_entities``, ``possible_relations`` and an optional
-``kg_validation_schema`` (allowed (head, relation, tail) triples).
+Universal entity / relation types covering the project's
+heterogeneous corpus: analytical reports, email correspondence,
+support call transcripts.
 
-Entity types mirror the production set in
-``enterprise-kb/src/retrieval/lightrag_setup.py``: business-domain
-identifiers (PhoneNumber, INN, OGRN, BIC, ContractNumber,
-PostalAddress, DocumentDate, Amount) plus generic ones (Person,
-Organization, Location, Concept, Method, Event).  Relation types
-encode the most common business links between identifiers and their
-holders.
+Two layers:
 
-Stage 7 attaches the deterministic identifier transform BEFORE the
-extractor runs — by then the canonical text of each identifier
-already lives in node metadata, so the LLM doesn't have to invent
-the format.
+1. **Core types** — people, organizations, generic concepts,
+   topics, issues — universal across domains.
+2. **Identifier types** — phones, INNs, contract numbers, dates,
+   amounts — handled deterministically by the canonicalization
+   transform (`src/ingestion/identifier_transform.py`) BEFORE the
+   LLM extractor runs.  When LLM extracts them anyway, they
+   collapse onto the same canonical node via name-equality.
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-# Entities the extractor is allowed to produce.  Matches the
-# `BUSINESS_ENTITY_TYPES` list in enterprise-kb.
+
+# ── core entity types (cover reports / emails / transcripts) ────────
+
 EntityType = Literal[
+    # who
     "Person",
     "Organization",
     "Location",
-    "PhoneNumber",
+    # what
+    "Concept",
+    "Topic",
+    "Metric",
+    "Product",
+    "Document",
+    "Issue",
+    "Resolution",
+    "EventOrAction",
+    # identifiers (handled deterministically; LLM may also extract them)
     "Email",
+    "PhoneNumber",
+    "PostalAddress",
+    "DocumentDate",
+    "Amount",
     "ContractNumber",
     "OrderNumber",
     "InvoiceNumber",
-    "PostalAddress",
     "INN",
     "OGRN",
     "BIC",
     "BankAccount",
-    "DocumentDate",
-    "Amount",
-    "Concept",
-    "Method",
-    "Event",
 ]
 
 
-# Relation labels.  Keep small — too many labels ⇒ LLM picks
-# inconsistent ones.  Add more only if a recurring real-doc pattern
-# motivates them.
+# ── relation types ───────────────────────────────────────────────────
+#
+# Kept compact: ~20 labels.  Adding many more makes the LLM pick
+# inconsistent labels for the same real-world relation.  Each label
+# is intentionally generic enough to cover all three doc types.
+
 RelationType = Literal[
+    # affiliation / ownership
     "WORKS_AT",
+    "MEMBER_OF",
     "OWNS",
+    "AUTHORED",
+    # interaction
     "CONTACT",
+    "MENTIONS",
+    "DISCUSSES",
+    "PARTICIPATED_IN",
+    "RESPONDED_TO",
+    # business / contract
     "PARTY_OF",
     "DATED",
     "AMOUNT_OF",
@@ -60,18 +78,41 @@ RelationType = Literal[
     "TAX_ID_OF",
     "REGISTRATION_OF",
     "BANK_OF",
+    # support / issue resolution
+    "REPORTED",
+    "RESOLVED_BY",
+    "AFFECTS",
+    # generic
     "REFERENCES",
     "RELATED_TO",
 ]
 
 
-# Optional schema: which (head, relation, tail) triples are valid.
-# An empty dict means "anything goes".  Constrain heavily for noisy
-# corpora; relax for exploratory bring-up.
+# ── validation schema ────────────────────────────────────────────────
+#
+# (head, relation, tail) triples accepted by `SchemaLLMPathExtractor`
+# in strict mode.  In non-strict mode it's a hint only.  ~25 templates
+# covering analytical-report, email, and support-transcript patterns.
+
 DEFAULT_VALIDATION_SCHEMA: list[tuple[EntityType, RelationType, EntityType]] = [
+    # — people in organizations / authoring
     ("Person", "WORKS_AT", "Organization"),
+    ("Person", "MEMBER_OF", "Organization"),
+    ("Person", "AUTHORED", "Document"),
+    ("Person", "AUTHORED", "Concept"),
+    # — interaction / discussion (emails + transcripts)
     ("Person", "CONTACT", "PhoneNumber"),
     ("Person", "CONTACT", "Email"),
+    ("Person", "MENTIONS", "Topic"),
+    ("Person", "MENTIONS", "Concept"),
+    ("Person", "DISCUSSES", "Topic"),
+    ("Person", "PARTICIPATED_IN", "EventOrAction"),
+    ("Person", "RESPONDED_TO", "Person"),
+    # — analytical reports
+    ("Document", "MENTIONS", "Metric"),
+    ("Concept", "RELATED_TO", "Concept"),
+    ("Metric", "AFFECTS", "Concept"),
+    # — business / contracts
     ("Organization", "TAX_ID_OF", "INN"),
     ("Organization", "REGISTRATION_OF", "OGRN"),
     ("Organization", "BANK_OF", "BIC"),
@@ -81,6 +122,12 @@ DEFAULT_VALIDATION_SCHEMA: list[tuple[EntityType, RelationType, EntityType]] = [
     ("ContractNumber", "DATED", "DocumentDate"),
     ("ContractNumber", "AMOUNT_OF", "Amount"),
     ("Organization", "RELATED_TO", "Organization"),
+    # — support transcripts
+    ("Person", "REPORTED", "Issue"),
+    ("Issue", "RESOLVED_BY", "Resolution"),
+    ("Issue", "AFFECTS", "Product"),
+    ("Resolution", "RELATED_TO", "EventOrAction"),
+    # — generic fallback
     ("Person", "RELATED_TO", "Person"),
 ]
 
