@@ -1,0 +1,83 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "docker compose: up",
+      "type": "shell",
+      "command": "docker compose up -d",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "docker compose: down",
+      "type": "shell",
+      "command": "docker compose down",
+      "problemMatcher": []
+    },
+    {
+      "label": "docker compose: down -v (wipe volumes)",
+      "type": "shell",
+      "command": "docker compose down -v",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "docker compose: ps",
+      "type": "shell",
+      "command": "docker compose ps",
+      "problemMatcher": []
+    },
+    {
+      "label": "docker compose: logs (follow)",
+      "type": "shell",
+      "command": "docker compose logs -f --tail=100",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "setup_db (idempotent)",
+      "type": "shell",
+      "command": "uv run python -m scripts.setup_db",
+      "problemMatcher": [],
+      "dependsOn": ["docker compose: up"]
+    },
+    {
+      "label": "ingest: fixtures",
+      "type": "shell",
+      "command": "uv run python -m src.ingestion.run ./tests/test_ingestion/fixtures/ --no-recursive",
+      "problemMatcher": []
+    },
+    {
+      "label": "pytest: all",
+      "type": "shell",
+      "command": "uv run pytest -v",
+      "problemMatcher": [],
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
+      "label": "pytest: agent + agent_graph",
+      "type": "shell",
+      "command": "uv run pytest tests/test_retrieval/test_agent.py tests/test_retrieval/test_agent_graph.py -v",
+      "problemMatcher": []
+    },
+    {
+      "label": "smoke.sh",
+      "type": "shell",
+      "command": "bash scripts/smoke.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "eval: identifier recall (strict)",
+      "type": "shell",
+      "command": "uv run python -m tests.eval.identifier_recall --strict",
+      "problemMatcher": []
+    },
+    {
+      "label": "ollama: pull required models",
+      "type": "shell",
+      "command": "ollama pull llama3.1:8b && ollama pull nomic-embed-text",
+      "problemMatcher": []
+    }
+  ]
+}

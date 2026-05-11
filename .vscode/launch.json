@@ -1,0 +1,133 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API: uvicorn (reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "src.api.main:app",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Worker: taskiq",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "taskiq",
+      "args": [
+        "worker",
+        "src.ingestion.tasks:broker",
+        "--workers", "1",
+        "--max-async-tasks", "1"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "CLI: ingest fixtures",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.ingestion.run",
+      "args": [
+        "./tests/test_ingestion/fixtures/",
+        "--no-recursive"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "CLI: setup_db",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.setup_db",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "CLI: merge identifier duplicates (dry-run)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.merge_identifier_duplicates",
+      "args": ["--dry-run"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "CLI: check ingestion state",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.check_ingestion",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Eval: identifier recall",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "tests.eval.identifier_recall",
+      "args": ["--strict"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pytest: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "--tb=short"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pytest: all",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/", "-v"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Pytest: agent only",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/test_retrieval/test_agent.py", "tests/test_retrieval/test_agent_graph.py", "-v"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "API + Worker",
+      "configurations": ["API: uvicorn (reload)", "Worker: taskiq"],
+      "stopAll": true
+    }
+  ]
+}
