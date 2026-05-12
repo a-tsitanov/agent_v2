@@ -161,11 +161,25 @@ class IngestionSettings(BaseSettings):
     #   * `auto` (default) — per_document when the doc is under
     #     `translation_doc_threshold_chars`, per_chunk otherwise.
     translation_strategy: str = "auto"
-    # Soft cap (in chars) for the single-call per-document translation
-    # path.  ~400k chars ≈ ~100k tokens — leaves headroom on
-    # gpt-4o-mini's 128k context.  Above this, the doc is windowed
-    # into paragraph-aligned slices before translation.
-    translation_doc_threshold_chars: int = 400_000
+    # Soft cap (in chars) for the per-document single-call
+    # translation path.  Above this, the document is split into
+    # paragraph-aligned windows before being fed to the LLM.
+    #
+    # The default is tuned for the production target — Ollama
+    # qwen3 with the native 32k-token context (qwen3:8b / 14b /
+    # 32b all default to 32k).  Budget per call:
+    #   input  = prompt (~500 tok) + doc window (X tok)
+    #   output = ~1.3 × X (EN→RU expansion)
+    #   total  = 500 + 2.3 × X  must stay under 32k
+    # → safe X ≈ 8-10k tokens ≈ 30-40k chars.  30k leaves headroom
+    # for long sentences and is robust against tokenization quirks.
+    #
+    # For OpenAI gpt-4o-mini (128k ctx) you can bump this to
+    # 200_000-400_000 via env to slash the number of windows and
+    # squeeze more cross-sentence context per call:
+    #   INGESTION_TRANSLATION_DOC_THRESHOLD_CHARS=200000
+    # Larger Ollama contexts (YaRN extended qwen3 to 131k) similarly.
+    translation_doc_threshold_chars: int = 30_000
     # When True, swap the default SentenceSplitter for a
     # SemanticSplitterNodeParser that embeds each sentence and cuts
     # the document at high-distance boundaries (topic shifts) instead

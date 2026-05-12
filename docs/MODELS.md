@@ -82,6 +82,39 @@ set and reports per-model deltas.  This way regressions caused
 by code changes are distinguished from regressions caused by
 model changes.
 
+## Translation context budget
+
+`DocumentTranslateTransform` (in `src/ingestion/translate_transform.py`)
+sends each document — or a windowed slice of it — to the LLM in
+one call.  The window size cap is
+`INGESTION_TRANSLATION_DOC_THRESHOLD_CHARS`.  Each call needs:
+
+* the prompt overhead (~500 tokens for the translate prompt),
+* the document window (X tokens),
+* output budget (~1.3 × X tokens for EN→RU expansion).
+
+Total ≈ 500 + 2.3 × X must stay inside the model's context window.
+
+| Model | Context (tokens) | Safe threshold (chars) |
+|---|---|---|
+| **Ollama qwen3:8b / 14b / 32b** (native) | 32k | **30_000** (default) |
+| Ollama qwen3 with YaRN extension | 131k | 200_000 |
+| **gpt-4o-mini / gpt-4o** | 128k | 200_000 – 400_000 |
+| Anthropic claude-3.5-sonnet | 200k | 400_000 |
+
+Raise the threshold to fewer, larger windows → better cross-sentence
+context, fewer LLM calls.  Drop it when switching to a smaller-
+context model.
+
+Char-to-token ratio is ~4 for English, ~3 for Russian, ~2 for
+Chinese; the defaults above assume English-heavy corpus.  Adjust
+downward by 30% if the corpus is Russian-heavy.
+
+When the document exceeds the threshold, the translator splits on
+paragraph boundaries (then sentence boundaries for huge
+paragraphs).  Each window goes in one LLM call; outputs are
+concatenated with `\n\n`.
+
 ## Switching to a different LLM family
 
 Same `OpenAILike` client is compatible with:
