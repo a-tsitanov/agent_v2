@@ -147,6 +147,32 @@ async def process_document(doc_id: str, path: str) -> None:
         # calls `asyncio.run` and explodes inside the taskiq event loop.
         nodes = await pipeline.arun(documents=docs)
 
+        # Belt-and-suspenders: ensure the doc-level translation
+        # scaffolding never reaches Milvus.  LlamaIndex's SentenceSplitter
+        # copies the parent Document's metadata into each chunk
+        # AND into each chunk's `relationships[SOURCE].metadata`
+        # (a `RelatedNodeInfo` pointing back at the parent).  Milvus
+        # serialises the whole `_node_content` field — including
+        # relationship metadata — and rejects dynamic fields > 65k
+        # chars.  TranslateToRussianTransform drops these from
+        # `node.metadata`; we additionally clean every relationship
+        # here so a 95k full-translation never lands in the row.
+        from src.ingestion.translate_transform import (
+            FULL_TRANSLATED_TEXT_KEY,
+            ORIGINAL_DOC_LENGTH_KEY,
+        )
+
+        def _scrub(md: dict | None) -> None:
+            if not md:
+                return
+            md.pop(FULL_TRANSLATED_TEXT_KEY, None)
+            md.pop(ORIGINAL_DOC_LENGTH_KEY, None)
+
+        for n in nodes:
+            _scrub(getattr(n, "metadata", None))
+            for rel in (getattr(n, "relationships", {}) or {}).values():
+                _scrub(getattr(rel, "metadata", None))
+
         # 2. vector indexing
         store = build_vector_store()
         index = build_vector_index(store, embed_model)

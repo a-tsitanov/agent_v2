@@ -35,7 +35,10 @@ from src.config import settings
 from src.ingestion.identifier_transform import (
     IdentifierCanonicalizationTransform,
 )
-from src.ingestion.translate_transform import TranslateToRussianTransform
+from src.ingestion.translate_transform import (
+    DocumentTranslateTransform,
+    TranslateToRussianTransform,
+)
 
 
 def _build_splitter(
@@ -124,25 +127,55 @@ def build_ingestion_pipeline(
         if semantic is not None
         else settings.ingestion.semantic_chunking
     )
-    transformations: list[TransformComponent] = [
-        _build_splitter(semantic=semantic_flag, embed_model=embed_model),
-    ]
-    if with_identifier_canon:
-        transformations.append(IdentifierCanonicalizationTransform())
     translate_flag = (
         translate_to_russian
         if translate_to_russian is not None
         else settings.ingestion.translate_to_russian
     )
-    if translate_flag:
-        if translator_llm is None:
-            raise ValueError(
-                "translate_to_russian=True requires translator_llm"
-            )
+    if translate_flag and translator_llm is None:
+        raise ValueError(
+            "translate_to_russian=True requires translator_llm"
+        )
+
+    strategy = settings.ingestion.translation_strategy.lower()
+    use_doc_level = translate_flag and strategy in {"auto", "per_document"}
+
+    transformations: list[TransformComponent] = []
+
+    # 1) Document-level translation (BEFORE splitter so it can see
+    #    the full text — needed for high-quality cross-sentence
+    #    translation).  In `auto` mode the transform itself decides
+    #    per-document whether to do one big call or windowed.
+    if use_doc_level:
+        transformations.append(DocumentTranslateTransform(
+            llm=translator_llm,
+            threshold_chars=settings.ingestion.translation_doc_threshold_chars,
+            num_workers=max(1, settings.ingestion.translation_concurrency // 2),
+        ))
+
+    # 2) Splitter (fixed-token or semantic).
+    transformations.append(
+        _build_splitter(semantic=semantic_flag, embed_model=embed_model),
+    )
+
+    # 3) Canonical identifiers — runs on chunk text (original-
+    #    language) so language-agnostic regexes still work and
+    #    the augment block lands in the actual stored chunk.
+    if with_identifier_canon:
+        transformations.append(IdentifierCanonicalizationTransform())
+
+    # 4) Chunk-side translator.  Two roles:
+    #      - In `per_chunk` strategy (or `auto` for huge docs that
+    #        weren't doc-translated), does a fresh LLM call per chunk.
+    #      - In `per_document` / `auto` (small docs), reuses the
+    #        inherited `metadata[FULL_TRANSLATED_TEXT_KEY]` and
+    #        slices a proportional span — no extra LLM call.
+    if translate_flag and strategy in {"auto", "per_document", "per_chunk"}:
         transformations.append(TranslateToRussianTransform(
             llm=translator_llm,
             num_workers=settings.ingestion.translation_concurrency,
         ))
+
     if extra_transformations:
         transformations.extend(extra_transformations)
     cache_obj = _build_cache(cache_dir)

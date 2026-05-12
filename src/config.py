@@ -149,6 +149,23 @@ class IngestionSettings(BaseSettings):
     # Russian, enabling cross-lingual graph dedup.
     translate_to_russian: bool = True
     translation_concurrency: int = 4
+    # How to split work between LLM translation calls.
+    #   * `per_document` — translate the entire document in a single
+    #     LLM call (windowed only if it exceeds the threshold).
+    #     Best translation quality (full cross-sentence context),
+    #     fewest calls, but requires the document text + prompt to
+    #     fit in the model context.
+    #   * `per_chunk` — translate each chunk independently after the
+    #     splitter.  Fits any document size, parallelisable, but
+    #     loses cross-chunk context.
+    #   * `auto` (default) — per_document when the doc is under
+    #     `translation_doc_threshold_chars`, per_chunk otherwise.
+    translation_strategy: str = "auto"
+    # Soft cap (in chars) for the single-call per-document translation
+    # path.  ~400k chars ≈ ~100k tokens — leaves headroom on
+    # gpt-4o-mini's 128k context.  Above this, the doc is windowed
+    # into paragraph-aligned slices before translation.
+    translation_doc_threshold_chars: int = 400_000
     # When True, swap the default SentenceSplitter for a
     # SemanticSplitterNodeParser that embeds each sentence and cuts
     # the document at high-distance boundaries (topic shifts) instead
