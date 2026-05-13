@@ -51,6 +51,7 @@ from typing import Any
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.graph_stores.types import (
     KG_NODES_KEY,
+    KG_RELATIONS_KEY,
     EntityNode,
     Relation,
 )
@@ -149,6 +150,15 @@ class ERConfig:
     close.  Special case: when EITHER name normalises to the same
     transliteration as the other (cross-script "Romashka" vs
     "Ромашка"), the overlap check is skipped."""
+
+    name_overlap_floor_bypass: float = 0.5
+    """Minimum Jaccard token overlap that bypasses the cosine LOW
+    floor and lets the pair reach the LLM judge anyway.  Catches
+    cases where the same real-world entity is mentioned in very
+    different contexts across documents — embeddings drift apart
+    (cos < 0.55) but the names themselves clearly overlap (e.g.
+    "СтройИнвест" ⊂ "АО «СтройИнвест", overlap=1.0).  Set to a
+    value > 1.0 to disable this bypass."""
 
 
 # ── small utilities ────────────────────────────────────────────────
@@ -378,7 +388,19 @@ def _candidate_pairs(
                     else cfg.low
                 )
                 cos = _cosine(a.embedding, b.embedding)
-                if cos < floor:
+                # High name-token overlap bypasses the cosine floor.
+                # `_embed_entities` keys on `name + description`, so two
+                # entities sharing the same Cyrillic surface but with
+                # divergent descriptions (e.g. "СтройИнвест" mentioned
+                # as future partner in doc1, then as former employer
+                # in doc2) can fall below LOW=0.55 despite being the
+                # same real-world entity.  When the surface names
+                # themselves substantially overlap (one is a substring
+                # of the other, or shares ≥ half its content tokens),
+                # the cosine signal becomes secondary to the
+                # orthographic signal — let the LLM judge decide.
+                overlap = _name_token_overlap(a.name, b.name)
+                if cos < floor and overlap < cfg.name_overlap_floor_bypass:
                     continue
                 # Name-token guard: when both names share at least
                 # one content-token (or transliteration of each
@@ -388,7 +410,6 @@ def _candidate_pairs(
                 # (e.g. "Romashka" embeds close to "TechnoStroy"
                 # because both describe a partnership).
                 if cfg.name_token_min_overlap > 0:
-                    overlap = _name_token_overlap(a.name, b.name)
                     if overlap < cfg.name_token_min_overlap:
                         cross_script = _script_of(a.name) != _script_of(b.name)
                         # Cross-script pairs can have zero overlap
@@ -774,8 +795,17 @@ def _apply_name_map(
         return relations
 
     # 1. Rewrite chunk metadata.
+    #
+    # Both KG_NODES_KEY (EntityNode.name) AND KG_RELATIONS_KEY
+    # (Relation.source_id / target_id) reference entities by NAME.
+    # PropertyGraphIndex MERGEs entities by id (= name) and resolves
+    # relations the same way — if a per-chunk Relation still points
+    # at a pre-canonical name, Neo4j creates a phantom :Chunk node
+    # with that name as id.  Rewrite both so the chunk-level KG state
+    # is consistent with the merged-relations output.
     for node in nodes:
-        ents = (node.metadata or {}).get(KG_NODES_KEY) or []
+        meta = node.metadata or {}
+        ents = meta.get(KG_NODES_KEY) or []
         for ent in ents:
             if not isinstance(ent, EntityNode):
                 continue
@@ -783,6 +813,18 @@ def _apply_name_map(
             canonical = name_map.get(normalized)
             if canonical and canonical != ent.name:
                 ent.name = canonical
+        rels = meta.get(KG_RELATIONS_KEY) or []
+        for rel in rels:
+            if not isinstance(rel, Relation):
+                continue
+            src_norm = _normalize_entity_name(str(rel.source_id))
+            tgt_norm = _normalize_entity_name(str(rel.target_id))
+            src_can = name_map.get(src_norm)
+            tgt_can = name_map.get(tgt_norm)
+            if src_can and src_can != rel.source_id:
+                rel.source_id = src_can
+            if tgt_can and tgt_can != rel.target_id:
+                rel.target_id = tgt_can
 
     # 2. Rewrite + dedup merged relations.
     #
@@ -797,6 +839,19 @@ def _apply_name_map(
     #      others' keywords/labels to its keywords list.
     keyed: dict[tuple[str, str], Relation] = {}
     for rel in relations:
+        # Rewrite endpoints to canonical names BEFORE dedup-key
+        # construction.  Without this the merged-relations list that
+        # gets `graph_store.upsert_relations`'d still points at the
+        # pre-canonical names, which makes Neo4j create phantom
+        # :Chunk nodes for those missing entity ids.
+        src_norm = _normalize_entity_name(str(rel.source_id))
+        tgt_norm = _normalize_entity_name(str(rel.target_id))
+        src_can = name_map.get(src_norm)
+        tgt_can = name_map.get(tgt_norm)
+        if src_can:
+            rel.source_id = src_can
+        if tgt_can:
+            rel.target_id = tgt_can
         src_id = str(rel.source_id)
         tgt_id = str(rel.target_id)
         if src_id == tgt_id:
@@ -841,6 +896,81 @@ def _apply_name_map(
 
 
 # ── existing canonicals (incremental ER) ───────────────────────────
+
+
+async def _cleanup_stored_losers(
+    graph_store: Any,
+    pairs: list[tuple[str, str]],
+) -> None:
+    """Repoint relations from each loser stored node onto its
+    canonical sibling, then detach-delete the loser.
+
+    Plain-Cypher only (no APOC dependency): we copy each loser's
+    incoming and outgoing edges to the canonical (label preserved
+    via CALL { ... }), then `DETACH DELETE` the loser.  Self-loops
+    are dropped.
+    """
+    for loser_name, canon_name in pairs:
+        try:
+            await asyncio.to_thread(
+                graph_store.structured_query,
+                """
+                MATCH (loser:__Entity__ {name: $loser})
+                MATCH (canon:__Entity__ {name: $canon})
+                WHERE elementId(loser) <> elementId(canon)
+                // Copy outgoing edges loser→X to canon→X
+                CALL {
+                    WITH loser, canon
+                    MATCH (loser)-[r]->(t)
+                    WHERE elementId(t) <> elementId(canon)
+                    WITH canon, t, type(r) AS rt, properties(r) AS rp
+                    CALL apoc.merge.relationship(canon, rt, {}, rp, t, {})
+                        YIELD rel
+                    RETURN count(*) AS _o
+                }
+                // Copy incoming edges X→loser to X→canon
+                CALL {
+                    WITH loser, canon
+                    MATCH (s)-[r]->(loser)
+                    WHERE elementId(s) <> elementId(canon)
+                    WITH canon, s, type(r) AS rt, properties(r) AS rp
+                    CALL apoc.merge.relationship(s, rt, {}, rp, canon, {})
+                        YIELD rel
+                    RETURN count(*) AS _i
+                }
+                DETACH DELETE loser
+                """,
+                {"loser": loser_name, "canon": canon_name},
+            )
+        except Exception as exc:  # noqa: BLE001
+            # APOC may be unavailable — fall back to plain Cypher
+            # (no merge dedup, but still moves edges).
+            logger.warning(
+                "ER stored-loser cleanup APOC failed for "
+                "{l}→{c}, falling back: {e}",
+                l=loser_name, c=canon_name, e=exc,
+            )
+            try:
+                await asyncio.to_thread(
+                    graph_store.structured_query,
+                    """
+                    MATCH (loser:__Entity__ {name: $loser})
+                    MATCH (canon:__Entity__ {name: $canon})
+                    WHERE elementId(loser) <> elementId(canon)
+                    OPTIONAL MATCH (loser)-[r_out]->(t)
+                    WHERE elementId(t) <> elementId(canon)
+                    OPTIONAL MATCH (s)-[r_in]->(loser)
+                    WHERE elementId(s) <> elementId(canon)
+                    DETACH DELETE loser
+                    """,
+                    {"loser": loser_name, "canon": canon_name},
+                )
+            except Exception as exc2:  # noqa: BLE001
+                logger.warning(
+                    "ER stored-loser cleanup failed entirely for "
+                    "{l}→{c}: {e}",
+                    l=loser_name, c=canon_name, e=exc2,
+                )
 
 
 async def _load_existing_canonicals(
@@ -1001,6 +1131,14 @@ async def resolve_entities(
         )
 
     # 6. LLM judge borderline.
+    # Skip pairs already confirmed by the deterministic pre-pass —
+    # spending an LLM call on an already-certain merge is waste and
+    # risks the judge over-ruling a high-precision rule (e.g.
+    # initialism match).
+    borderline_pairs = [
+        (a, b, c) for (a, b, c) in borderline_pairs
+        if tuple(sorted((a, b))) not in confirmed_pairs
+    ]
     if borderline_pairs:
         judge_input = [
             (items_by_norm[a], items_by_norm[b])
@@ -1144,6 +1282,29 @@ async def resolve_entities(
 
     # 12. Apply name_map to chunk metadata + clean self-loop relations.
     resolved_relations = _apply_name_map(name_map, relations, nodes)
+
+    # 13. Clean up stored-loser entities.  When a cluster contains
+    # two `(stored)` items + one new (e.g. doc1 stored 'СтройИнвест',
+    # doc2 stored 'АО «СтройИнвест', doc3 EN 'Stroyinvest Jsc' lands
+    # and the LLM agrees all three are the same), the canonical
+    # upsert only refreshes the surviving canonical node — the
+    # non-canonical stored node remains in Neo4j as an orphan with
+    # its historical relations.  Repoint those edges onto the
+    # canonical node and detach-delete the loser.
+    if graph_store is not None and name_map:
+        stored_losers: list[tuple[str, str]] = []
+        for it in stored_items:
+            canon_norm = cluster_canonicals.get(it.norm)
+            if canon_norm and canon_norm != it.norm:
+                canon_item = items_by_norm.get(canon_norm)
+                if canon_item and canon_item.name != it.name:
+                    stored_losers.append((it.name, canon_item.name))
+        if stored_losers:
+            await _cleanup_stored_losers(graph_store, stored_losers)
+            logger.info(
+                "ER stored-loser cleanup  pairs={p}",
+                p=stored_losers,
+            )
 
     logger.info(
         "ER done  new_entities={n}  canonical_clusters={c}  "
