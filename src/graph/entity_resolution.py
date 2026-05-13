@@ -107,9 +107,11 @@ class ERConfig:
     judge_batch: int = 10
     """Pairs per LLM judge call."""
 
-    max_cluster_size: int = 6
-    """Clusters bigger than this trigger an LLM verification pass
-    to prevent transitive over-merge (A=B, B=C, but A≠C)."""
+    verify_cluster_size: int = 3
+    """Clusters with this many members or more get re-verified via
+    a single LLM consolidation call that returns explicit groups.
+    Protects against transitive over-merge (A=B + B=C confirmed
+    pairwise, but A and C are actually different)."""
 
     hyper_hub_threshold: int = 12
     """Clusters bigger than this are NOT auto-merged.  Members
@@ -128,6 +130,25 @@ class ERConfig:
     empty_description_floor: float = 0.70
     """When an entity has no description, embed `name` only; this
     is less reliable, so raise the candidate floor."""
+
+    skip_generic_names: bool = True
+    """Skip ER entirely for entities that are likely too generic to
+    safely participate in cross-document matching: single short
+    token (e.g. 'Анна', 'Договор'), mention_count == 1, no
+    description.  They stay as singletons but are NOT registered
+    as canonicals for future incremental ER (would cause false-
+    positive matches in next ingest)."""
+
+    name_token_min_overlap: float = 0.0
+    """Minimum Jaccard overlap between content-tokens of the two
+    names for a pair to enter the candidate pool.  Defaults to
+    0 (no extra filter).  Set higher (e.g. 0.1) to reject pairs
+    whose names share no meaningful tokens — protects against
+    description-context contamination where two semantically
+    different entities co-occur in similar contexts and embed
+    close.  Special case: when EITHER name normalises to the same
+    transliteration as the other (cross-script "Romashka" vs
+    "Ромашка"), the overlap check is skipped."""
 
 
 # ── small utilities ────────────────────────────────────────────────
@@ -161,6 +182,34 @@ def _deep_normalize(name: str) -> str:
     txt = _strip_diacritics(name).casefold()
     txt = re.sub(r"[^a-zа-яё0-9]+", " ", txt)
     return " ".join(txt.split())
+
+
+_CONTENT_STOPWORDS: frozenset[str] = frozenset({
+    # Org legal forms / honorifics — too generic to anchor a match.
+    "ооо", "оао", "ао", "зао", "пао", "ип", "ldd", "llc", "ltd",
+    "inc", "co", "corp", "group", "groupp", "jsc", "plc", "gmbh",
+    "company", "компания", "группа", "холдинг", "корпорация",
+    # Common filler punctuation traces.
+    "the", "a", "an", "и", "the", "of", "in",
+})
+
+
+def _name_tokens(name: str) -> set[str]:
+    """Content-bearing tokens of a name after deep-normalise minus
+    legal forms / generic stopwords."""
+    deep = _deep_normalize(name)
+    return {
+        tok for tok in deep.split()
+        if len(tok) > 1 and tok not in _CONTENT_STOPWORDS
+    }
+
+
+def _name_token_overlap(a: str, b: str) -> float:
+    """Jaccard similarity on the content-token sets of two names."""
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
 
 
 def _initials_signature(name: str) -> tuple[str, str] | None:
@@ -331,6 +380,22 @@ def _candidate_pairs(
                 cos = _cosine(a.embedding, b.embedding)
                 if cos < floor:
                     continue
+                # Name-token guard: when both names share at least
+                # one content-token (or transliteration of each
+                # other across scripts), accept.  Pure embedding-
+                # similarity matches with zero token overlap are
+                # almost always description-context contamination
+                # (e.g. "Romashka" embeds close to "TechnoStroy"
+                # because both describe a partnership).
+                if cfg.name_token_min_overlap > 0:
+                    overlap = _name_token_overlap(a.name, b.name)
+                    if overlap < cfg.name_token_min_overlap:
+                        cross_script = _script_of(a.name) != _script_of(b.name)
+                        # Cross-script pairs can have zero overlap
+                        # legitimately ("Romashka" vs "Ромашка") —
+                        # let those through to LLM judge.
+                        if not cross_script:
+                            continue
                 sims.append((b, cos))
             sims.sort(key=lambda p: -p[1])
             for b, cos in sims[: cfg.knn_k]:
@@ -468,6 +533,113 @@ async def _llm_judge_pairs(
 _JUDGE_JSON_RE = re.compile(r"\[.*?\]", re.DOTALL)
 
 
+# ── cluster verification (consolidation) ────────────────────────────
+
+
+_CONSOLIDATE_SYSTEM = """\
+You are an entity-resolution consolidator.  A cluster of N candidate
+entities below was tentatively grouped together by pairwise similarity.
+Some pairwise verdicts may have linked entities transitively even
+though they are NOT all the same real-world entity.
+
+Your task: split the cluster into groups of TRULY equivalent
+entities.  Different real-world entities (e.g. different companies,
+different people sharing a surname, different sub-concepts) MUST
+end up in separate groups even when they appear in the same context.
+
+Output STRICTLY a JSON array of arrays — each inner array is a
+group of entity NAMES from the input that refer to the same
+real-world entity.  Every input entity name must appear in exactly
+one group.  Example for input [A, B, C, D] where A=B but C and D
+are different from both: `[["A", "B"], ["C"], ["D"]]`.
+"""
+
+
+def _format_cluster_prompt(items: list[_Item]) -> str:
+    lines = ["Entities in the cluster:"]
+    for i, it in enumerate(items, 1):
+        d = (it.description or "").replace("\n", " ")[:200]
+        lines.append(
+            f"{i}. {it.name!r}  (type={it.label}, desc={d!r})"
+        )
+    lines.append(
+        "\nReturn JSON array of arrays of entity names, "
+        "each inner array = one group of same-entity items."
+    )
+    return "\n".join(lines)
+
+
+async def _verify_cluster(
+    cluster_items: list[_Item], llm: Any,
+) -> list[list[_Item]]:
+    """Re-partition a tentative cluster via one consolidating LLM
+    call.  Returns a list of groups; each group is a list of
+    `_Item`s that the LLM judged equivalent.
+
+    On any failure (timeout, parse error) the cluster is split into
+    singletons — conservative behaviour matching the rest of ER.
+    """
+    if len(cluster_items) <= 1:
+        return [cluster_items]
+    name_to_item = {it.name: it for it in cluster_items}
+    try:
+        resp = await llm.achat([
+            ChatMessage(role=MessageRole.SYSTEM, content=_CONSOLIDATE_SYSTEM),
+            ChatMessage(role=MessageRole.USER, content=_format_cluster_prompt(cluster_items)),
+        ])
+        raw = strip_thinking(resp.message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ER cluster verify failed (size={s}): {err}",
+            s=len(cluster_items), err=exc,
+        )
+        return [[it] for it in cluster_items]
+
+    # Find a top-level JSON array of arrays.
+    match = re.search(r"\[\s*\[.*?\]\s*\]", raw, re.DOTALL)
+    if match is None:
+        logger.warning(
+            "ER cluster verify: no JSON found in '{raw}' — splitting",
+            raw=raw[:200],
+        )
+        return [[it] for it in cluster_items]
+    try:
+        groups_raw = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return [[it] for it in cluster_items]
+    if not isinstance(groups_raw, list):
+        return [[it] for it in cluster_items]
+
+    groups: list[list[_Item]] = []
+    used: set[str] = set()
+    for grp in groups_raw:
+        if not isinstance(grp, list):
+            continue
+        members = []
+        for raw_name in grp:
+            if not isinstance(raw_name, str):
+                continue
+            it = name_to_item.get(raw_name)
+            if it is not None and raw_name not in used:
+                members.append(it)
+                used.add(raw_name)
+        if members:
+            groups.append(members)
+
+    # Any items the LLM forgot become their own singleton groups —
+    # safe-by-default.
+    for it in cluster_items:
+        if it.name not in used:
+            groups.append([it])
+            used.add(it.name)
+    logger.info(
+        "ER verify  in_size={i}  out_groups={o}  shapes={s}",
+        i=len(cluster_items), o=len(groups),
+        s=[len(g) for g in groups],
+    )
+    return groups
+
+
 def _parse_judge_response(raw: str, expected: int) -> list[bool]:
     """Pull a JSON array out of `raw`, return `expected` booleans.
 
@@ -498,14 +670,26 @@ def _parse_judge_response(raw: str, expected: int) -> list[bool]:
 
 
 def _pick_canonical(cluster_items: list[_Item], cfg: ERConfig) -> _Item:
-    """max mention_count → longest name → (Cyrillic prefered if RU
-    target language) → alphabetical."""
+    """Pick the canonical entity for a cluster.
 
-    def key(it: _Item) -> tuple[int, int, int, str]:
+    Priority order:
+      1. `source == "stored"` — entities already in Neo4j from
+         previous ingests ALWAYS win.  This prevents orphan nodes:
+         if a new entity has higher mention_count than the stored
+         one, picking it as canonical would create a brand-new
+         Neo4j node and leave the old one as a dangling alias.
+      2. Within the same source class: max mention_count.
+      3. Tiebreak: longest name (more specific).
+      4. Tiebreak: Cyrillic surface form preferred when language=Russian.
+      5. Alphabetical (deterministic).
+    """
+
+    def key(it: _Item) -> tuple[int, int, int, int, str]:
+        stored_pref = 1 if it.source == "stored" else 0
         cyr_pref = 0
         if cfg.language.lower().startswith("rus"):
             cyr_pref = 1 if _is_cyrillic_name(it.name) else 0
-        return (it.mention_count, len(it.name), cyr_pref, it.name)
+        return (stored_pref, it.mention_count, len(it.name), cyr_pref, it.name)
 
     return max(cluster_items, key=key)
 
@@ -600,27 +784,59 @@ def _apply_name_map(
             if canonical and canonical != ent.name:
                 ent.name = canonical
 
-    # 2. Rewrite merged relations.
-    keyed: dict[tuple[str, str], dict[str, Any]] = {}
+    # 2. Rewrite + dedup merged relations.
+    #
+    # Two-step dedup:
+    #   a) drop self-loops (same canonical at both endpoints — happens
+    #      when two clustered entities had a relation between them);
+    #   b) merge by undirected (source_id, target_id) pair regardless
+    #      of relation label.  When the same pair has multiple
+    #      relations with different labels (LightRAG often emits
+    #      both "LEADERSHIP" and "COMPANY" for "person heads org"),
+    #      keep the one with the longest description and append the
+    #      others' keywords/labels to its keywords list.
+    keyed: dict[tuple[str, str], Relation] = {}
     for rel in relations:
-        # Look at canonical names via the rel.properties — the
-        # merger stored display_src/tgt informally in the rel
-        # properties via _RelationAgg.  We don't have direct access
-        # here; rely on what we DO have: the rel.source_id / target_id
-        # are entity IDs, but we can look them up via the rel
-        # description and name lookup later.  However our merger
-        # outputs Relation objects with source_id = entity UUID.
-        # Re-aggregation by name happens through entity-side merge
-        # (entities collapse → relations naturally point to canonical
-        # UUIDs in worker step 3f).  For NOW we keep relations as-is
-        # but drop ones that become self-loops if both endpoints
-        # land on the same canonical entity.
-        src_id = rel.source_id
-        tgt_id = rel.target_id
+        src_id = str(rel.source_id)
+        tgt_id = str(rel.target_id)
         if src_id == tgt_id:
             continue
-        key = tuple(sorted((str(src_id), str(tgt_id))))
-        keyed.setdefault(key, rel)
+        key = tuple(sorted((src_id, tgt_id)))
+        existing = keyed.get(key)
+        if existing is None:
+            keyed[key] = rel
+            continue
+        # Pick the relation with the longer description as the
+        # survivor; merge the other's metadata in.
+        ex_desc = str((existing.properties or {}).get("description") or "")
+        new_desc = str((rel.properties or {}).get("description") or "")
+        survivor = existing if len(ex_desc) >= len(new_desc) else rel
+        loser = rel if survivor is existing else existing
+        sp = survivor.properties or {}
+        lp = loser.properties or {}
+        # Merge keywords and append loser's label as a keyword for
+        # traceability — saves "LEADERSHIP" and "COMPANY" info.
+        sp_kw = [k.strip() for k in str(sp.get("keywords") or "").split(",") if k.strip()]
+        lp_kw = [k.strip() for k in str(lp.get("keywords") or "").split(",") if k.strip()]
+        loser_label = (loser.label or "").lower().replace("_", " ")
+        if loser_label and loser_label not in sp_kw:
+            sp_kw.append(loser_label)
+        for kw in lp_kw:
+            if kw not in sp_kw:
+                sp_kw.append(kw)
+        sp["keywords"] = ", ".join(sp_kw)
+        # Sum mention_count.
+        sp["mention_count"] = int(sp.get("mention_count") or 1) + int(
+            lp.get("mention_count") or 1,
+        )
+        # Union source_chunks.
+        sc = list(sp.get("source_chunks") or [])
+        for cid in (lp.get("source_chunks") or []):
+            if cid not in sc:
+                sc.append(cid)
+        sp["source_chunks"] = sc
+        survivor.properties = sp
+        keyed[key] = survivor
     return list(keyed.values())
 
 
@@ -734,6 +950,18 @@ async def resolve_entities(
             skipped.append(ent)
             continue
         props = ent.properties or {}
+        # P5 — generic-name guard: short single-token names with
+        # mention_count == 1 and empty description are too generic.
+        # They pass through unchanged AND don't get `er_canonical_name`,
+        # so the next ingest won't try to match against them.
+        if cfg.skip_generic_names:
+            tokens = (ent.name or "").split()
+            mc = int(props.get("mention_count") or 1)
+            desc = str(props.get("description") or "")
+            if (len(tokens) == 1 and len(tokens[0]) < 5
+                    and mc <= 1 and not desc):
+                skipped.append(ent)
+                continue
         new_items.append(_Item(
             name=ent.name,
             norm=_normalize_entity_name(ent.name),
@@ -765,8 +993,12 @@ async def resolve_entities(
 
     # 5. Candidate generation.
     auto_pairs, borderline_pairs = _candidate_pairs(all_items, cfg)
-    for a, b, _ in auto_pairs:
+    for a, b, cos in auto_pairs:
         confirmed_pairs.add(tuple(sorted((a, b))))
+        logger.debug(
+            "ER auto-merge  '{a}' ≡ '{b}'  cosine={c:.3f}",
+            a=items_by_norm[a].name, b=items_by_norm[b].name, c=cos,
+        )
 
     # 6. LLM judge borderline.
     if borderline_pairs:
@@ -775,10 +1007,24 @@ async def resolve_entities(
             for a, b, _ in borderline_pairs
             if a in items_by_norm and b in items_by_norm
         ]
+        for (it_a, it_b), (_, _, cos) in zip(judge_input, borderline_pairs):
+            logger.debug(
+                "ER judge-pair  '{a}' (label={la}) ↔ '{b}' (label={lb})  cosine={c:.3f}",
+                a=it_a.name, la=it_a.label,
+                b=it_b.name, lb=it_b.label, c=cos,
+            )
         verdicts = await _llm_judge_pairs(judge_input, llm, cfg)
-        for ok, (a, b, _) in zip(verdicts, borderline_pairs):
+        for ok, (it_a, it_b) in zip(verdicts, judge_input):
+            logger.info(
+                "ER judge-verdict  '{a}' vs '{b}' = {v}",
+                a=it_a.name, b=it_b.name,
+                v="SAME" if ok else "DIFFERENT",
+            )
             if ok:
-                confirmed_pairs.add(tuple(sorted((a, b))))
+                confirmed_pairs.add(tuple(sorted((
+                    items_by_norm[it_a.norm].norm,
+                    items_by_norm[it_b.norm].norm,
+                ))))
 
     # 7. Union-find clustering.
     uf = _UnionFind()
@@ -797,10 +1043,23 @@ async def resolve_entities(
         else:
             final_clusters.append(c)
 
-    # 9. Verification of large (but < hyper-hub) clusters — drop for
-    #    the prototype: union-find on a low-recall LLM signal rarely
-    #    produces ambiguous medium clusters in practice.  Hook
-    #    available via `_verify_large_cluster` if needed later.
+    # 9. Verify clusters with ≥ verify_cluster_size members via a
+    #    single consolidation LLM call per cluster.  LightRAG-style
+    #    protection against transitive over-merge — pairwise judge
+    #    confirmed A↔B and B↔C, but A might not actually be C.
+    verified_clusters: list[set[str]] = []
+    for cluster in final_clusters:
+        if len(cluster) < cfg.verify_cluster_size:
+            verified_clusters.append(cluster)
+            continue
+        cluster_items = [items_by_norm[n] for n in cluster if n in items_by_norm]
+        groups = await _verify_cluster(cluster_items, llm)
+        for group in groups:
+            if len(group) >= 2:
+                verified_clusters.append({it.norm for it in group})
+            # Singletons drop out of the cluster pool — they're
+            # added back via the normal singleton path later.
+    final_clusters = verified_clusters
 
     # 10. Pick canonical and build name_map.
     name_map: dict[str, str] = {}
@@ -814,6 +1073,13 @@ async def resolve_entities(
         canonical = _pick_canonical(cluster_items, cfg)
         cluster_canonicals.update({it.norm: canonical.norm for it in cluster_items})
         contains_new = any(it.source == "new" for it in cluster_items)
+        logger.info(
+            "ER cluster  canonical='{c}'  size={s}  members={m}  has_new={n}",
+            c=canonical.name, s=len(cluster_items),
+            m=[it.name + (" (stored)" if it.source == "stored" else "")
+               for it in cluster_items],
+            n=contains_new,
+        )
         if not contains_new:
             # Pure stored-only cluster — nothing to upsert.
             continue
