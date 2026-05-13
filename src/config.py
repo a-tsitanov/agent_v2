@@ -203,6 +203,15 @@ class AgentSettings(BaseSettings):
     # ReAct loop (R7): how many tool-call iterations before forcing
     # `submit_answer`.
     max_iterations: int = Field(default=8, ge=1, le=20)
+    # Entity Resolution (cross-language / multi-form dedup).  When
+    # enabled, the worker runs an extra step between
+    # `merge_kg_extraction` and `PropertyGraphIndex` that finds
+    # semantic duplicates ("BCC" ≡ "Базальноклеточный рак",
+    # "Иванов И.И." ≡ "Иван Иванов", ...) and consolidates them into
+    # one canonical entity.  See `src/graph/entity_resolution.py`.
+    er_enabled: bool = True
+    # Pairs per LLM-judge call when ER routes borderline candidates.
+    er_judge_batch_size: int = Field(default=10, ge=1, le=50)
     # Reflective synthesis (R8): how many draft → critique → retrieve
     # → redraft rounds the synthesizer attempts.
     max_refinements: int = Field(default=3, ge=0, le=10)

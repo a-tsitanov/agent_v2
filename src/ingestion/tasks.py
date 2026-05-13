@@ -27,6 +27,7 @@ from llama_index.core.graph_stores.types import (
     KG_RELATIONS_KEY,
 )
 
+from src.graph.entity_resolution import ERConfig, resolve_entities
 from src.graph.index import (
     NoOpKGExtractor,
     build_kg_extractor,
@@ -198,6 +199,31 @@ async def process_document(doc_id: str, path: str) -> None:
                 merged_entities, merged_relations = await merge_kg_extraction(
                     nodes, llm, language="Russian",
                 )
+
+                # Entity Resolution: collapses cross-language /
+                # multi-form duplicates and matches against entities
+                # already in Neo4j from previous ingests.  Best-effort:
+                # if the embed model or LLM fail, returns the inputs
+                # unchanged — no impact on ingest correctness.
+                if settings.agent.er_enabled:
+                    merged_entities, merged_relations, _er_name_map = (
+                        await resolve_entities(
+                            merged_entities,
+                            merged_relations,
+                            nodes,
+                            llm=llm,
+                            embed_model=embed_model,
+                            graph_store=graph_store,
+                            config=ERConfig(
+                                language="Russian",
+                                judge_batch=settings.agent.er_judge_batch_size,
+                            ),
+                        )
+                    )
+                    logger.info(
+                        "ER complete  doc_id={d}  merged_aliases={m}",
+                        d=doc_id, m=len(_er_name_map),
+                    )
                 # PropertyGraphIndex writes every chunk's metadata
                 # onto its `:Chunk` node in Neo4j.  Neo4j rejects
                 # nested types ("Property values can only be of
