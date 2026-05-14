@@ -364,7 +364,7 @@ Re-ingest **1 MB English corpus, ~514 chunks**:
 | **Total LLM chat calls** | **~1 200** |
 | Wall time on gpt-4o-mini | **15–25 min** |
 
-Per-query stoимость:
+Per-query стоимость:
 
 - `/search` — 1 LLM call.
 - `/agent` — 3 (reasoning) + 1 (synth) = **4** для multi-hop.
@@ -404,7 +404,7 @@ ContextVar-scoped → concurrent requests не пересекаются.
 
 1. **Tool-calling reliability — главный фильтр выбора модели.** Качество reasoning важно, но если модель пропускает tool-call в 20% случаев — весь agent ломается. qwen3:8b > llama3.1:8b ровно по этому критерию.
 
-2. **ER должен быть consciously consérvative.** Дефолт на DIFFERENT при таймауте, cross-script всегда через LLM, hyper-hub clamp. Один false merge порочит весь граф; пара дубликатов — нет.
+2. **ER должен быть осознанно консервативным.** Дефолт на DIFFERENT при таймауте, cross-script всегда через LLM, hyper-hub clamp. Один false merge порочит весь граф; пара дубликатов — нет.
 
 3. **Graph as augmentation, не blocking.** Neo4j падает → vector index всё ещё работает, `/search` отвечает. Ingestion graph-step wrap-нут в try/except, ошибка в `documents.error` поле.
 
