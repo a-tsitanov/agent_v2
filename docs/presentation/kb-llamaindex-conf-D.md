@@ -403,36 +403,39 @@ ContextVar-scoped → concurrent requests не пересекаются.
 
 ---
 
-# Lessons learned (technical)
+# Lessons learned (process)
 
-1. **Tool-calling reliability — главный фильтр выбора модели.** Качество reasoning важно, но если модель пропускает tool-call в 20% случаев — весь agent ломается. qwen3:8b > llama3.1:8b ровно по этому критерию.
+1. **9-stage прототип + R1–R10 рефакторинг — не «два проекта».** Один трек: первые 9 стадий ставят функциональность, R1–R10 переводит в production-form (function calls, типы entities, DI hygiene, eval, decommission legacy). Резать на «прототип» и «продукт» дорого — теряется контекст.
 
-2. **ER должен быть осознанно консервативным.** Дефолт на DIFFERENT при таймауте, cross-script всегда через LLM, hyper-hub clamp. Один false merge порочит весь граф; пара дубликатов — нет.
+2. **Eval gate — это договор с заказчиком.** Acceptance threshold-ы для identifier recall и answer quality зафиксированы в `tests/eval/`, считаются на каждый PR. Спор «а вот этот ответ хороший?» уходит в спор о метрике.
 
-3. **Graph as augmentation, не blocking.** Neo4j падает → vector index всё ещё работает, `/search` отвечает. Ingestion graph-step wrap-нут в try/except, ошибка в `documents.error` поле.
+3. **Что НЕ делаем — такой же важный артефакт, как roadmap.** Multi-tenant, streaming, BM25, periodic dedup — все обоснованно отложены. См. слайд «Что НЕ в scope».
 
-4. **Русский в промпте важнее качества модели на small-LLM.** Замена стокового `Alice/Bob/Philz` на B2B-пример с `ООО Альфа → договор № 17-К → ИП Иванов` сдвинула llama3.1:8b с 0 relations на 18 entities + 9 typed relations.
+4. **On-prem-first — сознательное решение.** Стек проектируется под Ollama (даже когда дефолт gpt-4o-mini); LiteLLM как единый gateway даёт обратимый swap без изменения кода.
 
 ---
 
-# Roadmap & open research
+# Status R1–R10
 
-**Что работает в проде:**
-- 9-stage прототип сдан 2026-05-09, R1 (qwen3:8b migration) закрыт.
+| Стадия | Что | Статус |
+|---|---|---|
+| **R1** | qwen3:8b migration | done (2026-05-11) |
+| **R2** | function calling + structured output | in progress |
+| **R3** | universal entity types + descriptions | done (баклог) |
+| **R4** | DI hygiene + 3-endpoint split | done |
+| **R5** | ≥115 tests | **done (287)** |
+| **R6** | `MODELS.md`, `ARCHITECTURE.md` | done |
+| **R7** | ReAct agent `/agent` | done |
+| **R8** | Reflective synthesis `/selfrag` | done |
+| **R9** | Answer-quality eval, multi-domain golden | in progress |
+| **R10** | Decommission legacy judge path | gated by R9 |
 
-**В работе (R2–R10):**
-- R2 — function calling + structured output cleanup.
-- R3 — universal entity types + rich descriptions.
-- R4 — DI hygiene + 3-endpoint split.
-- R5–R6 — ≥115 тестов + ARCHITECTURE/MODELS docs.
-- R7–R8 — ReAct + reflective synthesis (этот доклад).
-- R9 — answer-quality eval over multi-domain golden Q&A.
-- R10 — decommission legacy judge-based path.
+**Risks / открытые вопросы:**
 
-**Open research / known unknowns:**
-- **Incremental ER race** — параллельный ingest двух документов может «увидеть» друг друга на разных стадиях canonicalization.
-- **Phantom phone-chunks** — `_consolidate_phone_entities` оставляет orphan chunks после merge.
-- **Claim-level citations** — сейчас citation = chunk_id; span-внутри-chunk остаётся UI-задачей.
-- **Multi-tenant isolation** — `department` flow-ит через metadata, но enforcement на retrieve-уровне ещё не сделан.
+- Incremental ER race на параллельном ingest — есть план, нет имплементации.
+- Phantom phone-chunks после `_consolidate_phone_entities` merge.
+- Claim-level citations требуют UI-стороны для span-в-chunk.
+
+**Следующая итерация:** R9 завершён → A/B по multi-domain corpus → решение по R10.
 
 Спасибо. Вопросы?
