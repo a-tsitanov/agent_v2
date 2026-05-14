@@ -30,3 +30,8 @@ uv.lock
 dist/
 build/
 research/
+
+# Marp output
+docs/presentation/*.pdf
+docs/presentation/*.pptx
+docs/presentation/*.html
