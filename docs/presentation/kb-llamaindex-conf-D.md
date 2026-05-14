@@ -14,6 +14,12 @@ footer: '[speaker] · 2026-05-14'
 
 [conference] · [speaker] · 2026-05-14
 
+<!--
+- Представить себя + команду.
+- Назвать заказчика проекта (если non-confidential).
+- Время доклада: ~35 минут, вопросы в конце.
+-->
+
 ---
 
 # Что мы сдаём по итогам R1–R10
@@ -33,6 +39,14 @@ footer: '[speaker] · 2026-05-14'
 - Eval-gate как договор с заказчиком (287 тестов + golden Q&A).
 - On-prem-only стек.
 
+<!--
+- /search — для UI-чата, latency ≤ 20s.
+- /agent — для multi-hop вопросов оператора.
+- /selfrag — для регулируемых доменов.
+- Общая инфра — ingestion + KG + vector — одна для всех трёх.
+- Eval-gate: каждый PR проверяется на 287 тестов + RAGAS-like.
+-->
+
 ---
 
 # Контекст — наши документы
@@ -45,6 +59,12 @@ footer: '[speaker] · 2026-05-14'
 
 → цифры собираются перед защитой; placeholder-ы помечены `[ ]`.
 
+<!--
+- Сначала заполнить плейсхолдеры реальными цифрами.
+- Упомянуть отделы-источники без идентифицирующих деталей.
+- На regulated пунктике остановиться — связь со слайдом /selfrag.
+-->
+
 ---
 
 # Почему generic RAG здесь ломается
@@ -53,6 +73,13 @@ footer: '[speaker] · 2026-05-14'
 2. **KG extraction на small-LLM.** Стоковые prompts эхо'ят `Alice/Bob/Philz`; `SchemaLLMPathExtractor` падает на малых моделях.
 3. **Entity resolution.** «BCC» ≡ «Базальноклеточный Рак» — vector-уровня недостаточно.
 4. **Доверие к ответу.** Plain RAG не различает «знаю», «не знаю», «уверен в этой части».
+
+<!--
+- Pain #1 язык: запрос на RU не находит EN-чанков — главный driver translate-to-RU.
+- Pain #2 KG: stock prompts не работают на наших моделях (см. слайд 9).
+- Pain #3 ER: vector сам не решает «BCC ≡ Базальноклеточный Рак».
+- Pain #4 доверие: regulated домены требуют /selfrag.
+-->
 
 ---
 
@@ -88,6 +115,13 @@ API + taskiq worker, 4 store-а, единый LLM/embed gateway.
 
 → источник: `docs/ARCHITECTURE.md` §1.
 
+<!--
+- API + worker — два процесса, не монолит.
+- 4 store-а: каждый со своей зоной ответственности.
+- LiteLLM — единый gateway, обратимый swap LLM.
+- На вопрос «зачем RabbitMQ» — async ingest, retries, backpressure.
+-->
+
 ---
 
 # Storage map
@@ -103,6 +137,15 @@ API + taskiq worker, 4 store-а, единый LLM/embed gateway.
 
 → источник: `docs/ARCHITECTURE.md` §2.
 
+<!--
+- Milvus — vector + original-language text для UI цитат.
+- Neo4j — best-effort, падение не блокирует /search.
+- Postgres — простая таблица jobs, никакого ORM.
+- RabbitMQ — taskiq broker, одна очередь.
+- FS — raw uploads для read_full_document tool (см. /agent).
+- LiteLLM — stateless, restart-recoverable.
+-->
+
 ---
 
 # Что НЕ в scope этой версии
@@ -117,6 +160,15 @@ API + taskiq worker, 4 store-а, единый LLM/embed gateway.
 - **Caching agent tool results** между запросами.
 
 → источник: `docs/ARCHITECTURE.md` §9.
+
+<!--
+- Multi-tenant: department есть в metadata, но retrieve-фильтр — следующая итерация.
+- SSE: переделка FastAPI, отложили.
+- BM25: модуль есть, не подключён, нет решения по docstore.
+- Periodic dedup: ER on-ingest есть, cross-doc batch — нет.
+- Document summaries: колонка зарезервирована, контент не пишется.
+- Tool result caching: текущая нагрузка не требует.
+-->
 
 ---
 
@@ -142,6 +194,13 @@ Document file
 
 → источник: `docs/ARCHITECTURE.md` §3.
 
+<!--
+- Стандартный LlamaIndex IngestionPipeline + наши 2 transform-а.
+- Translate-to-RU включается condition'ом: skip если уже русский.
+- KG step best-effort: Neo4j down → ingestion completes без графа.
+- Augment-block (canonical identifiers) feeds LightRAG промпт in-band.
+-->
+
 ---
 
 # KG extraction — как поймали скрытый баг
@@ -159,6 +218,12 @@ Document file
 Фикс: `SimpleLLMPathExtractor` + RU few-shot → **18 entities + 9 relations** на тестовом договоре.
 
 **Урок:** end-to-end diagnostic важнее unit-теста. Compose-уровневые `diag_*` script-ы — стандарт.
+
+<!--
+- Главная мысль: end-to-end diagnostic важнее unit-test.
+- check_ingestion.py + diag_kg.py — два diagnostic-а, оба стоит показать.
+- На вопрос «как бы вы поймали без diag?» — сложно, отвечать честно.
+-->
 
 ---
 
@@ -181,6 +246,13 @@ Wall time: **15–25 min** на gpt-4o-mini.
 - Re-ingest корпуса повторно при смене embed-модели обязателен — `MILVUS_DIM` должен совпадать.
 
 LightRAG-style extract = 1 call/chunk (детали в репо: `src/graph/lightrag_extract.py`).
+
+<!--
+- Главная цифра: ~1200 calls на 1 MB корпуса.
+- Не путать LLM chat-calls с embedding-calls.
+- INGESTION_TRANSLATE_TO_RUSSIAN=false — feature flag для cost control.
+- MILVUS_DIM — частая ошибка на смене embed-модели.
+-->
 
 ---
 
@@ -207,6 +279,12 @@ final entity description (RU)
 
 → источник: `src/graph/merge.py:merge_kg_extraction`.
 
+<!--
+- Правило 8 mentions / 12k chars — эмпирическое, не оптимальное.
+- Relations: undirected pair key, иначе дубли в обе стороны.
+- Если что-то идёт не так с описаниями — смотреть _maybe_summarize_descriptions.
+-->
+
 ---
 
 # Entity Resolution — что vector сам не разрулит
@@ -222,6 +300,13 @@ final entity description (RU)
 | canonical из doc 1 | новый вариант из doc 2 | cross-document |
 
 → только vector-уровня **не хватает**: `BCC` и `Базальноклеточный Рак` embed-аются в разные кластеры.
+
+<!--
+- BCC / Базальноклеточный — реальный кейс из медкорпуса.
+- Cross-document — самый частый случай в проде.
+- Инициалы (Иванов И.И. ≡ Иван Иванов) — часто в e-mail.
+- Vector один не решает — embed-ы могут быть в разных кластерах.
+-->
 
 ---
 
@@ -244,6 +329,13 @@ final entity description (RU)
 
 → источник: `src/graph/entity_resolution.py` docstring.
 
+<!--
+- Шаги 4-6 — детерминированные, дешёвые.
+- Шаги 7-9 — LLM-judge, дорогие, batched 10.
+- Шаг 10 (hyper-hub clamp) — против snowball merge.
+- Шаг 12 — переписывает метаданные чанков, не только Neo4j.
+-->
+
 ---
 
 # ER: трейдоффы
@@ -254,6 +346,13 @@ final entity description (RU)
 - **Hyper-hub clamp.** Если кластер вышел больше threshold (например, 30+) — auto-merge выключается, кластер маркируется на review.
 
 Принцип: лучше пара дубликатов в графе, чем хороший entity, склеенный с плохим.
+
+<!--
+- DIFFERENT on timeout: ключевое решение. Готов защищать.
+- 12 identifier-типов skip — они уже канонизированы deterministic-ом.
+- Cross-script всегда LLM: даже cosine=0.99 не гарантирует тождество.
+- Hyper-hub: cluster >30 → not auto-merge, flag er_review_needed.
+-->
 
 ---
 
@@ -269,6 +368,12 @@ final entity description (RU)
 Все четыре делят один retrieval-стек: Milvus + опц. Neo4j + `ChunkRepository`.
 
 → источник: `docs/QUERY.md` Overview.
+
+<!--
+- 4 endpoint-а, legacy под флагом — не путать.
+- Latency на gpt-4o-mini — на on-prem qwen3:8b цифры выше.
+- Все четыре делят один retrieval-стек: важно для затрат на инфру.
+-->
 
 ---
 
@@ -292,6 +397,12 @@ SearchResponse(answer, sources=[full chunks], latency_ms)
 - 1 LLM call. Никаких рефайнментов.
 - RU-вывод гарантирован через query-wrapper «Ответь на русском …».
 - Sources возвращаются **полным** chunk text — для UI цитаты.
+
+<!--
+- Главный use case — UI chat, real-time запросы.
+- Sources возвращаются полные, не truncated — UI делает «цитата + ссылка».
+- RU-wrapper — необходимость, default prompt LlamaIndex англоязычен.
+-->
 
 ---
 
@@ -319,6 +430,13 @@ Anti-loop guard: 3 идентичных `(tool, args)` подряд → exit. З
 - `vector_search → get_chunks_by_doc_id → submit_answer` — «весь тред».
 - `vector_search → read_full_document → submit_answer` — точная цитата.
 
+<!--
+- 8 tools — фиксированный набор, новые добавляются через PR.
+- Anti-loop guard — простая защита, но спасала в проде.
+- read_full_document — самый «дорогой» tool, использовать sparingly.
+- submit_answer — обязательный exit-tool, иначе уходим в max_iterations.
+-->
+
 ---
 
 # `/selfrag` — когда оно нужно в проде
@@ -340,6 +458,13 @@ Anti-loop guard: 3 идентичных `(tool, args)` подряд → exit. З
 
 Детали алгоритма + regex маркеров — в репо: `src/retrieval/reflective_synth.py`.
 
+<!--
+- Главное — flag по claim-уровню, не «вообще не знаю».
+- Маркеры NEED триггерят дополнительный retrieve.
+- max_refinements=3 — больше редко даёт улучшение, дороже линейно.
+- Когда включать: regulated, audit trail, high-stakes.
+-->
+
 ---
 
 # Russian-output guarantee
@@ -351,6 +476,12 @@ Anti-loop guard: 3 идентичных `(tool, args)` подряд → exit. З
 3. **Plain /search** — query-wrapper «Ответь на следующий вопрос на русском, сохраняя имена собственные …» перед LlamaIndex synthesizer-ом.
 
 Source chunks хранятся **в оригинальном языке** в Milvus и возвращаются в `sources[].content` для UI — ответ читается на RU, цитаты в source language.
+
+<!--
+- 3 точки enforcement специально, чтобы одна сломалась — две защитят.
+- Source chunks в Milvus остаются в исходном языке — для UI цитат.
+- Если ответ внезапно на EN — смотреть translate_transform логи.
+-->
 
 ---
 
@@ -374,6 +505,12 @@ Per-query стоимость:
 - `/selfrag` — 4–12 в зависимости от глубины refinements.
 
 → источник: `docs/ARCHITECTURE.md` Re-ingest cost table.
+
+<!--
+- 1 MB / 514 chunks — наш sample, не упрощённый benchmark.
+- Wall time зависит от LLM provider — gpt-4o-mini средний.
+- Per-query: важно зафиксировать «4 calls на multi-hop».
+-->
 
 ---
 
@@ -401,6 +538,13 @@ ContextVar-scoped → concurrent requests не пересекаются.
 - `tests/eval/identifier_recall.py` — 7 golden cases, thresholds: phone/email/INN/OGRN/BIC ≥ 0.95, contract/amount ≥ 0.85, address ≥ 0.75, precision ≥ 0.90.
 - `tests/eval/answer_quality.py` (R9) — deterministic offline grader: fact recall, entity recall, citation precision, hallucination upper bound, uncertainty honesty.
 
+<!--
+- Trace context-var — concurrent requests isolated.
+- 287 тестов — реальный count из pytest --collect-only.
+- Identifier recall thresholds — закреплены, спор → метрика.
+- Answer quality — deterministic, не RAGAS-стиль (тот требует LLM-judge).
+-->
+
 ---
 
 # Lessons learned (process)
@@ -412,6 +556,13 @@ ContextVar-scoped → concurrent requests не пересекаются.
 3. **Что НЕ делаем — такой же важный артефакт, как roadmap.** Multi-tenant, streaming, BM25, periodic dedup — все обоснованно отложены. См. слайд «Что НЕ в scope».
 
 4. **On-prem-first — сознательное решение.** Стек проектируется под Ollama (даже когда дефолт gpt-4o-mini); LiteLLM как единый gateway даёт обратимый swap без изменения кода.
+
+<!--
+- 9-stage + R1-R10: единый план, не два проекта.
+- Eval gate как договор: ключевое для отношений с заказчиком.
+- Что НЕ в scope: дать ссылку на слайд 7.
+- On-prem-first: даже при дефолте gpt-4o-mini инфра готова к Ollama.
+-->
 
 ---
 
@@ -439,3 +590,12 @@ ContextVar-scoped → concurrent requests не пересекаются.
 **Следующая итерация:** R9 завершён → A/B по multi-domain corpus → решение по R10.
 
 Спасибо. Вопросы?
+
+<!--
+- Зелёные: R1, R3, R4, R5, R6, R7, R8.
+- В работе: R2, R9.
+- Gated: R10 (зависит от R9).
+- Risks: 3 пункта — все известные, не сюрприз для команды.
+- Следующая итерация: после R9 решаем по R10.
+-->
+
