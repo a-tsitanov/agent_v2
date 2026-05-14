@@ -5,7 +5,7 @@ Two Marp Markdown decks for the project conference talks.
 - `kb-llamaindex-conf-A.md` — Tech / ML conference (22 slides, ~35 min).
 - `kb-llamaindex-conf-D.md` — Internal project defense (23 slides, ~35 min, w/ speaker notes).
 
-Design spec: `../superpowers/specs/2026-05-14-kb-llamaindex-conf-deck-design.md`.
+Design spec: [2026-05-14-kb-llamaindex-conf-deck-design.md](../superpowers/specs/2026-05-14-kb-llamaindex-conf-deck-design.md).
 
 ## Prerequisites
 
