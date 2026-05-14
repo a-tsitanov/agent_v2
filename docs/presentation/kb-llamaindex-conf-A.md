@@ -6,6 +6,20 @@ paginate: true
 size: 16:9
 header: 'kb-llamaindex · [conference]'
 footer: '[speaker] · 2026-05-14'
+style: |
+  section {
+    font-size: 22px;
+    padding: 55px 70px 65px 70px;
+  }
+  section h1 { font-size: 1.7em; margin: 0 0 0.35em 0; }
+  section h2 { font-size: 1.3em; }
+  section p, section ul, section ol { margin: 0.4em 0; }
+  section pre, section code { font-size: 0.82em; }
+  section pre { margin: 0.4em 0; line-height: 1.25; }
+  section table { font-size: 0.85em; }
+  section li { margin: 0.12em 0; }
+  section.lead { font-size: 28px; }
+  section.lead h1 { font-size: 2.4em; }
 ---
 
 # kb-llamaindex
@@ -20,7 +34,7 @@ footer: '[speaker] · 2026-05-14'
 
 Какой правильный — и зачем держать все три?
 
-```
+```text
                 user query
                     │
        ┌────────────┼────────────┐
@@ -68,23 +82,18 @@ footer: '[speaker] · 2026-05-14'
                 ┌──────────────┐                 │
                 │ worker       │                 ▼
                 │ process_doc  │       ┌─────────────────────┐
-                └──┬──────┬────┘       │  retrieval stack    │
-                   │      │            │  Milvus · Neo4j · FS│
-                   ▼      ▼            └──────────┬──────────┘
-              ┌─────────┐┌──────────┐             │
-              │ Milvus  ││ Neo4j    │             ▼
-              │ chunks  ││ KG nodes │     ┌────────────────┐
-              │ vectors ││ + rels   │     │ LLM via        │
-              └─────────┘└──────────┘     │ LiteLLM proxy  │
-              ┌──────────────┐            └────────────────┘
-              │ Postgres     │
-              │ job state    │
-              └──────────────┘
+                └──┬──┬────┬───┘       │  retrieval stack    │
+                   ▼  ▼    ▼           │  Milvus · Neo4j · FS│
+              ┌─────┐┌────┐┌─────────┐ └──────────┬──────────┘
+              │Milv.││Neo4││Postgres │            │
+              │chunk││ KG ││job state│            ▼
+              └─────┘└────┘└─────────┘  ┌────────────────┐
+                                        │ LLM via        │
+                                        │ LiteLLM proxy  │
+                                        └────────────────┘
 ```
 
-API + taskiq worker, 4 store-а, единый LLM/embed gateway.
-
-→ источник: `docs/ARCHITECTURE.md` §1.
+API + taskiq worker, 4 store-а, единый LLM/embed gateway. → `docs/ARCHITECTURE.md` §1.
 
 ---
 
@@ -331,11 +340,8 @@ for round_i in 0..max_refinements (default 3):
 final = strip_markers(draft, keep_uncertain=True)
 ```
 
-- `[NEED]` → re-retrieve и redraft.
-- `[SUPPORTED:id]` → claim привязан к chunk_id (citation).
-- `[UNCERTAIN:...]` → остаётся в финальном ответе, не галлюцинация.
-
-Цена: 2× latency vs `/agent`. Берём только когда нужны цитаты per claim.
+- `[NEED]` → re-retrieve и redraft. `[SUPPORTED:id]` → citation на chunk. `[UNCERTAIN:...]` → остаётся в ответе, не галлюцинация.
+- Цена: 2× latency vs `/agent`. Берём когда нужны цитаты per claim.
 
 ---
 
@@ -418,18 +424,14 @@ ContextVar-scoped → concurrent requests не пересекаются.
 - 9-stage прототип сдан 2026-05-09, R1 (qwen3:8b migration) закрыт.
 
 **В работе (R2–R10):**
-- R2 — function calling + structured output cleanup.
-- R3 — universal entity types + rich descriptions.
-- R4 — DI hygiene + 3-endpoint split.
+- R2–R4 — function calling, universal entity types, DI hygiene + 3-endpoint split.
 - R5–R6 — ≥115 тестов + ARCHITECTURE/MODELS docs.
-- R7–R8 — ReAct + reflective synthesis (этот доклад).
-- R9 — answer-quality eval over multi-domain golden Q&A.
-- R10 — decommission legacy judge-based path.
+- R7–R8 — ReAct + reflective synthesis (этот доклад). R9 — answer-quality eval. R10 — decommission legacy judge-loop.
 
 **Open research / known unknowns:**
-- **Incremental ER race** — параллельный ingest двух документов может «увидеть» друг друга на разных стадиях canonicalization.
-- **Phantom phone-chunks** — `_consolidate_phone_entities` оставляет orphan chunks после merge.
-- **Claim-level citations** — сейчас citation = chunk_id; span-внутри-chunk остаётся UI-задачей.
-- **Multi-tenant isolation** — `department` flow-ит через metadata, но enforcement на retrieve-уровне ещё не сделан.
+- **Incremental ER race** — параллельный ingest двух документов на разных стадиях canonicalization.
+- **Phantom phone-chunks** — `_consolidate_phone_entities` оставляет orphan chunks.
+- **Claim-level citations** — citation = chunk_id; span-внутри-chunk остаётся UI-задачей.
+- **Multi-tenant isolation** — `department` есть в metadata, но enforcement на retrieve ещё не сделан.
 
 Спасибо. Вопросы?

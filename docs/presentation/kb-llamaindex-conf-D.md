@@ -6,6 +6,20 @@ paginate: true
 size: 16:9
 header: 'kb-llamaindex · internal defense'
 footer: '[speaker] · 2026-05-14'
+style: |
+  section {
+    font-size: 22px;
+    padding: 55px 70px 65px 70px;
+  }
+  section h1 { font-size: 1.7em; margin: 0 0 0.35em 0; }
+  section h2 { font-size: 1.3em; }
+  section p, section ul, section ol { margin: 0.4em 0; }
+  section pre, section code { font-size: 0.82em; }
+  section pre { margin: 0.4em 0; line-height: 1.25; }
+  section table { font-size: 0.85em; }
+  section li { margin: 0.12em 0; }
+  section.lead { font-size: 28px; }
+  section.lead h1 { font-size: 2.4em; }
 ---
 
 # kb-llamaindex
@@ -26,7 +40,7 @@ footer: '[speaker] · 2026-05-14'
 
 Один API — **три endpoint-а** под разные требования к ответу:
 
-```
+```text
                 user query
                     │
        ┌────────────┼────────────┐
@@ -97,23 +111,18 @@ footer: '[speaker] · 2026-05-14'
                 ┌──────────────┐                 │
                 │ worker       │                 ▼
                 │ process_doc  │       ┌─────────────────────┐
-                └──┬──────┬────┘       │  retrieval stack    │
-                   │      │            │  Milvus · Neo4j · FS│
-                   ▼      ▼            └──────────┬──────────┘
-              ┌─────────┐┌──────────┐             │
-              │ Milvus  ││ Neo4j    │             ▼
-              │ chunks  ││ KG nodes │     ┌────────────────┐
-              │ vectors ││ + rels   │     │ LLM via        │
-              └─────────┘└──────────┘     │ LiteLLM proxy  │
-              ┌──────────────┐            └────────────────┘
-              │ Postgres     │
-              │ job state    │
-              └──────────────┘
+                └──┬──┬────┬───┘       │  retrieval stack    │
+                   ▼  ▼    ▼           │  Milvus · Neo4j · FS│
+              ┌─────┐┌────┐┌─────────┐ └──────────┬──────────┘
+              │Milv.││Neo4││Postgres │            │
+              │chunk││ KG ││job state│            ▼
+              └─────┘└────┘└─────────┘  ┌────────────────┐
+                                        │ LLM via        │
+                                        │ LiteLLM proxy  │
+                                        └────────────────┘
 ```
 
-API + taskiq worker, 4 store-а, единый LLM/embed gateway.
-
-→ источник: `docs/ARCHITECTURE.md` §1.
+API + taskiq worker, 4 store-а, единый LLM/embed gateway. → `docs/ARCHITECTURE.md` §1.
 
 <!--
 - API + worker — два процесса, не монолит.
@@ -572,20 +581,13 @@ ContextVar-scoped → concurrent requests не пересекаются.
 |---|---|---|
 | **R1** | qwen3:8b migration | done (2026-05-11) |
 | **R2** | function calling + structured output | in progress |
-| **R3** | universal entity types + descriptions | done (баклог) |
-| **R4** | DI hygiene + 3-endpoint split | done |
-| **R5** | ≥115 tests | **done (287)** |
-| **R6** | `MODELS.md`, `ARCHITECTURE.md` | done |
-| **R7** | ReAct agent `/agent` | done |
-| **R8** | Reflective synthesis `/selfrag` | done |
+| **R3–R4** | universal entity types; DI hygiene + 3-endpoint split | done |
+| **R5–R6** | ≥115 tests + `MODELS.md` / `ARCHITECTURE.md` | **done (287)** |
+| **R7–R8** | ReAct `/agent` + reflective `/selfrag` | done |
 | **R9** | Answer-quality eval, multi-domain golden | in progress |
 | **R10** | Decommission legacy judge path | gated by R9 |
 
-**Risks / открытые вопросы:**
-
-- Incremental ER race на параллельном ingest — есть план, нет имплементации.
-- Phantom phone-chunks после `_consolidate_phone_entities` merge.
-- Claim-level citations требуют UI-стороны для span-в-chunk.
+**Risks / открытые вопросы:** Incremental ER race на параллельном ingest; phantom phone-chunks после `_consolidate_phone_entities` merge; claim-level citations требуют UI-стороны для span-в-chunk.
 
 **Следующая итерация:** R9 завершён → A/B по multi-domain corpus → решение по R10.
 
