@@ -126,6 +126,46 @@ async def test_ingest_returns_503_when_minio_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ingest_returns_503_when_minio_unreachable() -> None:
+    """MinIO container fully down: the SDK raises a urllib3
+    `MaxRetryError`, not an `S3Error`.  The endpoint must catch that
+    transport-level failure too and return a clean 503."""
+    from urllib3.exceptions import MaxRetryError
+
+    from src.api.main import app
+    from src.storage.postgres import AsyncPostgres
+
+    stub_storage = MagicMock()
+    stub_storage.put_object.side_effect = MaxRetryError(
+        pool=None, url="/kb-uploads",
+        reason=ConnectionRefusedError("[Errno 61] Connection refused"),
+    )
+
+    with (
+        patch(
+            "src.api.routes.ingest.build_minio_storage",
+            return_value=stub_storage,
+        ),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
+        patch(
+            "src.api.routes.ingest.process_document.kiq",
+            new=AsyncMock(),
+        ) as kiq,
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("file.txt", b"hello", "text/plain")},
+            )
+
+    assert resp.status_code == 503, resp.text
+    ins.assert_not_awaited()
+    kiq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ingest_requires_filename() -> None:
     from src.api.main import app
 

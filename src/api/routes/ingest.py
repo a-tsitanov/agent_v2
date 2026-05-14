@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from loguru import logger
 from pydantic import BaseModel
 
+from urllib3.exceptions import MaxRetryError
+
 from src.api.auth import require_api_key
 from src.ingestion.tasks import process_document
 from src.storage.minio import S3Error, build_minio_storage
@@ -67,8 +69,16 @@ async def upload_document(
     # in terms of memory profile.
     contents = await file.read()
 
-    storage = build_minio_storage()
+    # Wrap BOTH the storage init (which on cold-start probes the
+    # bucket via `bucket_exists`) AND the actual `put_object` call.
+    # If MinIO is down at process start, the singleton constructor
+    # is the first place that touches the network and raises.
+    # `S3Error` covers protocol-level rejections (auth, missing bucket,
+    # bad key); `MaxRetryError` / `OSError` cover transport failures
+    # when MinIO is fully unreachable (container down, DNS, refused).
+    # Both surface as the same user-visible state: storage unavailable.
     try:
+        storage = build_minio_storage()
         s3_uri = await asyncio.to_thread(
             storage.put_object,
             object_key,
@@ -76,7 +86,7 @@ async def upload_document(
             len(contents),
             file.content_type or "application/octet-stream",
         )
-    except S3Error as exc:
+    except (S3Error, MaxRetryError, OSError) as exc:
         logger.warning(
             "minio upload failed  doc_id={d}  err={e}", d=doc_id, e=exc,
         )
