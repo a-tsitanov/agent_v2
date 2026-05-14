@@ -7,6 +7,25 @@ Two Marp Markdown decks for the project conference talks.
 
 Design spec: `../superpowers/specs/2026-05-14-kb-llamaindex-conf-deck-design.md`.
 
+## Prerequisites
+
+Marp uses Puppeteer to render PDF/PPTX, which needs Chrome, Edge or Firefox.
+
+- **System install (recommended):** install Chrome from <https://www.google.com/chrome/>. No further setup.
+- **Puppeteer-managed Chrome:** if no system browser, run once:
+
+  ```bash
+  npx -y puppeteer browsers install chrome
+  ```
+
+  Then export `CHROME_PATH` to its location before every build, e.g. on macOS arm64:
+
+  ```bash
+  export CHROME_PATH="$HOME/.cache/puppeteer/chrome/mac_arm-148.0.7778.97/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  ```
+
+  (The exact version in the path may differ on your machine — adjust accordingly.)
+
 ## Build
 
 ```bash
