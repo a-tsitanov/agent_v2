@@ -105,6 +105,21 @@ API + taskiq worker, 4 store-а, единый LLM/embed gateway.
 
 ---
 
+# Что НЕ в scope этой версии
+
+Сознательные «нет» — закрывают типичные вопросы на защите:
+
+- **Multi-tenant isolation** — `department` есть в metadata, но enforcement на retrieve не реализован. Следующая итерация.
+- **Streaming responses (SSE)** — синхронный JSON. SSE требует переделки FastAPI слоя.
+- **BM25 + RRF hybrid** — модуль `src.retrieval.hybrid` есть, но в DI не подключён. Нужно решение по docstore.
+- **Periodic graph deduplication** — ER работает on-ingest, кросс-документный alias-merge раз в N часов — отложено.
+- **Document-level summaries** — колонка `documents.summary` зарезервирована, но не используется.
+- **Caching agent tool results** между запросами.
+
+→ источник: `docs/ARCHITECTURE.md` §9.
+
+---
+
 # Ingestion pipeline — 5 шагов
 
 ```text
