@@ -126,3 +126,120 @@ Document file
 → источник: `docs/ARCHITECTURE.md` §3.
 
 ---
+
+# KG extraction: war story
+
+Что было:
+
+- `SchemaLLMPathExtractor` падал с `TypeError` — его Pydantic-validator ловит только `KeyError/ValueError`, а small-LLM эмитят malformed JSON, который кидает `TypeError`.
+- Даже с `is_function_calling_model=True` — llama3.1:8b часто **пропускал** tool-call.
+- Результат: **0 relations в Neo4j**, поймали через `scripts/check_ingestion.py`.
+
+Фикс:
+
+1. Switch на `SimpleLLMPathExtractor` (regex-based, толерантен к шуму).
+2. Замена English stock-prompt (`Alice/Bob/Philz`) на RU B2B example.
+3. **18 entities + 9 typed relations** с 5 строк договора (vs 0 раньше).
+
+→ источник: `CHANGELOG.md` `[post-Stage-9 fixes]`.
+
+---
+
+# LightRAG-style extraction
+
+Один LLM-call на чанк → одновременно сущности **и** отношения.
+
+```text
+input chunk (RU after translate)
+    │
+    ▼
+LLM prompt (system + few-shot RU example)
+    │
+    ▼
+tuple-format output:
+  entity<|#|>ООО Альфа<|#|>Organization<|#|>...
+  entity<|#|>договор № 17-К<|#|>ContractNumber<|#|>...
+  relation<|#|>ООО Альфа<|#|>ИП Иванов<|#|>контрагент<|#|>...
+```
+
+- ~1 call/chunk вместо N (per-entity enricher).
+- Drop-in `TransformComponent` для `IngestionPipeline`.
+- `gleaning_passes=0` (LightRAG default 1) — экономим, R9 eval решит.
+- `num_workers=4` параллелизм при batch-ingest.
+
+→ источник: `src/graph/lightrag_extract.py`, `src/graph/lightrag_prompts.py`.
+
+---
+
+# Cross-chunk merge
+
+Один и тот же entity появляется в 50 чанках → нужно собрать одно описание.
+
+```text
+per-chunk descriptions for "ООО Альфа":
+  chunk #3  "поставщик медоборудования..."
+  chunk #17 "юр.лицо, ИНН 7707..."
+  chunk #42 "договор от 2023-08..."
+    │
+    ▼
+merge rule:
+  • <8 mentions AND <12k chars  → CONCAT (no LLM)
+  • else                         → summarize-LLM call
+    │
+    ▼
+final entity description (RU)
+```
+
+Для relations — pair-key `(src, tgt)` undirected; те же правила.
+
+→ источник: `src/graph/merge.py:merge_kg_extraction`.
+
+---
+
+# Entity Resolution — что vector сам не разрулит
+
+Один и тот же концепт ≠ один и тот же string:
+
+| Variant 1 | Variant 2 | Тип проблемы |
+|---|---|---|
+| `BCC` | `Базальноклеточный Рак` | cross-language |
+| `DNA` | `deoxyribonucleic acid` | abbreviation |
+| `Рак Кожи БК` | `Рак БК Кожи` | word-order / morphology |
+| `Иванов И.И.` | `Иван Иванов` | initialism |
+| canonical из doc 1 | новый вариант из doc 2 | cross-document |
+
+→ только vector-уровня **не хватает**: `BCC` и `Базальноклеточный Рак` embed-аются в разные кластеры.
+
+---
+
+# ER: 12-step pipeline
+
+```text
+[1]  Filter eligible labels (skip 12 identifier types).
+[2]  Load existing canonicals + embeddings from Neo4j.
+[3]  Embed new entities (batched).
+[4]  Deterministic prepass: initialism regex, exact-norm after diacritics.
+[5]  Candidate pairs: same-label top-K cosine ≥ LOW (default 0.55).
+[6]  Auto-merge: cosine ≥ HIGH AND same script (ASCII↔ASCII / Cyr↔Cyr).
+[7]  LLM-judge borderline: batched 10 pairs, JSON YES/NO/UNSURE.
+[8]  Union-find → connected components.
+[9]  Verify large clusters (≥ max_cluster_size) via 1 LLM call.
+[10] Hyper-hub clamp: clusters ≥ threshold → flag `er_review_needed`.
+[11] Pick canonical, consolidate descriptions.
+[12] Rewrite chunk-level KG_NODES_KEY metadata + merged_relations.
+```
+
+→ источник: `src/graph/entity_resolution.py` docstring.
+
+---
+
+# ER: трейдоффы
+
+- **Conservative default.** На таймауте / parse failure → **DIFFERENT**. Лучше FN, чем FP — false merge порчит граф.
+- **12 типов skip.** Email, PhoneNumber, INN, OGRN, BIC, BankAccount, ContractNumber, OrderNumber, InvoiceNumber, DocumentDate, Amount, PostalAddress — у них уже детерминированный canonical из `identifiers.py`. Эти ER не трогает.
+- **Cross-script → всегда LLM.** Кириллица ↔ латиница никогда не auto-merge даже при cosine ≥ HIGH.
+- **Hyper-hub clamp.** Если кластер вышел больше threshold (например, 30+) — auto-merge выключается, кластер маркируется на review.
+
+Принцип: лучше пара дубликатов в графе, чем хороший entity, склеенный с плохим.
+
+---
