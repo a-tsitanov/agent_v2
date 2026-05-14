@@ -243,3 +243,110 @@ final entity description (RU)
 Принцип: лучше пара дубликатов в графе, чем хороший entity, склеенный с плохим.
 
 ---
+
+# Три endpoint-а: обзор
+
+| Endpoint | Outer loop | LLM calls | Latency (gpt-4o-mini) | Когда брать |
+|---|---|---|---|---|
+| `/search` | none | **1** | 5–20 s | latency важнее качества |
+| `/agent` | ReAct (max 8) | 3–8 | 20–90 s | multi-hop / нужно «походить по графу» |
+| `/selfrag` | ReAct + reflective | 4–12 | 30–120 s | regulated / нужны цитаты per claim |
+| `/legacy/agent` | judge-loop (max 3) | 6–15 | 60–180 s | baseline для eval |
+
+Все четыре делят один retrieval-стек: Milvus + опц. Neo4j + `ChunkRepository`.
+
+→ источник: `docs/QUERY.md` Overview.
+
+---
+
+# `/search` — baseline
+
+```text
+POST /api/v1/search { "query": "..." }
+    │
+    ▼
+retriever.aretrieve(query)
+    → Milvus top-k=10 (cosine, original-language text + metadata)
+    │
+    ▼
+synthesizer.asynthesize(ru_query, nodes)
+    → COMPACT mode: stuff nodes в один prompt, 1 LLM call
+    │
+    ▼
+SearchResponse(answer, sources=[full chunks], latency_ms)
+```
+
+- 1 LLM call. Никаких рефайнментов.
+- RU-вывод гарантирован через query-wrapper «Ответь на русском …».
+- Sources возвращаются **полным** chunk text — для UI цитаты.
+
+---
+
+# `/agent` — ReAct loop
+
+8 tools:
+
+```text
+vector_search(query, top_k)            ← top-k Milvus, appends to accumulated_sources
+graph_search(query, depth=2)           ← Neo4j entity+relation lookup
+find_entity_by_id(name, entity_type)   ← exact match
+find_neighbours(entity_name, hops=1)   ← 1-2 hop walk
+filter_by_metadata(doc_id, dept, ...)  ← scope already-fetched context
+get_chunks_by_doc_id(doc_id, lim, off) ← все чанки одного документа
+read_full_document(doc_id, max_chars)  ← raw uploaded file pre-chunk
+submit_answer(query_recap, src_ids)    ← триггерит синтезатор
+```
+
+Anti-loop guard: 3 идентичных `(tool, args)` подряд → exit. Защита от бесконечных циклов на «unanswerable» вопросах.
+
+Типичные паттерны:
+
+- `vector_search → submit_answer` — простой факт.
+- `vector_search → graph_search → submit_answer` — multi-hop.
+- `vector_search → get_chunks_by_doc_id → submit_answer` — «весь тред».
+- `vector_search → read_full_document → submit_answer` — точная цитата.
+
+---
+
+# `/selfrag` — reflective synthesis
+
+Тот же ReAct снаружи, но `submit_answer` → не plain synth, а reflective loop:
+
+```text
+for round_i in 0..max_refinements (default 3):
+    draft = await llm.achat(prompt_with_marker_rules + context)
+    needs, supports, uncertains = parse_markers(draft)
+       [NEED:что не хватает]     ← regex
+       [SUPPORTED:chunk_id]      ← regex
+       [UNCERTAIN:причина]       ← regex
+
+    if not needs OR round_i >= max_refinements:
+        break
+
+    for need in needs[:5]:
+        extra = await retriever.aretrieve(need.topic)
+        accumulated.extend(extra)
+    # next round: redraft with expanded context
+
+final = strip_markers(draft, keep_uncertain=True)
+```
+
+- `[NEED]` → re-retrieve и redraft.
+- `[SUPPORTED:id]` → claim привязан к chunk_id (citation).
+- `[UNCERTAIN:...]` → остаётся в финальном ответе, не галлюцинация.
+
+Цена: 2× latency vs `/agent`. Берём только когда нужны цитаты per claim.
+
+---
+
+# Russian-output guarantee
+
+3 независимых enforcement-точки — ответ всегда на русском, даже если корпус EN:
+
+1. **Ingest**: `TranslateToRussianTransform` → `node.metadata['translated_text']`. LightRAG extractor читает оттуда → entity names + descriptions попадают в Neo4j на русском.
+2. **System prompts** в `react_agent.py` и `reflective_synth.py` hard-code «WRITE YOUR ANSWER IN RUSSIAN».
+3. **Plain /search** — query-wrapper «Ответь на следующий вопрос на русском, сохраняя имена собственные …» перед LlamaIndex synthesizer-ом.
+
+Source chunks хранятся **в оригинальном языке** в Milvus и возвращаются в `sources[].content` для UI — ответ читается на RU, цитаты в source language.
+
+---
