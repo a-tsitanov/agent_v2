@@ -8,6 +8,8 @@ task and return ``202 Accepted`` with the job id.  The worker
 
 from __future__ import annotations
 
+import asyncio
+import io
 import uuid
 from pathlib import Path
 
@@ -17,8 +19,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 from src.api.auth import require_api_key
-from src.config import settings
 from src.ingestion.tasks import process_document
+from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
 
 router = APIRouter(tags=["ingestion"])
@@ -55,27 +57,48 @@ async def upload_document(
         raise HTTPException(400, "filename required")
 
     doc_id = uuid.uuid4()
-    upload_dir = Path(settings.api.upload_dir)
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    target = upload_dir / f"{doc_id}_{file.filename}"
+    # Object key keeps the original filename so the worker can pick the
+    # right SimpleDirectoryReader extension handler after download.
+    object_key = f"{doc_id}/{file.filename}"
 
-    # Stream-save to avoid loading large PDFs into memory.
+    # Read the full body into memory.  Large PDFs (~hundreds of MB)
+    # should arrive via presigned URLs in a future iteration; the
+    # synchronous path here matches the previous local-disk behaviour
+    # in terms of memory profile.
     contents = await file.read()
-    target.write_bytes(contents)
 
-    doc_type = target.suffix.lstrip(".").lower()
+    storage = build_minio_storage()
+    try:
+        s3_uri = await asyncio.to_thread(
+            storage.put_object,
+            object_key,
+            io.BytesIO(contents),
+            len(contents),
+            file.content_type or "application/octet-stream",
+        )
+    except S3Error as exc:
+        logger.warning(
+            "minio upload failed  doc_id={d}  err={e}", d=doc_id, e=exc,
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "upload storage unavailable",
+        ) from exc
+
+    doc_type = Path(file.filename).suffix.lstrip(".").lower()
     await pg.insert_pending(
-        doc_id, str(target), department=department, doc_type=doc_type,
+        doc_id, s3_uri, department=department, doc_type=doc_type,
     )
 
     # Push the actual processing onto RabbitMQ.  The taskiq broker is
     # started in `src/api/main.py` lifespan; the worker process
     # (``taskiq worker src.ingestion.tasks:broker``) consumes from
-    # the same queue and runs ``process_document`` end-to-end.
-    await process_document.kiq(str(doc_id), str(target))
+    # the same queue and runs ``process_document`` end-to-end.  Worker
+    # detects the s3:// prefix and downloads the object before reading.
+    await process_document.kiq(str(doc_id), s3_uri)
     logger.info(
         "ingest enqueued  doc_id={d}  path={p}  dept={dept}",
-        d=doc_id, p=str(target), dept=department,
+        d=doc_id, p=s3_uri, dept=department,
     )
     return IngestEnqueuedResponse(job_id=doc_id)
 

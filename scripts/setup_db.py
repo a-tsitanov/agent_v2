@@ -88,6 +88,22 @@ def setup_milvus() -> None:
         client.close()
 
 
+# ── MinIO ────────────────────────────────────────────────────────────
+
+
+def setup_minio() -> None:
+    """Ensure the user-upload bucket exists.  Same MinIO instance the
+    Milvus backend uses; this just adds an extra bucket alongside it.
+    """
+    from src.storage.minio import build_minio_storage
+
+    mn = settings.minio
+    logger.info("minio bucket  endpoint={e}  bucket={b}", e=mn.endpoint, b=mn.bucket)
+    storage = build_minio_storage()
+    storage.ensure_bucket()
+    logger.info("minio bucket  done")
+
+
 # ── entry point ──────────────────────────────────────────────────────
 
 
@@ -95,6 +111,7 @@ def main() -> None:
     configure_logging(level=settings.api.log_level, json_output=False)
     setup_postgres()
     setup_milvus()
+    setup_minio()
     logger.info("setup_db  all done")
 
 

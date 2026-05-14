@@ -32,6 +32,7 @@ dependencies = [
     "psycopg[binary]>=3.2,<4",
     "pymilvus>=2.4,<3",
     "neo4j>=5.27,<7",
+    "minio>=7.2,<8",
 
     # DI + config + logging
     "dishka>=1.5,<2",

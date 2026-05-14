@@ -15,6 +15,7 @@ Run::
 from __future__ import annotations
 
 import asyncio
+import shutil
 import uuid
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from src.retrieval.vector_index import (
     build_vector_store,
     index_nodes,
 )
+from src.storage.minio import build_minio_storage
 from src.storage.postgres import AsyncPostgres
 
 broker = AioPikaBroker(settings.rabbitmq.url)
@@ -70,6 +72,108 @@ _PRESERVE_METADATA_KEYS: frozenset[str] = frozenset({
     KG_NODES_KEY,
     KG_RELATIONS_KEY,
 })
+
+# Milvus serialises the whole node (including `metadata`) into a
+# `_node_content` dynamic VARCHAR field capped at 65535 chars.
+# `canonical_identifiers` (list[dict] with `original` + `span`) on
+# identifier-dense documents (contact pages, financial reports) and
+# `translated_text` (per-chunk RU slice) routinely push us over.
+# Both are needed AFTER Milvus write (inject_canonical_entities reads
+# `canonical_identifiers`; LightRAG reads `translated_text`), so we
+# snapshot-strip-restore around the insert call instead of dropping
+# them permanently.
+_MILVUS_DROP_KEYS: frozenset[str] = frozenset({
+    "canonical_identifiers",
+    "translated_text",
+})
+
+# Hard upper bound on a single chunk's serialised metadata.  Below the
+# Milvus 65535 hard limit so we still have headroom for the rest of
+# `_node_content` (text, embeddings indirection, relationships).
+_MILVUS_METADATA_WARN_BYTES = 30_000
+
+
+def _snapshot_metadata(nodes, keys: frozenset[str]) -> list[dict]:
+    """Pop `keys` off each node.metadata; return per-node snapshots."""
+    snaps: list[dict] = []
+    for n in nodes:
+        md = getattr(n, "metadata", None)
+        snap: dict = {}
+        if md:
+            for k in list(md.keys()):
+                if k in keys:
+                    snap[k] = md.pop(k)
+        snaps.append(snap)
+    return snaps
+
+
+def _restore_metadata(nodes, snaps: list[dict]) -> None:
+    for n, snap in zip(nodes, snaps):
+        if not snap:
+            continue
+        md = getattr(n, "metadata", None)
+        if md is None:
+            n.metadata = snap
+        else:
+            md.update(snap)
+
+
+async def _resolve_source_path(
+    doc_id: str, path: str,
+) -> tuple[Path, Path | None]:
+    """Turn a Postgres-stored `documents.path` into a local file.
+
+    Returns ``(target, cleanup_dir)``:
+      * ``target`` — concrete file on disk the pipeline can read.
+      * ``cleanup_dir`` — directory to `rmtree` after the task finishes,
+        or ``None`` if we read straight from the original location.
+
+    Two schemes are supported:
+      * ``s3://<bucket>/<key>`` — modern uploads.  Downloaded into
+        ``MINIO_DOWNLOAD_DIR/<doc_id>/<filename>`` so the existing
+        ``read_documents(Path)`` flow stays unchanged.
+      * Bare filesystem paths — legacy ``/tmp/kb-uploads/...`` records
+        that were ingested before the MinIO migration.  Passed through
+        verbatim; nothing to clean up afterwards.
+    """
+    if not path.startswith("s3://"):
+        return Path(path), None
+    storage = build_minio_storage()
+    _, key = storage.parse_s3_uri(path)
+    filename = Path(key).name
+    target = storage.download_dir / doc_id / filename
+    cleanup_dir = target.parent
+    await asyncio.to_thread(storage.get_object_to_path, path, target)
+    logger.info(
+        "minio download  doc_id={d}  s3={p}  local={t}",
+        d=doc_id, p=path, t=target,
+    )
+    return target, cleanup_dir
+
+
+def _warn_oversized_milvus_metadata(nodes) -> None:
+    """Log a warning for any chunk whose stripped metadata still risks
+    overflowing Milvus's 65k dynamic-field cap.  Helps pinpoint the
+    offending key when a new pipeline transform adds bulk we didn't
+    anticipate."""
+    import json as _json
+    for n in nodes:
+        md = getattr(n, "metadata", None) or {}
+        try:
+            size = len(_json.dumps(md, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            continue
+        if size > _MILVUS_METADATA_WARN_BYTES:
+            biggest = sorted(
+                ((k, len(_json.dumps(v, ensure_ascii=False, default=str)))
+                 for k, v in md.items()),
+                key=lambda kv: -kv[1],
+            )[:3]
+            logger.warning(
+                "milvus metadata oversized  node={n}  total_bytes={s}  "
+                "top_keys={t}",
+                n=getattr(n, "node_id", "?"), s=size, t=biggest,
+            )
 
 
 def _is_neo4j_safe(value):
@@ -304,10 +408,11 @@ async def process_document(doc_id: str, path: str) -> None:
     doesn't block the vector-only path from completing.
     """
     pg = AsyncPostgres()
-    target = Path(path)
     job_uuid = uuid.UUID(doc_id)
     llm = build_llm()
     embed_model = build_embedding_model()
+
+    target, cleanup_dir = await _resolve_source_path(doc_id, path)
 
     try:
         await pg.update_status(job_uuid, status="processing")
@@ -360,7 +465,15 @@ async def process_document(doc_id: str, path: str) -> None:
         # 2. vector indexing
         store = build_vector_store()
         index = build_vector_index(store, embed_model)
-        index_nodes(index, nodes)
+        # Strip bulky metadata that Milvus would reject (65k dynamic-
+        # field cap) but downstream graph build still needs.  Snapshot
+        # first, restore after insert.
+        _milvus_snaps = _snapshot_metadata(nodes, _MILVUS_DROP_KEYS)
+        _warn_oversized_milvus_metadata(nodes)
+        try:
+            index_nodes(index, nodes)
+        finally:
+            _restore_metadata(nodes, _milvus_snaps)
 
         # 3-5. graph build — best-effort
         try:
@@ -470,3 +583,11 @@ async def process_document(doc_id: str, path: str) -> None:
     except Exception as exc:  # noqa: BLE001 — surface to client
         logger.exception("ingestion failed  doc_id={d}", d=doc_id)
         await pg.update_status(job_uuid, status="failed", error=str(exc))
+    finally:
+        # Remove the local copy of a MinIO-staged upload regardless of
+        # ingest outcome.  The object itself stays in the bucket as an
+        # immutable record; only the disk cache needs cleanup.  Legacy
+        # `/tmp/kb-uploads/...` paths are left alone — they're outside
+        # our staging dir and may still be reachable from other docs.
+        if cleanup_dir is not None and cleanup_dir.exists():
+            shutil.rmtree(cleanup_dir, ignore_errors=True)

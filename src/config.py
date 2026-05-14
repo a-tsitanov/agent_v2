@@ -130,6 +130,31 @@ class RabbitMQSettings(BaseSettings):
     timeout_s: float = 10.0
 
 
+class MinioSettings(BaseSettings):
+    """S3-compatible upload storage.
+
+    User uploads land in `bucket` synchronously from the ingest
+    endpoint; the worker downloads them to `download_dir` before
+    feeding them to the pipeline and cleans up the local copy after
+    ingestion completes.  Same MinIO instance as the Milvus backend
+    by default — only the bucket is separate.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MINIO_", env_file=".env", extra="ignore"
+    )
+
+    endpoint: str = "localhost:9000"
+    access_key: SecretStr = SecretStr("minioadmin")
+    secret_key: SecretStr = SecretStr("minioadmin")
+    bucket: str = "kb-uploads"
+    secure: bool = False
+    region: str = "us-east-1"
+    # Where the worker stages downloaded files before processing.
+    # Removed after each `process_document` call.
+    download_dir: str = "/tmp/kb-cache"
+
+
 class IngestionSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="INGESTION_", env_file=".env", extra="ignore"
@@ -260,6 +285,10 @@ class Settings(BaseSettings):
         return RabbitMQSettings()
 
     @cached_property
+    def minio(self) -> MinioSettings:
+        return MinioSettings()
+
+    @cached_property
     def ingestion(self) -> IngestionSettings:
         return IngestionSettings()
 
@@ -277,6 +306,7 @@ __all__ = [
     "IngestionSettings",
     "LiteLLMSettings",
     "MilvusSettings",
+    "MinioSettings",
     "Neo4jSettings",
     "PostgresSettings",
     "RabbitMQSettings",
