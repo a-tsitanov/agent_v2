@@ -48,7 +48,7 @@ conditions, RAGAS-eval.
 | # | Слайд | Содержание |
 |---|---|---|
 | 1 | **Cover** | Название, конференция/команда, дата, спикер |
-| 2 | **Hook: один вопрос — три ответа** | Teaser — какой правильный и почему держим все три |
+| 2 | **Hook: один вопрос — три ответа** | Teaser — какой правильный и почему держим все три. **Без live-demo** (визуальный мокап «one query → three answers side-by-side» в самом слайде) |
 | 3 | **Контекст: enterprise corpus** | Multilingual, договоры, медзаписи, e-mail треды, идентификаторы (ИНН/ОГРН/телефоны) |
 | 4 | **Почему generic RAG ломается** | 4 pain-points: язык, KG extraction на small-LLM, ER, доверие к ответу |
 | 5 | **Архитектура (one-pager)** | ASCII-схема из `docs/ARCHITECTURE.md` (API + worker + 4 store-а + LiteLLM gateway) |
@@ -80,14 +80,14 @@ conditions, RAGAS-eval.
 
 | # | Версия A (tech/ML) | Версия D (внутренняя защита) |
 |---|---|---|
-| **2** | Hook: live-demo teaser — «ща покажу один query → три ответа» | Hook: «Что мы сдаём по итогам R1–R10 — три endpoint-а в одном API» |
+| **2** | Hook: визуальный мокап «один query → три ответа side-by-side» (статика, без live-demo) | Hook: «Что мы сдаём по итогам R1–R10 — три endpoint-а в одном API» |
 | **3** | Контекст обобщённый — multilingual RAG для enterprise corpus | Контекст уточнённый: какие именно наши документы (отделы, типы), сколько в проде, объём |
 | **6.5** *(только D)* | — | **Что НЕ в scope** — multi-tenant, streaming, BM25 wiring, periodic dedup, document-level summary (закрывает типичный вопрос «а вот ещё бы…») |
 | **8** | War story жирно: код-сниппет `TypeError` от `SchemaLLMExtractor`, скрин 0 relations в Neo4j → fix | Та же история, но короче — фокус на том, как поймали (eval gate + diag-scripts) |
 | **9** | LightRAG few-shot prompt — **показать сам RU-промпт** и output tuple-format | LightRAG без полного промпта — вместо этого слайд про cost ownership (1200 calls = во что обходится re-ingest) |
 | **17** | `/selfrag` глубоко: regex маркеров, `parse_markers`, почему DIFFERENT-default | `/selfrag` короче, но добавлено «когда включать в проде» (compliance / medical / legal) |
 | **21** | Lessons learned (tech): (1) tool-calling reliability — главный фильтр выбора модели; (2) ER conservative = лучше FN чем FP; (3) graph as augmentation, не blocking; (4) русский в промпте важнее качества модели на small-LLM | Lessons learned (process): (1) почему 9-stage build + R1–R10 refactor; (2) eval gate как договор с заказчиком; (3) что НЕ делаем; (4) on-prem-first как сознательное решение |
-| **22** | Roadmap: open research — incremental ER race, phantom phone-chunks, claim-level citations; финал — **live-demo** через три endpoint-а (опционально) | Status R1–R10 как табло: зелёное / в работе / парковано; risks + следующая итерация (slide-only, без demo) |
+| **22** | Roadmap: open research — incremental ER race, phantom phone-chunks, claim-level citations. Без live-demo. | Status R1–R10 как табло: зелёное / в работе / парковано; risks + следующая итерация (slide-only, без demo) |
 
 ## 5. Marp / файловая структура
 
@@ -139,8 +139,9 @@ npx @marp-team/marp-cli -w docs/presentation/kb-llamaindex-conf-A.md
   код-сниппет на слайд. Никаких walls-of-text.
 - Code-блоки через highlight.js (Python / bash / YAML).
 - ASCII-диаграммы — `<pre>` без подсветки, fit-content через CSS.
-- Speaker notes (`<!-- ... -->`) **обязательны в версии D**;
-  желательны в версии A для подстраховки.
+- Speaker notes (`<!-- ... -->`) в версии D — **тезисы по одной
+  строке на каждый bullet слайда**, не полный текст. В версии A
+  speaker-notes не пишем.
 
 ## 6. Источники фактов (что в репо ↔ что на слайдах)
 
@@ -180,18 +181,21 @@ implementation phase.
 - Не делаем reveal.js / PPTX как первичный формат. Marp Markdown
   → CLI экспорт в нужный формат по запросу.
 
-## 8. Открытые вопросы (на implementation)
+## 8. Открытые вопросы — закрыты 2026-05-14
 
-Эти решения откладываются до момента написания самих слайдов:
-
-1. **Конкретные имена конференции и спикера** для слайдов 1/2 —
-   placeholder до уточнения.
-2. **Live-demo в слайде 22 (версия A)** — оставить как
-   опциональный «если технически возможно» или вырезать заранее?
-3. **Speaker-notes в версии D** — насколько подробно (тезисы по
-   одной строке vs полный текст)?
-4. **Анонимизированные примеры из реальных данных** на слайде 4
-   (pain) — есть ли что-то non-confidential, что можно показать?
+1. **Имена конференции и спикера** на слайдах 1/2 →
+   **placeholder-ы** `<conference>`, `<speaker>`. Не блокирующее,
+   подставится перед сдачей.
+2. **Live-demo в слайде 22 (A)** → **не делаем**. Слайд 22 (A) =
+   roadmap / open research, без demo-секции.
+   Hook (слайд 2 в обеих версиях) — статический визуальный мокап
+   «один query → три ответа side-by-side», тоже без демо.
+3. **Speaker-notes в версии D** → **тезисы по одной строке на
+   каждый bullet** слайда. В версии A — не пишем.
+4. **Анонимизированные примеры реальных данных** на слайде 4
+   (pain) → **не используем**. Pain-points формулируем
+   обобщённо («multilingual», «small-LLM tool-calling reliability»
+   и т.п.) без конкретных кейсов.
 
 ## 9. Спецификация принята когда
 
