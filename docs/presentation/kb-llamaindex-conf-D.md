@@ -144,47 +144,43 @@ Document file
 
 ---
 
-# KG extraction: war story
+# KG extraction — как поймали скрытый баг
 
-Что было:
+Проблема: KG-extraction работал «по логам», но **в Neo4j 0 relations**.
 
-- `SchemaLLMPathExtractor` падал с `TypeError` — его Pydantic-validator ловит только `KeyError/ValueError`, а small-LLM эмитят malformed JSON, который кидает `TypeError`.
-- Даже с `is_function_calling_model=True` — llama3.1:8b часто **пропускал** tool-call.
-- Результат: **0 relations в Neo4j**, поймали через `scripts/check_ingestion.py`.
+Как поймали:
+- `scripts/check_ingestion.py` — diagnostic над PG + Milvus + Neo4j — показал 0 relations.
+- `scripts/diag_kg.py` — hard-coded chunk → extractor вернул пустой результат.
 
-Фикс:
+Что было сломано:
+- `SchemaLLMPathExtractor` не толерантен к шуму на small-LLM.
+- Стоковый prompt с `Alice/Bob/Philz` мешал русским моделям.
 
-1. Switch на `SimpleLLMPathExtractor` (regex-based, толерантен к шуму).
-2. Замена English stock-prompt (`Alice/Bob/Philz`) на RU B2B example.
-3. **18 entities + 9 typed relations** с 5 строк договора (vs 0 раньше).
+Фикс: `SimpleLLMPathExtractor` + RU few-shot → **18 entities + 9 relations** на тестовом договоре.
 
-→ источник: `CHANGELOG.md` `[post-Stage-9 fixes]`.
+**Урок:** end-to-end diagnostic важнее unit-теста. Compose-уровневые `diag_*` script-ы — стандарт.
 
 ---
 
-# LightRAG-style extraction
+# Cost ownership — что стоит re-ingest
 
-Один LLM-call на чанк → одновременно сущности **и** отношения.
+1 MB English corpus / 514 chunks:
 
-```text
-input chunk (RU after translate)
-    │
-    ▼
-LLM prompt (system + few-shot RU example)
-    │
-    ▼
-tuple-format output:
-  entity<|#|>ООО Альфа<|#|>Organization<|#|>...
-  entity<|#|>договор № 17-К<|#|>ContractNumber<|#|>...
-  relation<|#|>ООО Альфа<|#|>ИП Иванов<|#|>контрагент<|#|>...
-```
+| Шаг | LLM calls | Доля |
+|---|---|---|
+| Translate to Russian | ~514 | 43% |
+| LightRAG extract | ~514 | 43% |
+| Cross-chunk merge summary | 100–150 | 12% |
+| Entity description (embed) | ~2 500 | (не LLM) |
+| **Total chat calls** | **~1 200** | |
 
-- ~1 call/chunk вместо N (per-entity enricher).
-- Drop-in `TransformComponent` для `IngestionPipeline`.
-- `gleaning_passes=0` (LightRAG default 1) — экономим, R9 eval решит.
-- `num_workers=4` параллелизм при batch-ingest.
+Wall time: **15–25 min** на gpt-4o-mini.
 
-→ источник: `src/graph/lightrag_extract.py`, `src/graph/lightrag_prompts.py`.
+Контроль:
+- `INGESTION_TRANSLATE_TO_RUSSIAN=false` → ~500 calls долой, граф остаётся в source language.
+- Re-ingest корпуса повторно при смене embed-модели обязателен — `MILVUS_DIM` должен совпадать.
+
+LightRAG-style extract = 1 call/chunk (детали в репо: `src/graph/lightrag_extract.py`).
 
 ---
 
@@ -325,34 +321,24 @@ Anti-loop guard: 3 идентичных `(tool, args)` подряд → exit. З
 
 ---
 
-# `/selfrag` — reflective synthesis
+# `/selfrag` — когда оно нужно в проде
 
-Тот же ReAct снаружи, но `submit_answer` → не plain synth, а reflective loop:
+Алгоритм: ReAct снаружи + reflective draft с маркерами `[NEED]/[SUPPORTED]/[UNCERTAIN]` внутри. Re-retrieve по `[NEED]`, max 3 refinements.
 
-```text
-for round_i in 0..max_refinements (default 3):
-    draft = await llm.achat(prompt_with_marker_rules + context)
-    needs, supports, uncertains = parse_markers(draft)
-       [NEED:что не хватает]     ← regex
-       [SUPPORTED:chunk_id]      ← regex
-       [UNCERTAIN:причина]       ← regex
+**Включаем в проде когда:**
 
-    if not needs OR round_i >= max_refinements:
-        break
+- **Regulated / medical / legal** — ответ должен быть проверяемым по claim.
+- **Audit trail** — нужны цитаты per утверждение, не общий список sources.
+- **High-stakes decisions** — лучше «UNCERTAIN», чем галлюцинация.
 
-    for need in needs[:5]:
-        extra = await retriever.aretrieve(need.topic)
-        accumulated.extend(extra)
-    # next round: redraft with expanded context
+**Не включаем когда:**
 
-final = strip_markers(draft, keep_uncertain=True)
-```
+- Plain factoid Q&A — `/agent` достаточно за половину latency.
+- High-throughput batch search — 30–120 s/запрос неприемлемо.
 
-- `[NEED]` → re-retrieve и redraft.
-- `[SUPPORTED:id]` → claim привязан к chunk_id (citation).
-- `[UNCERTAIN:...]` → остаётся в финальном ответе, не галлюцинация.
+Цена: **2× latency vs `/agent`**, +30–50% LLM calls.
 
-Цена: 2× latency vs `/agent`. Берём только когда нужны цитаты per claim.
+Детали алгоритма + regex маркеров — в репо: `src/retrieval/reflective_synth.py`.
 
 ---
 
