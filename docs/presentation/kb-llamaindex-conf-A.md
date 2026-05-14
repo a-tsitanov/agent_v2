@@ -350,3 +350,86 @@ final = strip_markers(draft, keep_uncertain=True)
 Source chunks хранятся **в оригинальном языке** в Milvus и возвращаются в `sources[].content` для UI — ответ читается на RU, цитаты в source language.
 
 ---
+
+# Cost / latency — реальные числа
+
+Re-ingest **1 MB English corpus, ~514 chunks**:
+
+| Шаг | LLM calls |
+|---|---|
+| Translate to Russian | ~514 |
+| LightRAG extract | ~514 |
+| Cross-chunk merge summary (≥8 occurrences) | 100–150 |
+| Entity description embeddings | ~2 500 (embed, not LLM) |
+| **Total LLM chat calls** | **~1 200** |
+| Wall time on gpt-4o-mini | **15–25 min** |
+
+Per-query stoимость:
+
+- `/search` — 1 LLM call.
+- `/agent` — 3 (reasoning) + 1 (synth) = **4** для multi-hop.
+- `/selfrag` — 4–12 в зависимости от глубины refinements.
+
+→ источник: `docs/ARCHITECTURE.md` Re-ingest cost table.
+
+---
+
+# Observability + Eval gate
+
+**Trace per request** через `trace_request(endpoint, query)` context-manager (`src/observability/trace.py`):
+
+```text
+record_event("tool_call",   tool_name="vector_search")
+record_event("llm_call",    kind="agent_reasoning")
+record_event("refinement_round", round=0, needs=2)
+record_timed(name, **payload)
+   ↓
+trace done  endpoint=agent  rid=ab12cd
+  n_tool_calls=3  n_llm_calls=5  n_refinements=0
+  total_ms=24300.2
+  tool_breakdown={vector_search:1, graph_search:1, submit_answer:1}
+```
+
+ContextVar-scoped → concurrent requests не пересекаются.
+
+**Eval gate:**
+
+- **287 тестов** (`pytest --collect-only -q`).
+- `tests/eval/identifier_recall.py` — 7 golden cases, thresholds: phone/email/INN/OGRN/BIC ≥ 0.95, contract/amount ≥ 0.85, address ≥ 0.75, precision ≥ 0.90.
+- `tests/eval/answer_quality.py` (R9) — deterministic offline grader: fact recall, entity recall, citation precision, hallucination upper bound, uncertainty honesty.
+
+---
+
+# Lessons learned (technical)
+
+1. **Tool-calling reliability — главный фильтр выбора модели.** Качество reasoning важно, но если модель пропускает tool-call в 20% случаев — весь agent ломается. qwen3:8b > llama3.1:8b ровно по этому критерию.
+
+2. **ER должен быть consciously consérvative.** Дефолт на DIFFERENT при таймауте, cross-script всегда через LLM, hyper-hub clamp. Один false merge порочит весь граф; пара дубликатов — нет.
+
+3. **Graph as augmentation, не blocking.** Neo4j падает → vector index всё ещё работает, `/search` отвечает. Ingestion graph-step wrap-нут в try/except, ошибка в `documents.error` поле.
+
+4. **Русский в промпте важнее качества модели на small-LLM.** Замена стокового `Alice/Bob/Philz` на B2B-пример с `ООО Альфа → договор № 17-К → ИП Иванов` сдвинула llama3.1:8b с 0 relations на 18 entities + 9 typed relations.
+
+---
+
+# Roadmap & open research
+
+**Что работает в проде:**
+- 9-stage прототип сдан 2026-05-09, R1 (qwen3:8b migration) закрыт.
+
+**В работе (R2–R10):**
+- R2 — function calling + structured output cleanup.
+- R3 — universal entity types + rich descriptions.
+- R4 — DI hygiene + 3-endpoint split.
+- R5–R6 — ≥115 тестов + ARCHITECTURE/MODELS docs.
+- R7–R8 — ReAct + reflective synthesis (этот доклад).
+- R9 — answer-quality eval over multi-domain golden Q&A.
+- R10 — decommission legacy judge-based path.
+
+**Open research / known unknowns:**
+- **Incremental ER race** — параллельный ingest двух документов может «увидеть» друг друга на разных стадиях canonicalization.
+- **Phantom phone-chunks** — `_consolidate_phone_entities` оставляет orphan chunks после merge.
+- **Claim-level citations** — сейчас citation = chunk_id; span-внутри-chunk остаётся UI-задачей.
+- **Multi-tenant isolation** — `department` flow-ит через metadata, но enforcement на retrieve-уровне ещё не сделан.
+
+Спасибо. Вопросы?
