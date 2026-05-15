@@ -35,3 +35,7 @@ research/
 docs/presentation/*.pdf
 docs/presentation/*.pptx
 docs/presentation/*.html
+
+# Git worktrees (non-hidden name so LlamaIndex SimpleDirectoryReader
+# doesn't skip fixtures under it as "hidden").
+worktrees/
