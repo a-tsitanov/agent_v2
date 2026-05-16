@@ -7,7 +7,7 @@ Stage 1 scope:
     by ``llama_index.vector_stores.milvus.MilvusVectorStore`` on
     first insert (Stage 3).
 
-Neo4j and RabbitMQ provisioning land in later stages.
+Neo4j provisioning lands in later stages.
 
 Usage::
 

@@ -19,7 +19,7 @@ case "${1:-up}" in
     echo "  MinIO       → http://localhost:9001 (minioadmin / minioadmin)"
     echo "  Postgres    → localhost:5432 (postgres / postgres)"
     echo "  Neo4j       → http://localhost:7474 (neo4j / changeme)"
-    echo "  RabbitMQ    → http://localhost:15672 (guest / guest)"
+    echo "  Temporal    → http://localhost:8080 (UI), localhost:7233 (gRPC)"
     echo "  LiteLLM     → http://localhost:4000"
     echo
     echo "Make sure Ollama is running on the host with required models:"

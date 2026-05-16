@@ -4,7 +4,6 @@ Pings every storage backend in turn:
   * Postgres — count + status breakdown of `documents` rows.
   * Milvus   — collection stats.
   * Neo4j    — entity/relationship counts (when reachable).
-  * RabbitMQ — queue depth (when reachable).
 
 Usage::
 
