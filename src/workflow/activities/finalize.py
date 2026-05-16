@@ -1,0 +1,60 @@
+"""`finalize` (success path) and `mark_failed` (workflow-level
+on-failure) — write Postgres terminal status + cleanup MinIO staging
++ remove local download dir.
+"""
+
+from __future__ import annotations
+
+import shutil
+import uuid
+from pathlib import Path
+
+from loguru import logger
+from temporalio import activity
+
+from src.storage.postgres import AsyncPostgres
+from src.workflow.contracts import FinalizeIn, IngestResult, MarkFailedIn
+from src.workflow.staging import build_staging_store
+
+
+def _rmtree(path: str | None) -> None:
+    if not path:
+        return
+    p = Path(path)
+    if p.exists():
+        shutil.rmtree(p, ignore_errors=True)
+
+
+@activity.defn
+async def finalize(payload: FinalizeIn) -> IngestResult:
+    pg = AsyncPostgres()
+    await pg.update_status(
+        uuid.UUID(payload.ctx.doc_id), status=payload.graph_status,
+    )
+    staging = build_staging_store()
+    staging.delete_prefix(payload.ctx.workflow_run_id)
+    _rmtree(payload.ctx.cleanup_dir)
+    logger.info(
+        "finalize  doc={d}  status={s}  chunks={c}",
+        d=payload.ctx.doc_id, s=payload.graph_status,
+        c=payload.indexed.count,
+    )
+    return IngestResult(
+        doc_id=payload.ctx.doc_id,
+        chunk_count=payload.indexed.count,
+        graph_status=payload.graph_status,
+    )
+
+
+@activity.defn
+async def mark_failed(payload: MarkFailedIn) -> None:
+    doc_id = payload.ctx.doc_id if payload.ctx else payload.params.doc_id
+    pg = AsyncPostgres()
+    await pg.update_status(uuid.UUID(doc_id), status="failed", error=payload.error)
+    staging = build_staging_store()
+    if payload.ctx:
+        staging.delete_prefix(payload.ctx.workflow_run_id)
+        _rmtree(payload.ctx.cleanup_dir)
+    logger.warning(
+        "mark_failed  doc={d}  error={e}", d=doc_id, e=payload.error,
+    )
