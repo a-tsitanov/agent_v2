@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS documents (
     department   TEXT DEFAULT '',
     doc_type     TEXT DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'pending'
-                 CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+                 CHECK (status IN ('pending', 'processing', 'completed',
+                                   'vector_only', 'failed')),
     error        TEXT DEFAULT '',
     summary      TEXT DEFAULT '',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
