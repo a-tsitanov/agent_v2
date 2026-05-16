@@ -28,6 +28,9 @@ dependencies = [
     "taskiq>=0.12,<0.14",
     "taskiq-aio-pika>=0.6,<0.8",
 
+    # Workflow engine
+    "temporalio>=1.8,<2",
+
     # Storage clients
     "psycopg[binary]>=3.2,<4",
     "pymilvus>=2.4,<3",

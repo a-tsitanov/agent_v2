@@ -126,6 +126,35 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # ── Workflow engine: Temporal ──────────────────────────────────────
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_SEEDS: postgres
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+    ports:
+      - "7233:7233"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - temporal
+    restart: unless-stopped
+
   # ── LLM proxy: LiteLLM (OpenAI-compatible front-door) ───────────────
   # Routes all LLM and embedding calls.  Default config uses OpenAI
   # upstream — adjust docker/litellm_config.yaml for production.

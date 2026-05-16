@@ -130,6 +130,23 @@ class RabbitMQSettings(BaseSettings):
     timeout_s: float = 10.0
 
 
+class TemporalSettings(BaseSettings):
+    """Temporal worker / client connection settings."""
+
+    model_config = SettingsConfigDict(env_prefix="TEMPORAL_", extra="ignore")
+
+    host: str = "localhost"
+    port: int = 7233
+    namespace: str = "default"
+    task_queue: str = "kb-ingest"
+    activity_concurrency: int = 4
+    staging_bucket: str = "kb-staging"
+
+    @property
+    def target(self) -> str:
+        return f"{self.host}:{self.port}"
+
+
 class MinioSettings(BaseSettings):
     """S3-compatible upload storage.
 
@@ -285,6 +302,10 @@ class Settings(BaseSettings):
         return RabbitMQSettings()
 
     @cached_property
+    def temporal(self) -> TemporalSettings:
+        return TemporalSettings()
+
+    @cached_property
     def minio(self) -> MinioSettings:
         return MinioSettings()
 
@@ -311,5 +332,6 @@ __all__ = [
     "PostgresSettings",
     "RabbitMQSettings",
     "Settings",
+    "TemporalSettings",
     "settings",
 ]
