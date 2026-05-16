@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from llama_index.core.schema import TextNode
 
-from src.ingestion.tasks import (
+from src.workflow.activities.index_vector import (
     _MILVUS_DROP_KEYS,
     _restore_metadata,
     _snapshot_metadata,

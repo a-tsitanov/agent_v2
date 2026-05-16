@@ -1,11 +1,20 @@
-"""Taskiq broker + `process_document` task.
+"""Taskiq broker + thin Temporal shim for ``process_document``.
 
-The worker is intentionally thin — it composes existing factory
-helpers (`build_ingestion_pipeline`, `build_vector_index`,
-`build_kg_extractor`, `merge_kg_extraction`) against live
-storage backends.  Identifier canonicalization is built into
-`build_ingestion_pipeline` by default — no need to pass it as an
-extra transformation any more.
+The body of the legacy ingest task has moved into the activities
+under ``src.workflow.activities`` and the orchestrating workflow at
+``src.workflow.document_ingest``.  This module is now a compatibility
+layer: existing call sites that do ``process_document.kiq(doc_id,
+path)`` keep working — the kiq handler awaits the Temporal workflow
+to completion and surfaces the same success/failure semantics as
+before.
+
+Two helpers stay here for now because tests + ``merge_and_resolve``
+import them:
+  * ``_resolve_source_path`` — kept for ``tests/test_ingestion/test_tasks_minio.py``
+  * ``_consolidate_phone_entities`` — imported by
+    ``src.workflow.activities.merge_and_resolve``.
+
+Both move to dedicated modules in Task 17 when taskiq is removed.
 
 Run::
 
@@ -15,117 +24,32 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import shutil
-import uuid
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 from taskiq_aio_pika import AioPikaBroker
 
 from src.config import settings
-from llama_index.core.graph_stores.types import (
-    KG_NODES_KEY,
-    KG_RELATIONS_KEY,
-)
-
-from src.graph.entity_resolution import ERConfig, resolve_entities
-from src.graph.index import (
-    NoOpKGExtractor,
-    build_kg_extractor,
-    build_property_graph_index,
-)
-from src.graph.merge import merge_kg_extraction
-from src.graph.store import build_neo4j_graph_store
-from src.ingestion.embeddings import build_embedding_model
-from src.ingestion.identifier_transform import inject_canonical_entities
-from src.ingestion.pipeline import build_ingestion_pipeline, read_documents
-from src.retrieval.llm import build_llm
-from src.retrieval.vector_index import (
-    build_vector_index,
-    build_vector_store,
-    index_nodes,
-)
 from src.storage.minio import build_minio_storage
-from src.storage.postgres import AsyncPostgres
+from src.workflow.client import get_temporal_client
+from src.workflow.contracts import IngestParams
+from src.workflow.document_ingest import DocumentIngestWorkflow
 
 broker = AioPikaBroker(settings.rabbitmq.url)
 
 
-# Neo4j accepts only primitive properties + arrays of primitives —
-# nested maps / lists-of-maps cause `Neo.ClientError.Statement.TypeError`
-# when PropertyGraphIndex writes a `:Chunk` node.  Our pipeline
-# attaches `canonical_identifiers` as `list[dict]` for downstream
-# retrievers (Milvus tolerates it via JSON serialisation), so we
-# scrub the offending keys off the in-memory nodes right before the
-# graph step.  Milvus has already received the full metadata in
-# step 2; the strip is graph-store-only.
-_NEO4J_UNSAFE_METADATA_KEYS: frozenset[str] = frozenset({
-    "canonical_identifiers",
-})
-
-# These metadata keys carry LlamaIndex objects (EntityNode, Relation)
-# that PropertyGraphIndex.`_insert_nodes` pops BEFORE writing the
-# chunk to Neo4j.  They look "neo4j-unsafe" to a naive value check,
-# but stripping them breaks PropertyGraphIndex's own assertion
-# (`metadata.get(KG_NODES_KEY) is not None`).
-_PRESERVE_METADATA_KEYS: frozenset[str] = frozenset({
-    KG_NODES_KEY,
-    KG_RELATIONS_KEY,
-})
-
-# Milvus serialises the whole node (including `metadata`) into a
-# `_node_content` dynamic VARCHAR field capped at 65535 chars.
-# `canonical_identifiers` (list[dict] with `original` + `span`) on
-# identifier-dense documents (contact pages, financial reports) and
-# `translated_text` (per-chunk RU slice) routinely push us over.
-# Both are needed AFTER Milvus write (inject_canonical_entities reads
-# `canonical_identifiers`; LightRAG reads `translated_text`), so we
-# snapshot-strip-restore around the insert call instead of dropping
-# them permanently.
-_MILVUS_DROP_KEYS: frozenset[str] = frozenset({
-    "canonical_identifiers",
-    "translated_text",
-})
-
-# Hard upper bound on a single chunk's serialised metadata.  Below the
-# Milvus 65535 hard limit so we still have headroom for the rest of
-# `_node_content` (text, embeddings indirection, relationships).
-_MILVUS_METADATA_WARN_BYTES = 30_000
-
-
-def _snapshot_metadata(nodes, keys: frozenset[str]) -> list[dict]:
-    """Pop `keys` off each node.metadata; return per-node snapshots."""
-    snaps: list[dict] = []
-    for n in nodes:
-        md = getattr(n, "metadata", None)
-        snap: dict = {}
-        if md:
-            for k in list(md.keys()):
-                if k in keys:
-                    snap[k] = md.pop(k)
-        snaps.append(snap)
-    return snaps
-
-
-def _restore_metadata(nodes, snaps: list[dict]) -> None:
-    for n, snap in zip(nodes, snaps):
-        if not snap:
-            continue
-        md = getattr(n, "metadata", None)
-        if md is None:
-            n.metadata = snap
-        else:
-            md.update(snap)
+# ── Path resolution (legacy test surface) ──────────────────────────────
 
 
 async def _resolve_source_path(
     doc_id: str, path: str,
 ) -> tuple[Path, Path | None]:
-    """Turn a Postgres-stored `documents.path` into a local file.
+    """Turn a Postgres-stored ``documents.path`` into a local file.
 
     Returns ``(target, cleanup_dir)``:
       * ``target`` — concrete file on disk the pipeline can read.
-      * ``cleanup_dir`` — directory to `rmtree` after the task finishes,
+      * ``cleanup_dir`` — directory to ``rmtree`` after the task finishes,
         or ``None`` if we read straight from the original location.
 
     Two schemes are supported:
@@ -151,49 +75,15 @@ async def _resolve_source_path(
     return target, cleanup_dir
 
 
-def _warn_oversized_milvus_metadata(nodes) -> None:
-    """Log a warning for any chunk whose stripped metadata still risks
-    overflowing Milvus's 65k dynamic-field cap.  Helps pinpoint the
-    offending key when a new pipeline transform adds bulk we didn't
-    anticipate."""
-    import json as _json
-    for n in nodes:
-        md = getattr(n, "metadata", None) or {}
-        try:
-            size = len(_json.dumps(md, ensure_ascii=False, default=str))
-        except (TypeError, ValueError):
-            continue
-        if size > _MILVUS_METADATA_WARN_BYTES:
-            biggest = sorted(
-                ((k, len(_json.dumps(v, ensure_ascii=False, default=str)))
-                 for k, v in md.items()),
-                key=lambda kv: -kv[1],
-            )[:3]
-            logger.warning(
-                "milvus metadata oversized  node={n}  total_bytes={s}  "
-                "top_keys={t}",
-                n=getattr(n, "node_id", "?"), s=size, t=biggest,
-            )
-
-
-def _is_neo4j_safe(value):
-    """A value Neo4j will accept as a node property — primitives
-    or flat arrays of primitives."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, (list, tuple)):
-        return all(
-            v is None or isinstance(v, (str, int, float, bool))
-            for v in value
-        )
-    return False
+# ── Phone consolidation (used by graph activities) ─────────────────────
+# (Kept here for now; moves to src/graph/phone_consolidation.py in T17.)
 
 
 def _consolidate_phone_entities(
-    entities: "list[Any]",
-    relations: "list[Any]",
-    nodes: "list[Any] | None" = None,
-) -> "tuple[list[Any], list[Any], dict[str, str]]":
+    entities: list[Any],
+    relations: list[Any],
+    nodes: list[Any] | None = None,
+) -> tuple[list[Any], list[Any], dict[str, str]]:
     """Collapse LLM-extracted PhoneNumber duplicates onto their
     canonical E.164 form.
 
@@ -372,222 +262,22 @@ def _consolidate_phone_entities(
     return new_entities, new_relations, phone_name_map
 
 
-def _strip_neo4j_unsafe_metadata(nodes) -> None:
-    """In-place: drop metadata keys whose values Neo4j would reject.
-
-    Preserves `KG_NODES_KEY` / `KG_RELATIONS_KEY` (LlamaIndex's
-    extraction artifacts) — PropertyGraphIndex itself pops those
-    before writing to Neo4j.
-    """
-    for n in nodes:
-        md = getattr(n, "metadata", None)
-        if not md:
-            continue
-        for key in list(md.keys()):
-            if key in _PRESERVE_METADATA_KEYS:
-                continue
-            if key in _NEO4J_UNSAFE_METADATA_KEYS or not _is_neo4j_safe(md[key]):
-                md.pop(key, None)
+# ── Workflow shim ─────────────────────────────────────────────────────
 
 
 @broker.task
 async def process_document(doc_id: str, path: str) -> None:
-    """Run the full ingestion chain for one uploaded file.
+    """Legacy taskiq entry point — now starts the Temporal workflow.
 
-    Flow:
-      1. Read → split → identifier-canon (built into pipeline).
-      2. Insert chunks into Milvus.
-      3. (best-effort) Inject canonical entities into Neo4j.
-      4. (best-effort) Run KG extractor over chunks → triples land
-         in Neo4j.
-      5. (best-effort) Enrich entities with LLM-generated
-         descriptions.
-      6. Mark `completed` in Postgres (or `failed` with error).
-
-    Steps 3-5 are wrapped in try/except so a Neo4j or LLM outage
-    doesn't block the vector-only path from completing.
+    Kept so callers that still import ``process_document`` keep
+    working during the cutover.  The original body has moved to
+    activities under ``src.workflow.activities``.
     """
-    pg = AsyncPostgres()
-    job_uuid = uuid.UUID(doc_id)
-    llm = build_llm()
-    embed_model = build_embedding_model()
-
-    target, cleanup_dir = await _resolve_source_path(doc_id, path)
-
-    try:
-        await pg.update_status(job_uuid, status="processing")
-
-        # 1. parse + chunk + identifier-canon + (optional) RU translation.
-        # `translator_llm` is the same project LLM as the KG extractor:
-        # cheap on gpt-4o-mini and centralises the LiteLLM proxy hop.
-        # `embed_model` is required only when semantic chunking is on
-        # — passed unconditionally so toggling INGESTION_SEMANTIC_CHUNKING
-        # at runtime doesn't need a code change.
-        pipeline = build_ingestion_pipeline(
-            embed_model=embed_model,
-            translator_llm=llm,
-        )
-        docs = read_documents(target.parent, recursive=False)
-        docs = [d for d in docs if d.metadata.get("file_path") == str(target)]
-        if not docs:
-            raise FileNotFoundError(f"file not in reader output: {target}")
-
-        # `pipeline.arun` is the async variant — sync `.run` internally
-        # calls `asyncio.run` and explodes inside the taskiq event loop.
-        nodes = await pipeline.arun(documents=docs)
-
-        # Belt-and-suspenders: ensure the doc-level translation
-        # scaffolding never reaches Milvus.  LlamaIndex's SentenceSplitter
-        # copies the parent Document's metadata into each chunk
-        # AND into each chunk's `relationships[SOURCE].metadata`
-        # (a `RelatedNodeInfo` pointing back at the parent).  Milvus
-        # serialises the whole `_node_content` field — including
-        # relationship metadata — and rejects dynamic fields > 65k
-        # chars.  TranslateToRussianTransform drops these from
-        # `node.metadata`; we additionally clean every relationship
-        # here so a 95k full-translation never lands in the row.
-        from src.ingestion.translate_transform import (
-            FULL_TRANSLATED_TEXT_KEY,
-            ORIGINAL_DOC_LENGTH_KEY,
-        )
-
-        def _scrub(md: dict | None) -> None:
-            if not md:
-                return
-            md.pop(FULL_TRANSLATED_TEXT_KEY, None)
-            md.pop(ORIGINAL_DOC_LENGTH_KEY, None)
-
-        for n in nodes:
-            _scrub(getattr(n, "metadata", None))
-            for rel in (getattr(n, "relationships", {}) or {}).values():
-                _scrub(getattr(rel, "metadata", None))
-
-        # 2. vector indexing
-        store = build_vector_store()
-        index = build_vector_index(store, embed_model)
-        # Strip bulky metadata that Milvus would reject (65k dynamic-
-        # field cap) but downstream graph build still needs.  Snapshot
-        # first, restore after insert.
-        _milvus_snaps = _snapshot_metadata(nodes, _MILVUS_DROP_KEYS)
-        _warn_oversized_milvus_metadata(nodes)
-        try:
-            index_nodes(index, nodes)
-        finally:
-            _restore_metadata(nodes, _milvus_snaps)
-
-        # 3-5. graph build — best-effort
-        try:
-            graph_store = build_neo4j_graph_store()
-            inject_canonical_entities(graph_store, nodes)
-            try:
-                # LightRAG-style flow (see NoOpKGExtractor docstring):
-                #   1. extractor: one LLM call/chunk → KG_NODES_KEY /
-                #      KG_RELATIONS_KEY with entity descriptions inline
-                #   2. cross-chunk merger: dedup by name, concat or
-                #      LLM-summary descriptions, dedup relations
-                #   3. PropertyGraphIndex with NoOp extractor: pops
-                #      per-chunk metadata, creates Chunk(:MENTIONS)→
-                #      Entity edges, embeds entities for retrieval
-                #   4. upsert merged entities+relations: overwrites
-                #      per-chunk descriptions with cross-chunk merged
-                extractor = build_kg_extractor(llm, mode="lightrag")
-                nodes = await extractor.acall(nodes)
-                merged_entities, merged_relations = await merge_kg_extraction(
-                    nodes, llm, language="Russian",
-                )
-                # Phone consolidation: LightRAG often re-extracts
-                # the same phone number with different surface forms
-                # ("Телефон +7 (495)...", "Горячая линия 8-800-...",
-                # "8-916-555-77-89") that DUPLICATE the canonical
-                # E.164 nodes produced by `inject_canonical_entities`.
-                # ER excludes PhoneNumber from semantic merging
-                # (legitimately — two different numbers can embed
-                # close), so we collapse them here deterministically:
-                # parse digits, re-canonicalise to E.164, merge any
-                # collisions into one PhoneNumber entity.
-                merged_entities, merged_relations, _phone_name_map = (
-                    _consolidate_phone_entities(
-                        merged_entities, merged_relations, nodes,
-                    )
-                )
-
-                # Entity Resolution: collapses cross-language /
-                # multi-form duplicates and matches against entities
-                # already in Neo4j from previous ingests.  Best-effort:
-                # if the embed model or LLM fail, returns the inputs
-                # unchanged — no impact on ingest correctness.
-                if settings.agent.er_enabled:
-                    merged_entities, merged_relations, _er_name_map = (
-                        await resolve_entities(
-                            merged_entities,
-                            merged_relations,
-                            nodes,
-                            llm=llm,
-                            embed_model=embed_model,
-                            graph_store=graph_store,
-                            config=ERConfig(
-                                language="Russian",
-                                judge_batch=settings.agent.er_judge_batch_size,
-                                # Require at least one shared content
-                                # token in same-script candidate pairs.
-                                # Cross-script pairs (RU vs EN) bypass
-                                # this check and rely on cosine + LLM
-                                # judge — those legitimately have zero
-                                # token overlap on the surface form.
-                                name_token_min_overlap=0.1,
-                            ),
-                        )
-                    )
-                    logger.info(
-                        "ER complete  doc_id={d}  merged_aliases={m}",
-                        d=doc_id, m=len(_er_name_map),
-                    )
-                # PropertyGraphIndex writes every chunk's metadata
-                # onto its `:Chunk` node in Neo4j.  Neo4j rejects
-                # nested types ("Property values can only be of
-                # primitive types or arrays thereof") so strip any
-                # metadata value that isn't a Neo4j-friendly scalar
-                # right before that call.  Milvus already received
-                # the original metadata in step 2; this only affects
-                # the graph store.
-                _strip_neo4j_unsafe_metadata(nodes)
-                await asyncio.to_thread(
-                    build_property_graph_index,
-                    graph_store=graph_store,
-                    embed_model=embed_model,
-                    extractor=NoOpKGExtractor(),
-                    nodes=nodes,
-                )
-                if merged_entities:
-                    graph_store.upsert_nodes(merged_entities)
-                if merged_relations:
-                    graph_store.upsert_relations(merged_relations)
-                logger.info(
-                    "graph done  doc_id={d}  entities={e}  relations={r}",
-                    d=doc_id,
-                    e=len(merged_entities),
-                    r=len(merged_relations),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "graph LLM extraction failed: {err}", err=exc,
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("graph injection failed: {err}", err=exc)
-
-        await pg.update_status(job_uuid, status="completed")
-        logger.info(
-            "ingestion done  doc_id={d}  nodes={n}",
-            d=doc_id, n=len(nodes),
-        )
-    except Exception as exc:  # noqa: BLE001 — surface to client
-        logger.exception("ingestion failed  doc_id={d}", d=doc_id)
-        await pg.update_status(job_uuid, status="failed", error=str(exc))
-    finally:
-        # Remove the local copy of a MinIO-staged upload regardless of
-        # ingest outcome.  The object itself stays in the bucket as an
-        # immutable record; only the disk cache needs cleanup.  Legacy
-        # `/tmp/kb-uploads/...` paths are left alone — they're outside
-        # our staging dir and may still be reachable from other docs.
-        if cleanup_dir is not None and cleanup_dir.exists():
-            shutil.rmtree(cleanup_dir, ignore_errors=True)
+    client = await get_temporal_client()
+    handle = await client.start_workflow(
+        DocumentIngestWorkflow.run,
+        IngestParams(doc_id=doc_id, path=path),
+        id=f"ingest-{doc_id}",
+        task_queue=settings.temporal.task_queue,
+    )
+    await handle.result()
