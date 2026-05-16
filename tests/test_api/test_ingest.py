@@ -1,6 +1,6 @@
 """ASGI tests for `POST /api/v1/ingest`.
 
-The MinIO client, Postgres, and the taskiq enqueue are all mocked
+The MinIO client, Postgres, and the Temporal client are all mocked
 so the route can be exercised end-to-end against the real FastAPI
 app without any live infrastructure.
 """
@@ -26,12 +26,20 @@ def _stub_minio(return_uri: str = "s3://test/abc/test.txt") -> MagicMock:
     return storage
 
 
+def _stub_temporal_client() -> MagicMock:
+    fake_handle = MagicMock()
+    fake_client = MagicMock()
+    fake_client.start_workflow = AsyncMock(return_value=fake_handle)
+    return fake_client
+
+
 @pytest.mark.asyncio
 async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
     from src.api.main import app
     from src.storage.postgres import AsyncPostgres
 
     stub_storage = _stub_minio("s3://kb-uploads/abc/file.txt")
+    fake_client = _stub_temporal_client()
 
     with (
         patch(
@@ -40,9 +48,9 @@ async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
         ),
         patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
         patch(
-            "src.api.routes.ingest.process_document.kiq",
-            new=AsyncMock(),
-        ) as kiq,
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -56,6 +64,7 @@ async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert "job_id" in body
+    job_id = body["job_id"]
 
     # Storage was called with (object_key, BytesIO, length, content_type).
     stub_storage.put_object.assert_called_once()
@@ -68,21 +77,22 @@ async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
 
     # Postgres saw the S3 URI as `path`.
     ins.assert_awaited_once()
-    _self, _pos_doc_id, pos_path, *_ = (
-        (None, *ins.call_args.args)
-        if ins.call_args.args else (None,)
-    )
-    # `path` may be the 2nd positional or kwarg, accept either.
     pos_or_kw_path = (
         ins.call_args.args[1] if len(ins.call_args.args) >= 2
         else ins.call_args.kwargs.get("path")
     )
     assert pos_or_kw_path == "s3://kb-uploads/abc/file.txt"
 
-    # Worker was enqueued with the same S3 URI.
-    kiq.assert_awaited_once()
-    enqueue_args = kiq.call_args.args
-    assert enqueue_args[1] == "s3://kb-uploads/abc/file.txt"
+    # Temporal workflow was started with the doc-derived id and the
+    # S3 URI in IngestParams.
+    fake_client.start_workflow.assert_awaited_once()
+    call = fake_client.start_workflow.call_args
+    assert call.kwargs.get("id") == f"ingest-{job_id}"
+    assert call.kwargs.get("task_queue") == settings.temporal.task_queue
+    # Positional args: (workflow_run, IngestParams(...))
+    params = call.args[1]
+    assert params.doc_id == job_id
+    assert params.path == "s3://kb-uploads/abc/file.txt"
 
 
 @pytest.mark.asyncio
@@ -99,6 +109,7 @@ async def test_ingest_returns_503_when_minio_fails() -> None:
         host_id="h",
         response=None,
     )
+    fake_client = _stub_temporal_client()
 
     with (
         patch(
@@ -107,9 +118,9 @@ async def test_ingest_returns_503_when_minio_fails() -> None:
         ),
         patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
         patch(
-            "src.api.routes.ingest.process_document.kiq",
-            new=AsyncMock(),
-        ) as kiq,
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -120,9 +131,9 @@ async def test_ingest_returns_503_when_minio_fails() -> None:
             )
 
     assert resp.status_code == 503, resp.text
-    # When the upload fails we must NOT touch Postgres or RabbitMQ.
+    # When the upload fails we must NOT touch Postgres or Temporal.
     ins.assert_not_awaited()
-    kiq.assert_not_awaited()
+    fake_client.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -140,6 +151,7 @@ async def test_ingest_returns_503_when_minio_unreachable() -> None:
         pool=None, url="/kb-uploads",
         reason=ConnectionRefusedError("[Errno 61] Connection refused"),
     )
+    fake_client = _stub_temporal_client()
 
     with (
         patch(
@@ -148,9 +160,9 @@ async def test_ingest_returns_503_when_minio_unreachable() -> None:
         ),
         patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
         patch(
-            "src.api.routes.ingest.process_document.kiq",
-            new=AsyncMock(),
-        ) as kiq,
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -162,7 +174,7 @@ async def test_ingest_returns_503_when_minio_unreachable() -> None:
 
     assert resp.status_code == 503, resp.text
     ins.assert_not_awaited()
-    kiq.assert_not_awaited()
+    fake_client.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

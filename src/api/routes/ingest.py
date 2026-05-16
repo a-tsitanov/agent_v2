@@ -21,9 +21,12 @@ from pydantic import BaseModel
 from urllib3.exceptions import MaxRetryError
 
 from src.api.auth import require_api_key
-from src.ingestion.tasks import process_document
+from src.config import settings
 from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
+from src.workflow.client import get_temporal_client
+from src.workflow.contracts import IngestParams
+from src.workflow.document_ingest import DocumentIngestWorkflow
 
 router = APIRouter(tags=["ingestion"])
 
@@ -100,12 +103,18 @@ async def upload_document(
         doc_id, s3_uri, department=department, doc_type=doc_type,
     )
 
-    # Push the actual processing onto RabbitMQ.  The taskiq broker is
-    # started in `src/api/main.py` lifespan; the worker process
-    # (``taskiq worker src.ingestion.tasks:broker``) consumes from
-    # the same queue and runs ``process_document`` end-to-end.  Worker
-    # detects the s3:// prefix and downloads the object before reading.
-    await process_document.kiq(str(doc_id), s3_uri)
+    # Kick off the Temporal workflow directly.  The Temporal worker
+    # (``python -m src.workflow.worker``) polls the task queue and
+    # executes ``DocumentIngestWorkflow`` end-to-end (fetch → parse →
+    # vector → graph → finalize).  The workflow id is derived from
+    # ``doc_id`` so we get idempotent de-dup at the Temporal level.
+    client = await get_temporal_client()
+    await client.start_workflow(
+        DocumentIngestWorkflow.run,
+        IngestParams(doc_id=str(doc_id), path=s3_uri),
+        id=f"ingest-{doc_id}",
+        task_queue=settings.temporal.task_queue,
+    )
     logger.info(
         "ingest enqueued  doc_id={d}  path={p}  dept={dept}",
         d=doc_id, p=s3_uri, dept=department,
