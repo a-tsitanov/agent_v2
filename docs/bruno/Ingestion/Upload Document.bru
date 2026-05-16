@@ -1,0 +1,66 @@
+meta {
+  name: Upload Document
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/ingest
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+body:multipart-form {
+  file: @file(./samples/sample.txt)
+  department: medical
+}
+
+docs {
+  # POST /api/v1/ingest
+
+  Upload a document and **enqueue a Temporal workflow** for ingestion.
+  Returns `202 Accepted` with the new `job_id` (UUID). The workflow id
+  is derivable as `ingest-{job_id}`.
+
+  ## Flow
+  1. File body is read into memory.
+  2. Object stored in MinIO at `s3://kb-uploads/{job_id}/{filename}`.
+  3. Row inserted into Postgres `documents` (status=`pending`).
+  4. `DocumentIngestWorkflow.run(IngestParams(doc_id, s3_uri))` started
+     on task queue `kb-ingest`.
+  5. Response returns immediately — poll `GET /api/v1/ingest/{job_id}`
+     for progress.
+
+  ## Form parameters
+  - **file** *(required)* — the document. Supported: PDF, DOCX, PPTX,
+    TXT, MD, EML (via LlamaIndex `SimpleDirectoryReader`).
+  - **department** *(optional)* — free-form tenant tag; populates
+    `documents.department` for filtering at search time.
+
+  ## Headers
+  - **X-API-Key** *(required)* — one of the keys in the `API_KEYS` env.
+
+  ## Response 202
+  ```json
+  { "job_id": "5f1c…" }
+  ```
+
+  ## Error codes
+  - `400` — filename missing.
+  - `401` — missing or invalid `X-API-Key`.
+  - `503` — MinIO / Postgres unreachable on cold start.
+
+  ## Notes
+  - Large PDFs (~hundreds of MB) currently load fully into memory.
+    Presigned uploads are a planned follow-up.
+  - The Temporal workflow handles all of: parse → chunk → identifier
+    canonicalisation → optional Russian translation → Milvus insert →
+    canonical-entity inject (Neo4j) → LightRAG KG extraction →
+    cross-chunk merge → entity resolution → property-graph build →
+    finalize. Graph half is best-effort; status ends in
+    `vector_only` if it gives up.
+}

@@ -1,0 +1,76 @@
+meta {
+  name: Hybrid Search
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/search
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Каков порядок госпитализации пациента?",
+    "mode": "hybrid",
+    "top_k": 10,
+    "department": null,
+    "doc_type_filter": null,
+    "response_type": "Multiple Paragraphs",
+    "include_references": false
+  }
+}
+
+docs {
+  # POST /api/v1/search
+
+  **Hybrid retrieve → single synthesize.** No agent, no judge.
+  Cheapest path; use this when you want a one-shot answer and trust
+  the retriever to pull enough context on the first try.
+
+  ## Request body
+  - **query** *(required)* — the user question (Russian or English;
+    the synthesizer wraps it to force a Russian-language answer to
+    match the corpus normalisation).
+  - **mode** — `hybrid` (default), `vector`, or `bypass`. See
+    `reference_lightrag_query_modes` memory or LightRAG docs for
+    semantics.
+  - **top_k** *(default 10)* — chunks pulled from Milvus.
+  - **department** *(optional)* — tenant filter applied at retrieval.
+  - **doc_type_filter** *(optional)* — narrow by document type.
+  - **created_after / created_before** *(optional)* — Unix-seconds
+    bounds on document creation time.
+  - **response_type** *(default `Multiple Paragraphs`)* — LlamaIndex
+    `ResponseSynthesizer` format hint.
+  - **include_references** *(default false)* — when true, response
+    `sources[]` carries per-chunk citations.
+
+  ## Headers
+  - **X-API-Key** *(required)*.
+
+  ## Response 200
+  Returns a `SearchResponse`:
+  ```json
+  {
+    "query": "...",
+    "answer": "...",
+    "mode": "hybrid",
+    "sources": [
+      { "doc_id": "...", "chunk_id": "...", "content": "...",
+        "score": 0.42, "position": 0, "department": "", "doc_type": "" }
+    ],
+    "latency_ms": 812.0
+  }
+  ```
+
+  ## Error codes
+  - `401` — auth.
+  - `500` — retriever / synthesizer raised. Body carries the
+    exception type + message.
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Health Check
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  # GET /health
+
+  Liveness probe. Returns `200 OK` with `{"status": "ok"}` as long as
+  the API process is alive. Does not currently ping downstream
+  dependencies (Milvus / Neo4j / Postgres / Temporal) — keep
+  polling cheap so it doesn't crowd the LLM proxy.
+
+  **Auth:** none.
+}

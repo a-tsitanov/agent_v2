@@ -1,0 +1,60 @@
+meta {
+  name: Get Job Status
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/ingest/{{jobId}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+vars:pre-request {
+  jobId: 00000000-0000-0000-0000-000000000000
+}
+
+docs {
+  # GET /api/v1/ingest/{job_id}
+
+  Look up an ingestion job by id. Reads straight from the Postgres
+  `documents` row written by the upload endpoint; the worker updates
+  the row's terminal status when the Temporal workflow finishes.
+
+  ## Path parameter
+  - **job_id** — the UUID returned by `POST /api/v1/ingest`.
+
+  ## Headers
+  - **X-API-Key** *(required)*.
+
+  ## Response 200
+  ```json
+  {
+    "job_id": "5f1c…",
+    "status": "completed",
+    "path": "s3://kb-uploads/5f1c…/report.pdf",
+    "department": "medical",
+    "doc_type": "",
+    "error": "",
+    "summary": ""
+  }
+  ```
+
+  ## Status values
+  - `pending` — workflow not yet picked up by worker.
+  - `processing` — `fetch_source` activity ran; workflow in flight.
+  - `completed` — vector + graph indexing both succeeded.
+  - `vector_only` — vector indexing succeeded, graph half exhausted
+    retries (best-effort downgrade — answers still work, graph just
+    isn't enriched for this doc).
+  - `failed` — vector indexing failed terminally; `error` column
+    carries the message. Re-upload to retry.
+
+  ## Error codes
+  - `401` — auth.
+  - `404` — unknown job id.
+}

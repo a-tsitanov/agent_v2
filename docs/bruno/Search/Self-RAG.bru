@@ -1,0 +1,78 @@
+meta {
+  name: Self-RAG
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/selfrag
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Какие документы нужны для оформления льготы при онкологическом диагнозе?",
+    "top_k": 10,
+    "max_iterations": 8,
+    "max_refinements": 3,
+    "department": null,
+    "include_references": true
+  }
+}
+
+docs {
+  # POST /api/v1/selfrag
+
+  **ReAct + reflective synthesis** (Self-RAG inspired). Same agent
+  loop as `/agent`, but the final synthesis is reflective: the LLM
+  generates an answer, critiques its own claims against the context,
+  and either accepts the answer or kicks off a refinement round
+  with a tighter query.
+
+  ## Request body
+  - All `/agent` fields.
+  - **max_refinements** *(default 3, range 0..10)* — extra synthesis
+    rounds. `0` means single synthesize (degenerates to `/agent`).
+
+  ## Headers
+  - **X-API-Key** *(required)*.
+
+  ## Response 200
+  Standard `SearchResponse` plus `agentic_step_stats[]` plus a
+  populated `answer_detail`:
+  ```json
+  {
+    "query": "...",
+    "answer": "...",
+    "mode": "selfrag",
+    "sources": [ ... ],
+    "latency_ms": 7421.0,
+    "agentic_step_stats": [ ... ],
+    "answer_detail": {
+      "citations": [
+        { "claim": "Льгота назначается онкологическим больным.",
+          "chunk_id": "..." }
+      ],
+      "uncertainties": [
+        { "topic": "Срок повторного освидетельствования",
+          "reason": "Не нашёл явной нормы в контексте." }
+      ],
+      "refinement_rounds": 2
+    }
+  }
+  ```
+
+  ## When to use
+  - High-stakes answers where unsupported claims must be flagged.
+  - Multi-fact questions where partial answers are common.
+
+  ## Cost
+  - 2-4× the LLM tokens of `/agent` in practice. Don't use as the
+    default search path.
+}
