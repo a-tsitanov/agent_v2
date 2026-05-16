@@ -1,9 +1,9 @@
 """Document upload + ingestion-status endpoints.
 
-Flow mirrors enterprise-kb's ``/api/v1/ingest`` — write file to a
-shared volume, insert a Postgres ``documents`` row, kick a taskiq
-task and return ``202 Accepted`` with the job id.  The worker
-(``src/ingestion/tasks.py``) processes asynchronously.
+Flow: upload file to MinIO (synchronous put), insert a Postgres
+``documents`` row, start the Temporal ``DocumentIngestWorkflow`` and
+return ``202 Accepted`` with the job id.  The Temporal worker
+(``src.workflow.worker``) runs the activities asynchronously.
 """
 
 from __future__ import annotations

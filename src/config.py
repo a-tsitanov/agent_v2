@@ -121,15 +121,6 @@ class LiteLLMSettings(BaseSettings):
     max_retries: int = 2
 
 
-class RabbitMQSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="RABBITMQ_", env_file=".env", extra="ignore"
-    )
-
-    url: str = "amqp://guest:guest@localhost:5672/"
-    timeout_s: float = 10.0
-
-
 class TemporalSettings(BaseSettings):
     """Temporal worker / client connection settings."""
 
@@ -168,7 +159,7 @@ class MinioSettings(BaseSettings):
     secure: bool = False
     region: str = "us-east-1"
     # Where the worker stages downloaded files before processing.
-    # Removed after each `process_document` call.
+    # Removed after each workflow run via the `cleanup_local` activity.
     download_dir: str = "/tmp/kb-cache"
 
 
@@ -298,10 +289,6 @@ class Settings(BaseSettings):
         return LiteLLMSettings()
 
     @cached_property
-    def rabbitmq(self) -> RabbitMQSettings:
-        return RabbitMQSettings()
-
-    @cached_property
     def temporal(self) -> TemporalSettings:
         return TemporalSettings()
 
@@ -330,7 +317,6 @@ __all__ = [
     "MinioSettings",
     "Neo4jSettings",
     "PostgresSettings",
-    "RabbitMQSettings",
     "Settings",
     "TemporalSettings",
     "settings",

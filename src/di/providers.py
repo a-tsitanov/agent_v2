@@ -141,8 +141,8 @@ def build_api_container():
 def build_worker_container():
     """Worker container — currently exposes only `CommonProvider`.
 
-    The worker task (`src/ingestion/tasks.py:process_document`)
-    composes its pipeline and graph extractor inline since the
-    set of transformations is task-dependent.
+    The Temporal worker activities (`src.workflow.activities.*`)
+    compose their pipeline and graph extractor inline since the
+    set of transformations is activity-dependent.
     """
     return make_async_container(CommonProvider())

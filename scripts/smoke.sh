@@ -5,7 +5,7 @@
 #   * `docker compose up -d` — services healthy
 #   * `python -m scripts.setup_db` — schema initialized
 #   * `uvicorn src.api.main:app --port 8000` running
-#   * `taskiq worker src.ingestion.tasks:broker --workers 1` running
+#   * `python -m src.workflow.worker` (Temporal worker) running
 #
 # Usage:
 #   bash scripts/smoke.sh                        # all sections

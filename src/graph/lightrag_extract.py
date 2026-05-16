@@ -107,8 +107,8 @@ class LightRAGExtractor(TransformComponent):
         """Sync entry point.  Forwards to async via asyncio.run.
 
         IMPORTANT: do NOT call this from within a running event loop
-        (PropertyGraphIndex.run inside taskiq worker).  Use `acall`
-        directly instead, or wrap this call in `asyncio.to_thread`.
+        (e.g. PropertyGraphIndex.run inside a Temporal activity).  Use
+        `acall` directly instead, or wrap this call in `asyncio.to_thread`.
         """
         import asyncio
 

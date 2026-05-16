@@ -35,7 +35,7 @@ async def test_merge_consolidate_resolve_chain():
         "src.workflow.activities.merge_and_resolve.merge_kg_extraction",
         new=AsyncMock(return_value=(merged_entities, merged_relations)),
     ), patch(
-        "src.workflow.activities.merge_and_resolve._consolidate_phone_entities",
+        "src.workflow.activities.merge_and_resolve.consolidate_phone_entities",
         return_value=(merged_entities, merged_relations, {}),
     ), patch(
         "src.workflow.activities.merge_and_resolve.settings",
@@ -86,7 +86,7 @@ async def test_runs_er_when_enabled():
         "src.workflow.activities.merge_and_resolve.merge_kg_extraction",
         new=AsyncMock(return_value=(merged_entities, merged_relations)),
     ), patch(
-        "src.workflow.activities.merge_and_resolve._consolidate_phone_entities",
+        "src.workflow.activities.merge_and_resolve.consolidate_phone_entities",
         return_value=(merged_entities, merged_relations, {}),
     ), patch(
         "src.workflow.activities.merge_and_resolve.resolve_entities",

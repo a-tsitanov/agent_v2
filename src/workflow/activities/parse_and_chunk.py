@@ -1,8 +1,9 @@
 """`parse_and_chunk` — read + split + identifier-canon + translate.
 
-Mirrors the first half of `src.ingestion.tasks.process_document`'s
-pipeline section.  Output is the list of LlamaIndex `BaseNode`
-objects, pickled to MinIO under `{run_id}/parsed.pkl`.
+Runs the LlamaIndex ingestion pipeline (reader + splitter + identifier
+canonicalisation + translation) over the downloaded document.  Output
+is the list of LlamaIndex `BaseNode` objects, pickled to MinIO under
+`{run_id}/parsed.pkl`.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
     nodes = await pipeline.arun(documents=docs)
 
     # Scrub doc-translation scaffolding so it never reaches downstream
-    # stores.  Same logic as the legacy taskiq task.
+    # stores.
     for n in nodes:
         _scrub(getattr(n, "metadata", None))
         for rel in (getattr(n, "relationships", {}) or {}).values():

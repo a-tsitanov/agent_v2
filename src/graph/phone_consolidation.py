@@ -1,85 +1,25 @@
-"""Taskiq broker + thin Temporal shim for ``process_document``.
+"""Collapse LightRAG-extracted PhoneNumber duplicates onto their
+canonical E.164 form.
 
-The body of the legacy ingest task has moved into the activities
-under ``src.workflow.activities`` and the orchestrating workflow at
-``src.workflow.document_ingest``.  This module is now a compatibility
-layer: existing call sites that do ``process_document.kiq(doc_id,
-path)`` keep working — the kiq handler awaits the Temporal workflow
-to completion and surfaces the same success/failure semantics as
-before.
+ER excludes PhoneNumber from semantic merging on purpose: two
+different numbers can embed close (same country/area code).  But
+two non-semantic paths legitimately produce duplicates of the SAME
+phone — the canonical injector and the LightRAG extractor.  This
+helper parses digits via libphonenumber, builds an E.164 form, and
+merges any PhoneNumber entities whose digits resolve to the same
+canonical into one.
 
-Two helpers stay here for now because tests + ``merge_and_resolve``
-import them:
-  * ``_resolve_source_path`` — kept for ``tests/test_ingestion/test_tasks_minio.py``
-  * ``_consolidate_phone_entities`` — imported by
-    ``src.workflow.activities.merge_and_resolve``.
-
-Both move to dedicated modules in Task 17 when taskiq is removed.
-
-Run::
-
-    uv run taskiq worker src.ingestion.tasks:broker --workers 1
+Used by the `merge_and_resolve` workflow activity.
 """
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from taskiq_aio_pika import AioPikaBroker
-
-from src.config import settings
-from src.storage.minio import build_minio_storage
-from src.workflow.client import get_temporal_client
-from src.workflow.contracts import IngestParams
-from src.workflow.document_ingest import DocumentIngestWorkflow
-
-broker = AioPikaBroker(settings.rabbitmq.url)
 
 
-# ── Path resolution (legacy test surface) ──────────────────────────────
-
-
-async def _resolve_source_path(
-    doc_id: str, path: str,
-) -> tuple[Path, Path | None]:
-    """Turn a Postgres-stored ``documents.path`` into a local file.
-
-    Returns ``(target, cleanup_dir)``:
-      * ``target`` — concrete file on disk the pipeline can read.
-      * ``cleanup_dir`` — directory to ``rmtree`` after the task finishes,
-        or ``None`` if we read straight from the original location.
-
-    Two schemes are supported:
-      * ``s3://<bucket>/<key>`` — modern uploads.  Downloaded into
-        ``MINIO_DOWNLOAD_DIR/<doc_id>/<filename>`` so the existing
-        ``read_documents(Path)`` flow stays unchanged.
-      * Bare filesystem paths — legacy ``/tmp/kb-uploads/...`` records
-        that were ingested before the MinIO migration.  Passed through
-        verbatim; nothing to clean up afterwards.
-    """
-    if not path.startswith("s3://"):
-        return Path(path), None
-    storage = build_minio_storage()
-    _, key = storage.parse_s3_uri(path)
-    filename = Path(key).name
-    target = storage.download_dir / doc_id / filename
-    cleanup_dir = target.parent
-    await asyncio.to_thread(storage.get_object_to_path, path, target)
-    logger.info(
-        "minio download  doc_id={d}  s3={p}  local={t}",
-        d=doc_id, p=path, t=target,
-    )
-    return target, cleanup_dir
-
-
-# ── Phone consolidation (used by graph activities) ─────────────────────
-# (Kept here for now; moves to src/graph/phone_consolidation.py in T17.)
-
-
-def _consolidate_phone_entities(
+def consolidate_phone_entities(
     entities: list[Any],
     relations: list[Any],
     nodes: list[Any] | None = None,
@@ -260,24 +200,3 @@ def _consolidate_phone_entities(
         s=len(survivors_by_canonical), r=len(phone_name_map),
     )
     return new_entities, new_relations, phone_name_map
-
-
-# ── Workflow shim ─────────────────────────────────────────────────────
-
-
-@broker.task
-async def process_document(doc_id: str, path: str) -> None:
-    """Legacy taskiq entry point — now starts the Temporal workflow.
-
-    Kept so callers that still import ``process_document`` keep
-    working during the cutover.  The original body has moved to
-    activities under ``src.workflow.activities``.
-    """
-    client = await get_temporal_client()
-    handle = await client.start_workflow(
-        DocumentIngestWorkflow.run,
-        IngestParams(doc_id=doc_id, path=path),
-        id=f"ingest-{doc_id}",
-        task_queue=settings.temporal.task_queue,
-    )
-    await handle.result()

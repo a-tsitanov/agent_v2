@@ -1,7 +1,8 @@
 """FastAPI app entry point.
 
-Wires routes, CORS, dishka DI container, and (optionally) the
-taskiq broker lifecycle.
+Wires routes, CORS, and the dishka DI container.  Ingest hands off
+to Temporal directly from the route handler — no broker lifecycle
+needed here.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from src.api.routes import agent, health, ingest, search, selfrag
 from src.api.routes import legacy_agent as legacy_agent_routes
 from src.config import settings
 from src.di.providers import build_api_container
-from src.ingestion.tasks import broker as taskiq_broker
 from src.utils.logging import configure_logging
 
 
@@ -31,15 +31,9 @@ async def lifespan(_: FastAPI):
         "kb-llamaindex API starting  env={env}  log_level={lvl}",
         env=settings.api.env, lvl=settings.api.log_level,
     )
-    # Taskiq client-side init — without this `.kiq(...)` calls from
-    # routes raise "broker is not started".  Worker processes
-    # start the broker themselves on launch, so this is needed only
-    # in the API.
-    await taskiq_broker.startup()
     try:
         yield
     finally:
-        await taskiq_broker.shutdown()
         await _container.close()
 
 

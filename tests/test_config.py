@@ -26,7 +26,7 @@ def test_settings_defaults_load() -> None:
     assert settings.neo4j.uri.startswith("bolt://")
     assert settings.postgres.db == "kb_llamaindex"
     assert settings.litellm.embedding_dim > 0
-    assert settings.rabbitmq.url.startswith("amqp://")
+    assert settings.temporal.target.endswith(":7233")
     assert settings.ingestion.chunk_size > 0
     assert settings.agent.max_rounds >= 1
 

@@ -26,8 +26,8 @@ class MinioStorage:
     """Thin sync wrapper around the official MinIO client.
 
     Keeps the bucket name + download dir close to the actual API
-    calls so callers (`/ingest` endpoint, taskiq worker) don't need
-    to thread settings through themselves.
+    calls so callers (`/ingest` endpoint, Temporal worker activities)
+    don't need to thread settings through themselves.
     """
 
     def __init__(self, cfg: MinioSettings) -> None:
