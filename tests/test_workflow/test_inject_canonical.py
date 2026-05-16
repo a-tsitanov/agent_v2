@@ -26,7 +26,9 @@ async def test_calls_inject_with_loaded_nodes():
         return_value=graph_store,
     ), patch(
         "src.workflow.activities.inject_canonical.inject_canonical_entities",
-    ) as mock_inject:
+    ) as mock_inject, patch(
+        "src.workflow.activities.inject_canonical.activity"
+    ):
         out = await inject_canonical(parsed)
 
     mock_inject.assert_called_once_with(graph_store, [n])

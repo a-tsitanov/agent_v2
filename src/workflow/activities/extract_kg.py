@@ -19,13 +19,26 @@ from src.workflow.staging import build_staging_store
 
 @activity.defn
 async def extract_kg(parsed: Parsed) -> KGExtracted:
+    activity.logger.info(
+        "extract_kg start  doc=%s  chunks=%d",
+        parsed.ctx.doc_id, parsed.chunk_count,
+    )
+    activity.heartbeat({"stage": "init", "chunks": parsed.chunk_count})
+
     staging = build_staging_store()
     nodes = staging.read_pickle(parsed.nodes_uri)
+    activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
+
     llm = build_llm()
     extractor = build_kg_extractor(llm, mode="lightrag")
+    activity.logger.info("extract_kg invoking LLM extractor  chunks=%d", len(nodes))
+    activity.heartbeat({"stage": "extracting", "chunks": len(nodes)})
+
     nodes = await extractor.acall(nodes)
-    activity.heartbeat({"extracted": len(nodes)})
+    activity.heartbeat({"stage": "extracted", "chunks": len(nodes)})
+
     uri = staging.write_pickle(parsed.ctx.workflow_run_id, "kg", nodes)
+    activity.heartbeat({"stage": "staged", "uri": uri})
     logger.info(
         "extract_kg done  doc={d}  chunks={n}  uri={u}",
         d=parsed.ctx.doc_id, n=len(nodes), u=uri,

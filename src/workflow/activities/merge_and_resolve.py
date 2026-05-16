@@ -25,17 +25,36 @@ from src.workflow.staging import build_staging_store
 
 @activity.defn
 async def merge_and_resolve(kg: KGExtracted) -> Merged:
+    activity.logger.info("merge_and_resolve start  doc=%s", kg.parsed.ctx.doc_id)
+    activity.heartbeat({"stage": "init"})
+
     staging = build_staging_store()
     nodes = staging.read_pickle(kg.nodes_with_kg_uri)
+    activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
+
     llm = build_llm()
 
+    activity.logger.info("merge_and_resolve merging  chunks=%d", len(nodes))
     merged_entities, merged_relations = await merge_kg_extraction(
         nodes, llm, language="Russian",
     )
+    activity.heartbeat({
+        "stage": "merged",
+        "entities": len(merged_entities),
+        "relations": len(merged_relations),
+    })
+
     merged_entities, merged_relations, _phone_map = consolidate_phone_entities(
         merged_entities, merged_relations, nodes,
     )
+    activity.heartbeat({
+        "stage": "phone_consolidated",
+        "entities": len(merged_entities),
+        "phones_collapsed": len(_phone_map),
+    })
+
     if settings.agent.er_enabled:
+        activity.logger.info("merge_and_resolve resolving entities (ER)")
         embed_model = build_embedding_model()
         graph_store = build_neo4j_graph_store()
         merged_entities, merged_relations, _er_map = await resolve_entities(
@@ -47,11 +66,19 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
                 name_token_min_overlap=0.1,
             ),
         )
+        activity.heartbeat({
+            "stage": "resolved",
+            "entities": len(merged_entities),
+            "er_merged": len(_er_map),
+        })
+    else:
+        activity.heartbeat({"stage": "er_skipped"})
 
     uri = staging.write_pickle(
         kg.parsed.ctx.workflow_run_id, "merged",
         (merged_entities, merged_relations, nodes),
     )
+    activity.heartbeat({"stage": "staged", "uri": uri})
     logger.info(
         "merge_and_resolve done  doc={d}  entities={e}  relations={r}",
         d=kg.parsed.ctx.doc_id,

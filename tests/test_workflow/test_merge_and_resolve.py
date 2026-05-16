@@ -40,6 +40,8 @@ async def test_merge_consolidate_resolve_chain():
     ), patch(
         "src.workflow.activities.merge_and_resolve.settings",
         fake_settings,
+    ), patch(
+        "src.workflow.activities.merge_and_resolve.activity"
     ):
         out = await merge_and_resolve(kg)
 
@@ -94,6 +96,8 @@ async def test_runs_er_when_enabled():
     ), patch(
         "src.workflow.activities.merge_and_resolve.settings",
         fake_settings,
+    ), patch(
+        "src.workflow.activities.merge_and_resolve.activity"
     ):
         await merge_and_resolve(kg)
 

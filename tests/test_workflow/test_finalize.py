@@ -39,6 +39,8 @@ async def test_finalize_writes_completed_and_cleans(tmp_path):
     ), patch(
         "src.workflow.activities.finalize.build_staging_store",
         return_value=staging,
+    ), patch(
+        "src.workflow.activities.finalize.activity"
     ):
         out = await finalize(fin)
 
@@ -69,6 +71,8 @@ async def test_finalize_writes_vector_only_status():
     ), patch(
         "src.workflow.activities.finalize.build_staging_store",
         return_value=staging,
+    ), patch(
+        "src.workflow.activities.finalize.activity"
     ):
         out = await finalize(fin)
     pg.update_status.assert_awaited_once_with(
@@ -102,6 +106,8 @@ async def test_mark_failed_with_ctx(tmp_path):
     ), patch(
         "src.workflow.activities.finalize.build_staging_store",
         return_value=staging,
+    ), patch(
+        "src.workflow.activities.finalize.activity"
     ):
         await mark_failed(payload)
     pg.update_status.assert_awaited_once_with(
@@ -130,6 +136,8 @@ async def test_mark_failed_without_ctx_still_writes_pg():
     ), patch(
         "src.workflow.activities.finalize.build_staging_store",
         return_value=MagicMock(),
+    ), patch(
+        "src.workflow.activities.finalize.activity"
     ):
         await mark_failed(payload)
     pg.update_status.assert_awaited_once_with(

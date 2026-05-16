@@ -22,10 +22,17 @@ from src.workflow.contracts import Ctx, IngestParams
 @activity.defn
 async def fetch_source(params: IngestParams) -> Ctx:
     info = activity.info()
+    activity.logger.info(
+        "fetch_source start  doc=%s  path=%s", params.doc_id, params.path,
+    )
+    activity.heartbeat({"stage": "init", "path": params.path})
+
     pg = AsyncPostgres()
     await pg.update_status(uuid.UUID(params.doc_id), status="processing")
+    activity.heartbeat({"stage": "pg_processing"})
 
     if not params.path.startswith("s3://"):
+        activity.logger.info("fetch_source legacy local path; no download")
         return Ctx(
             doc_id=params.doc_id,
             local_path=params.path,
@@ -38,12 +45,15 @@ async def fetch_source(params: IngestParams) -> Ctx:
     filename = Path(key).name
     target = storage.download_dir / params.doc_id / filename
     if not target.exists():
+        activity.heartbeat({"stage": "downloading"})
         await asyncio.to_thread(storage.get_object_to_path, params.path, target)
+        activity.heartbeat({"stage": "downloaded", "local": str(target)})
         logger.info(
             "fetch_source  download  doc={d}  s3={p}  local={t}",
             d=params.doc_id, p=params.path, t=target,
         )
     else:
+        activity.heartbeat({"stage": "cache_hit", "local": str(target)})
         logger.info(
             "fetch_source  cache_hit  doc={d}  local={t}",
             d=params.doc_id, t=target,

@@ -47,13 +47,29 @@ def _strip_neo4j_unsafe_metadata(nodes) -> None:
 
 @activity.defn
 async def build_property_graph(merged: Merged) -> GraphBuilt:
+    activity.logger.info(
+        "build_property_graph start  doc=%s", merged.kg.parsed.ctx.doc_id,
+    )
+    activity.heartbeat({"stage": "init"})
+
     staging = build_staging_store()
     entities, relations, nodes = staging.read_pickle(merged.merged_entities_uri)
+    activity.heartbeat({
+        "stage": "loaded",
+        "entities": len(entities),
+        "relations": len(relations),
+        "chunks": len(nodes),
+    })
 
     graph_store = build_neo4j_graph_store()
     embed_model = build_embedding_model()
 
     _strip_neo4j_unsafe_metadata(nodes)
+    activity.heartbeat({"stage": "scrubbed"})
+
+    activity.logger.info(
+        "build_property_graph building index  chunks=%d", len(nodes),
+    )
     await asyncio.to_thread(
         build_property_graph_index,
         graph_store=graph_store,
@@ -61,10 +77,15 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
         extractor=NoOpKGExtractor(),
         nodes=nodes,
     )
+    activity.heartbeat({"stage": "index_built"})
+
     if entities:
         graph_store.upsert_nodes(entities)
+        activity.heartbeat({"stage": "entities_upserted", "count": len(entities)})
     if relations:
         graph_store.upsert_relations(relations)
+        activity.heartbeat({"stage": "relations_upserted", "count": len(relations)})
+
     logger.info(
         "build_property_graph done  doc={d}  e={e}  r={r}",
         d=merged.kg.parsed.ctx.doc_id, e=len(entities), r=len(relations),

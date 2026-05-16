@@ -52,21 +52,30 @@ def _restore_metadata(nodes, snaps: list[dict]) -> None:
 
 @activity.defn
 async def index_vector(parsed: Parsed) -> Indexed:
+    activity.logger.info(
+        "index_vector start  doc=%s  chunks=%d",
+        parsed.ctx.doc_id, parsed.chunk_count,
+    )
+    activity.heartbeat({"stage": "init", "chunks": parsed.chunk_count})
+
     staging = build_staging_store()
     nodes = staging.read_pickle(parsed.nodes_uri)
+    activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
     embed_model = build_embedding_model()
     store = build_vector_store()
     index = build_vector_index(store, embed_model)
+    activity.heartbeat({"stage": "embedding_init"})
 
     snaps = _snapshot_metadata(nodes, _MILVUS_DROP_KEYS)
+    activity.logger.info("index_vector inserting  chunks=%d", len(nodes))
     try:
         index_nodes(index, nodes)
     finally:
         _restore_metadata(nodes, snaps)
 
     node_ids = [getattr(n, "node_id", "") for n in nodes]
-    activity.heartbeat({"indexed": len(node_ids)})
+    activity.heartbeat({"stage": "indexed", "count": len(node_ids)})
     logger.info(
         "index_vector done  doc={d}  count={n}",
         d=parsed.ctx.doc_id, n=len(node_ids),

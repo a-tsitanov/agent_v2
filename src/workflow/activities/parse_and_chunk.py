@@ -34,6 +34,9 @@ def _scrub(md: dict | None) -> None:
 @activity.defn
 async def parse_and_chunk(ctx: Ctx) -> Parsed:
     target = Path(ctx.local_path)
+    activity.logger.info("parse_and_chunk start  target=%s", target)
+    activity.heartbeat({"stage": "init", "target": str(target)})
+
     llm = build_llm()
     embed_model = build_embedding_model()
     pipeline = build_ingestion_pipeline(
@@ -45,8 +48,12 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
     docs = [d for d in docs if d.metadata.get("file_path") == str(target)]
     if not docs:
         raise FileNotFoundError(f"file not in reader output: {target}")
+    activity.logger.info("parse_and_chunk read  docs=%d", len(docs))
+    activity.heartbeat({"stage": "read", "docs": len(docs)})
 
     nodes = await pipeline.arun(documents=docs)
+    activity.logger.info("parse_and_chunk pipeline  chunks=%d", len(nodes))
+    activity.heartbeat({"stage": "pipeline", "chunks": len(nodes)})
 
     # Scrub doc-translation scaffolding so it never reaches downstream
     # stores.
@@ -55,10 +62,9 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
         for rel in (getattr(n, "relationships", {}) or {}).values():
             _scrub(getattr(rel, "metadata", None))
 
-    activity.heartbeat({"chunks": len(nodes)})
-
     staging = build_staging_store()
     uri = staging.write_pickle(ctx.workflow_run_id, "parsed", nodes)
+    activity.heartbeat({"stage": "staged", "chunks": len(nodes), "uri": uri})
     logger.info(
         "parse_and_chunk done  doc={d}  chunks={n}  uri={u}",
         d=ctx.doc_id, n=len(nodes), u=uri,

@@ -36,7 +36,9 @@ async def test_strips_metadata_builds_pg_upserts_entities():
         return_value=MagicMock(),
     ), patch(
         "src.workflow.activities.build_property_graph.build_property_graph_index",
-    ) as mock_build:
+    ) as mock_build, patch(
+        "src.workflow.activities.build_property_graph.activity"
+    ):
         out = await build_property_graph(merged)
 
     mock_build.assert_called_once()
