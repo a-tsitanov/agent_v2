@@ -18,16 +18,10 @@
       "justMyCode": false
     },
     {
-      "name": "Worker: taskiq",
+      "name": "Worker: Temporal",
       "type": "debugpy",
       "request": "launch",
-      "module": "taskiq",
-      "args": [
-        "worker",
-        "src.ingestion.tasks:broker",
-        "--workers", "1",
-        "--max-async-tasks", "1"
-      ],
+      "module": "src.workflow.worker",
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "console": "integratedTerminal",
@@ -126,7 +120,7 @@
   "compounds": [
     {
       "name": "API + Worker",
-      "configurations": ["API: uvicorn (reload)", "Worker: taskiq"],
+      "configurations": ["API: uvicorn (reload)", "Worker: Temporal"],
       "stopAll": true
     }
   ]

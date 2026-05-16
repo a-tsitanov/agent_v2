@@ -49,6 +49,13 @@
       "problemMatcher": []
     },
     {
+      "label": "worker: temporal",
+      "type": "shell",
+      "command": "uv run python -m src.workflow.worker",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
       "label": "pytest: all",
       "type": "shell",
       "command": "uv run pytest -v",
