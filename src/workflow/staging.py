@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import pickle
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from loguru import logger
@@ -73,6 +74,50 @@ class StagingStore:
             self._bucket, prefix=prefix, recursive=True,
         ):
             self._client.remove_object(self._bucket, obj.object_name)
+
+    def list_orphan_runs(self, older_than_hours: int) -> list[str]:
+        """Return ``run_id`` prefixes whose newest blob is older than
+        ``older_than_hours``.
+
+        ``finalize`` and ``mark_failed`` activities call
+        ``delete_prefix`` on their own ``workflow_run_id`` at end of
+        workflow, so anything left behind under a stale prefix points
+        at a workflow that died before either of those activities ran
+        (worker OOM during ``index_vector``, network blip cancelling
+        the run, etc).  The threshold keeps still-in-flight workflows
+        safe.
+        """
+        threshold = datetime.now(UTC) - timedelta(hours=older_than_hours)
+        newest_by_run: dict[str, datetime] = {}
+        for obj in self._client.list_objects(
+            self._bucket, recursive=True,
+        ):
+            head, _, _ = obj.object_name.partition("/")
+            if not head:
+                continue
+            lm = obj.last_modified
+            if lm is None:
+                continue
+            if lm.tzinfo is None:
+                lm = lm.replace(tzinfo=UTC)
+            if lm > newest_by_run.get(head, datetime.min.replace(tzinfo=UTC)):
+                newest_by_run[head] = lm
+        return [
+            run_id for run_id, lm in newest_by_run.items()
+            if lm < threshold
+        ]
+
+    def cleanup_orphans(self, older_than_hours: int = 24) -> list[str]:
+        """Find and delete orphaned ``{run_id}/`` prefixes.  Returns
+        the list of run_ids that were removed."""
+        orphans = self.list_orphan_runs(older_than_hours=older_than_hours)
+        for run_id in orphans:
+            logger.info(
+                "staging cleanup  run_id={r}  reason=orphan_>{h}h",
+                r=run_id, h=older_than_hours,
+            )
+            self.delete_prefix(run_id)
+        return orphans
 
 
 def _parse_uri(uri: str) -> tuple[str, str]:

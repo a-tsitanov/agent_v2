@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from loguru import logger
 from pydantic import BaseModel
 from temporalio.common import WorkflowIDReusePolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from urllib3.exceptions import MaxRetryError
 
@@ -116,13 +117,30 @@ async def upload_document(
     # CAN be restarted under the same id — that's the explicit retry
     # path: re-upload to retry an ingest that died terminally.
     client = await get_temporal_client()
-    await client.start_workflow(
-        DocumentIngestWorkflow.run,
-        IngestParams(doc_id=str(doc_id), path=s3_uri),
-        id=f"ingest-{doc_id}",
-        task_queue=settings.temporal.task_queue,
-        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
-    )
+    try:
+        await client.start_workflow(
+            DocumentIngestWorkflow.run,
+            IngestParams(doc_id=str(doc_id), path=s3_uri),
+            id=f"ingest-{doc_id}",
+            task_queue=settings.temporal.task_queue,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+        )
+    except WorkflowAlreadyStartedError as exc:
+        # Reuse policy rejected the start: a workflow with this id is
+        # already running or already completed successfully.  Don't
+        # 500 the caller; surface 409 with the existing run details.
+        logger.warning(
+            "ingest duplicate  workflow_id={w}  run_id={r}",
+            w=exc.workflow_id, r=exc.run_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "workflow already exists for this job_id",
+                "workflow_id": exc.workflow_id,
+                "run_id": exc.run_id,
+            },
+        ) from exc
     logger.info(
         "ingest enqueued  doc_id={d}  path={p}  dept={dept}",
         d=doc_id, p=s3_uri, dept=department,

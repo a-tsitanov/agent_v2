@@ -178,6 +178,52 @@ async def test_ingest_returns_503_when_minio_unreachable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ingest_returns_409_when_workflow_already_started() -> None:
+    """Reuse policy on the Temporal side raises
+    ``WorkflowAlreadyStartedError`` when a workflow with the same
+    id already exists.  API should map that to 409 Conflict instead
+    of letting it propagate as a 500."""
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from src.api.main import app
+    from src.storage.postgres import AsyncPostgres
+
+    stub_storage = _stub_minio("s3://kb-uploads/abc/file.txt")
+    fake_client = MagicMock()
+    fake_client.start_workflow = AsyncMock(
+        side_effect=WorkflowAlreadyStartedError(
+            workflow_id="ingest-deadbeef",
+            workflow_type="DocumentIngestWorkflow",
+            run_id="run-abc",
+        ),
+    )
+
+    with (
+        patch(
+            "src.api.routes.ingest.build_minio_storage",
+            return_value=stub_storage,
+        ),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()),
+        patch(
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("file.txt", b"hello", "text/plain")},
+            )
+
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["detail"]["workflow_id"] == "ingest-deadbeef"
+    assert body["detail"]["run_id"] == "run-abc"
+
+
+@pytest.mark.asyncio
 async def test_ingest_requires_filename() -> None:
     from src.api.main import app
 

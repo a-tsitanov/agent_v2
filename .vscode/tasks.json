@@ -56,6 +56,18 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
+      "label": "cleanup: orphan staging blobs (dry-run)",
+      "type": "shell",
+      "command": "uv run python -m scripts.cleanup_staging --dry-run",
+      "problemMatcher": []
+    },
+    {
+      "label": "cleanup: orphan staging blobs (delete)",
+      "type": "shell",
+      "command": "uv run python -m scripts.cleanup_staging",
+      "problemMatcher": []
+    },
+    {
       "label": "pytest: all",
       "type": "shell",
       "command": "uv run pytest -v",
