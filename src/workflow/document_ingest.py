@@ -95,6 +95,7 @@ class DocumentIngestWorkflow:
             log.info("← index_vector  inserted=%d", indexed.count)
 
             graph_status: str = "completed"
+            built: GraphBuilt | None = None
             try:
                 workflow.upsert_memo({"stage": "inject_canonical"})
                 log.info("→ inject_canonical")
@@ -149,18 +150,36 @@ class DocumentIngestWorkflow:
                 log.warning("graph stage failed, downgrading to vector_only: %s", exc)
                 graph_status = "vector_only"
 
-            workflow.upsert_memo({"stage": "finalize", "graph_status": graph_status})
-            log.info("→ finalize  graph_status=%s", graph_status)
+            entities = built.entities if built is not None else 0
+            relations = built.relations if built is not None else 0
+            workflow.upsert_memo({
+                "stage": "finalize",
+                "graph_status": graph_status,
+                "entities": entities,
+                "relations": relations,
+            })
+            log.info(
+                "→ finalize  graph_status=%s  entities=%d  relations=%d",
+                graph_status, entities, relations,
+            )
             result = await workflow.execute_activity(
                 "finalize",
-                FinalizeIn(ctx=ctx, indexed=indexed, graph_status=graph_status),
+                FinalizeIn(
+                    ctx=ctx,
+                    indexed=indexed,
+                    graph_status=graph_status,
+                    entities=entities,
+                    relations=relations,
+                ),
                 result_type=IngestResult,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=_FAST_RETRY,
             )
             log.info(
-                "workflow done  doc_id=%s  chunks=%d  status=%s",
+                "workflow done  doc_id=%s  chunks=%d  status=%s  "
+                "entities=%d  relations=%d",
                 result.doc_id, result.chunk_count, result.graph_status,
+                result.entities, result.relations,
             )
             return result
         except ActivityError as exc:

@@ -47,14 +47,17 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
     activity.heartbeat({"stage": "local_cleaned"})
 
     logger.info(
-        "finalize  doc={d}  status={s}  chunks={c}",
+        "finalize  doc={d}  status={s}  chunks={c}  entities={e}  relations={r}",
         d=payload.ctx.doc_id, s=payload.graph_status,
         c=payload.indexed.count,
+        e=payload.entities, r=payload.relations,
     )
     return IngestResult(
         doc_id=payload.ctx.doc_id,
         chunk_count=payload.indexed.count,
         graph_status=payload.graph_status,
+        entities=payload.entities,
+        relations=payload.relations,
     )
 
 

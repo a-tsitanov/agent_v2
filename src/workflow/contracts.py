@@ -65,6 +65,8 @@ class FinalizeIn(_Frozen):
     ctx: Ctx
     indexed: Indexed
     graph_status: GraphStatus
+    entities: int = 0
+    relations: int = 0
 
 
 class MarkFailedIn(_Frozen):
@@ -77,3 +79,5 @@ class IngestResult(_Frozen):
     doc_id: str
     chunk_count: int
     graph_status: GraphStatus
+    entities: int = 0
+    relations: int = 0
