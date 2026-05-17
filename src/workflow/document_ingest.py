@@ -5,6 +5,31 @@ Outer `try/except ActivityError` covers the vector half: any non-graph
 activity that exhausts retries triggers `mark_failed` then re-raises
 so Temporal records the workflow as failed.  The inner `try/except`
 makes the four graph activities best-effort.
+
+## Retry policy
+
+Every activity is configured to **retry indefinitely** on transient
+failure (``maximum_attempts=0``).  Backoff is exponential, capped at a
+per-profile maximum interval so retries don't stretch out to hours.
+The hard stop is ``schedule_to_close_timeout`` — the overall wall-clock
+budget for an activity (sum of all attempts + waits).  Once that
+ceiling is reached Temporal fails the activity with a timeout error,
+which our inner / outer ``try/except ActivityError`` handles:
+
+* graph half exhausting its budget → ``graph_status='vector_only'``
+* vector half exhausting its budget → ``mark_failed`` + workflow fails
+
+Permanent input problems (corrupt file, schema violation) should be
+raised from inside activities as
+``ApplicationError(non_retryable=True)`` to bypass the retry loop —
+otherwise we'd loop for the full budget on a known-dead document.
+
+Two retry profiles:
+
+* ``_FAST_FOREVER`` — IO / embedding / Neo4j MERGE / PG UPDATE.
+  1s → 2s → 4s → … capped at 60s, forever.
+* ``_HEAVY_FOREVER`` — LLM-bound (``extract_kg``, ``merge_and_resolve``).
+  2min → 4min → … capped at 30min, forever.
 """
 
 from __future__ import annotations
@@ -32,12 +57,21 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
-_DEFAULT_RETRY = RetryPolicy(maximum_attempts=3)
-_GRAPH_HEAVY_RETRY = RetryPolicy(
-    maximum_attempts=2,
-    initial_interval=timedelta(minutes=2),
+# Forever-retry profiles.  ``maximum_attempts=0`` means no cap on
+# attempts; the activity stops only when ``schedule_to_close_timeout``
+# fires or a non-retryable ``ApplicationError`` is raised inside.
+_FAST_FOREVER = RetryPolicy(
+    initial_interval=timedelta(seconds=1),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=60),
+    maximum_attempts=0,
 )
-_FAST_RETRY = RetryPolicy(maximum_attempts=5)
+_HEAVY_FOREVER = RetryPolicy(
+    initial_interval=timedelta(minutes=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=30),
+    maximum_attempts=0,
+)
 
 
 @workflow.defn
@@ -62,8 +96,9 @@ class DocumentIngestWorkflow:
             ctx = await workflow.execute_activity(
                 "fetch_source", params,
                 result_type=Ctx,
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=_DEFAULT_RETRY,
+                start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(hours=1),
+                retry_policy=_FAST_FOREVER,
             )
             log.info(
                 "← fetch_source  local=%s  cleanup_dir=%s",
@@ -75,9 +110,10 @@ class DocumentIngestWorkflow:
             parsed = await workflow.execute_activity(
                 "parse_and_chunk", ctx,
                 result_type=Parsed,
-                start_to_close_timeout=timedelta(minutes=15),
-                heartbeat_timeout=timedelta(seconds=30),
-                retry_policy=_DEFAULT_RETRY,
+                start_to_close_timeout=timedelta(minutes=30),
+                heartbeat_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(hours=6),
+                retry_policy=_FAST_FOREVER,
             )
             log.info(
                 "← parse_and_chunk  chunks=%d  nodes_uri=%s",
@@ -89,9 +125,10 @@ class DocumentIngestWorkflow:
             indexed = await workflow.execute_activity(
                 "index_vector", parsed,
                 result_type=Indexed,
-                start_to_close_timeout=timedelta(minutes=30),
-                heartbeat_timeout=timedelta(minutes=1),
-                retry_policy=_DEFAULT_RETRY,
+                start_to_close_timeout=timedelta(hours=1),
+                heartbeat_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(hours=24),
+                retry_policy=_FAST_FOREVER,
             )
             log.info("← index_vector  inserted=%d", indexed.count)
 
@@ -103,8 +140,9 @@ class DocumentIngestWorkflow:
                 injected = await workflow.execute_activity(
                     "inject_canonical", parsed,
                     result_type=Injected,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=_FAST_RETRY,
+                    start_to_close_timeout=timedelta(minutes=10),
+                    schedule_to_close_timeout=timedelta(hours=12),
+                    retry_policy=_FAST_FOREVER,
                 )
                 log.info("← inject_canonical  count=%d", injected.count)
 
@@ -117,9 +155,10 @@ class DocumentIngestWorkflow:
                     "extract_kg", parsed,
                     result_type=KGExtracted,
                     task_queue=settings.temporal.llm_task_queue,
-                    start_to_close_timeout=timedelta(hours=1),
-                    heartbeat_timeout=timedelta(minutes=2),
-                    retry_policy=_GRAPH_HEAVY_RETRY,
+                    start_to_close_timeout=timedelta(hours=2),
+                    heartbeat_timeout=timedelta(minutes=5),
+                    schedule_to_close_timeout=timedelta(hours=48),
+                    retry_policy=_HEAVY_FOREVER,
                 )
                 log.info(
                     "← extract_kg  nodes_with_kg_uri=%s",
@@ -133,8 +172,10 @@ class DocumentIngestWorkflow:
                     "merge_and_resolve", kg,
                     result_type=Merged,
                     task_queue=settings.temporal.llm_task_queue,
-                    start_to_close_timeout=timedelta(minutes=30),
-                    retry_policy=_DEFAULT_RETRY,
+                    start_to_close_timeout=timedelta(hours=1),
+                    heartbeat_timeout=timedelta(minutes=5),
+                    schedule_to_close_timeout=timedelta(hours=24),
+                    retry_policy=_HEAVY_FOREVER,
                 )
                 log.info(
                     "← merge_and_resolve  merged_uri=%s",
@@ -146,8 +187,10 @@ class DocumentIngestWorkflow:
                 built = await workflow.execute_activity(
                     "build_property_graph", merged,
                     result_type=GraphBuilt,
-                    start_to_close_timeout=timedelta(minutes=30),
-                    retry_policy=_DEFAULT_RETRY,
+                    start_to_close_timeout=timedelta(hours=1),
+                    heartbeat_timeout=timedelta(minutes=5),
+                    schedule_to_close_timeout=timedelta(hours=24),
+                    retry_policy=_FAST_FOREVER,
                 )
                 log.info(
                     "← build_property_graph  entities=%d  relations=%d",
@@ -179,8 +222,9 @@ class DocumentIngestWorkflow:
                     relations=relations,
                 ),
                 result_type=IngestResult,
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=_FAST_RETRY,
+                start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_close_timeout=timedelta(hours=12),
+                retry_policy=_FAST_FOREVER,
             )
             log.info(
                 "workflow done  doc_id=%s  chunks=%d  status=%s  "
@@ -199,7 +243,8 @@ class DocumentIngestWorkflow:
             await workflow.execute_activity(
                 "mark_failed",
                 MarkFailedIn(ctx=ctx, params=params, error=str(exc)),
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=_FAST_RETRY,
+                start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_close_timeout=timedelta(hours=12),
+                retry_policy=_FAST_FOREVER,
             )
             raise
