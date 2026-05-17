@@ -109,7 +109,18 @@ The system is built for a heterogeneous corpus:
 
 EntityType taxonomy (set in R3) is universal — `Person`,
 `Organization`, `Concept`, `Metric`, `Topic`, `Issue`,
-`Resolution`, `EventOrAction`, `Product`, `Document` — plus
-identifier types (`PhoneNumber`, `Email`, `INN`, etc.) that are
-detected deterministically by the canonicalisation transform when
-they appear.
+`Resolution`, `EventOrAction`, `Product`, `Document` — plus 19
+identifier types detected deterministically by the
+canonicalisation transform when they appear:
+
+- **Business / financial:** `PhoneNumber`, `Email`, `INN`,
+  `OGRN`, `BIC`, `SNILS`, `ContractNumber`, `PostalAddress`,
+  `DocumentDate`, `Amount`.
+- **Digital identity:** `URL`, `Domain`, `TelegramHandle`,
+  `VKProfile`, `UUID`.
+- **Device / hardware:** `IMEI` (Luhn-validated), `MACAddress`,
+  `LicensePlate` (Russian-format), `VIN` (mod-11 checksum).
+
+Detectors apply checksums where the spec defines one (Luhn for
+IMEI, mod-11 for VIN, the SNILS algorithm, INN/OGRN/BIC checks)
+so false positives stay out of the graph.

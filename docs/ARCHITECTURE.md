@@ -99,9 +99,20 @@ Document file
 │  3. IdentifierCanonicalizationTransform          │
 │       per chunk:                                 │
 │       • extract_identifiers(text) — regex sweep  │
-│         for PhoneNumber, Email, INN, OGRN, BIC,  │
-│         ContractNumber, DocumentDate, Amount,    │
-│         PostalAddress.                           │
+│         + checksum-validated detectors for 19    │
+│         types across three groups:               │
+│           business:  PhoneNumber, Email, INN,    │
+│                      OGRN, BIC, SNILS,           │
+│                      ContractNumber,             │
+│                      PostalAddress,              │
+│                      DocumentDate, Amount.       │
+│           digital:   URL, Domain, TelegramHandle,│
+│                      VKProfile, UUID.            │
+│           device:    IMEI (Luhn), MACAddress,    │
+│                      LicensePlate (RU),          │
+│                      VIN (mod-11).               │
+│         Overlap resolver favours specialised     │
+│         types over generic (URL > Domain etc.).  │
 │       • node.metadata['canonical_identifiers']   │
 │         ← list[dict]  (canonical+original+span)  │
 │       • node.text += "\\nКанонические идентификато│

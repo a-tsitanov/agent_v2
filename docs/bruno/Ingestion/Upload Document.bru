@@ -63,4 +63,27 @@ docs {
     cross-chunk merge → entity resolution → property-graph build →
     finalize. Graph half is best-effort; status ends in
     `vector_only` if it gives up.
+
+  ## Identifier canonicalisation
+
+  During ingestion 19 deterministic identifier types are pulled out
+  of the document text via regex + checksum-validated detectors and
+  inserted into Neo4j as their own ``EntityNode``s before the LLM
+  runs.  Each match is also written into the chunk's metadata
+  (``canonical_identifiers``) and appended to ``node.text`` as a
+  "Канонические идентификаторы:" block so the KG extractor sees the
+  canonical form alongside the original mention.
+
+  Types:
+
+  | Group | Types |
+  |-------|-------|
+  | business | `PhoneNumber` (E.164), `Email`, `INN`, `OGRN`, `BIC`, `SNILS`, `ContractNumber`, `PostalAddress`, `DocumentDate`, `Amount` (RUB) |
+  | digital  | `URL`, `Domain`, `TelegramHandle`, `VKProfile`, `UUID` |
+  | device   | `IMEI` (Luhn), `MACAddress`, `LicensePlate` (RU), `VIN` (mod-11) |
+
+  Overlap policy: when several detectors match overlapping spans
+  (e.g. `URL` + `VKProfile` on `https://vk.com/user`), the
+  specialised type wins.  See `_PRIORITY` in
+  `src/ingestion/identifiers.py`.
 }

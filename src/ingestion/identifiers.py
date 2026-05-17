@@ -1,10 +1,9 @@
 """Deterministic identifier extraction + canonicalization.
 
-Pre-LLM stage of the retrieval-quality pipeline (Stage B of the plan in
-``~/.claude/plans/hashed-rolling-llama.md``).  Detects business
-identifiers in raw document text via regex / lib-based parsers and
-returns each match with a canonical form suitable for use as an
-``entity_name`` in Neo4j.
+Pre-LLM stage of the retrieval pipeline.  Detects business, digital
+and device identifiers in raw document text via regex / lib-based
+parsers and returns each match with a canonical form suitable for
+use as an ``entity_name`` in Neo4j.
 
 Why deterministic + canonical:
   Two documents may write the same phone as ``+7 (495) 123-45-67`` and
@@ -13,14 +12,28 @@ Why deterministic + canonical:
   to E.164 (``+74951234567``) so identical entities collapse to one
   node regardless of source formatting.
 
-The output of ``extract_identifiers()`` is consumed by Stage C
-(``src/ingestion/worker.py``) which:
-  1. Calls ``rag.ainsert_custom_kg`` with one entity per canonical
-     identifier — guarantees the canonical node exists before LLM
-     extraction.
-  2. Appends a ``Канонические идентификаторы:`` block to the document
+Currently 19 types across three groups (see ``IdentifierType``):
+
+* **Business / financial** — ``PhoneNumber``, ``Email``, ``INN``,
+  ``OGRN``, ``BIC``, ``SNILS``, ``ContractNumber``,
+  ``PostalAddress``, ``DocumentDate``, ``Amount``.
+* **Digital identity** — ``URL``, ``Domain``, ``TelegramHandle``,
+  ``VKProfile``, ``UUID``.
+* **Device / hardware** — ``IMEI`` (Luhn), ``MACAddress``,
+  ``LicensePlate`` (RU), ``VIN`` (mod-11 checksum).
+
+The output of ``extract_identifiers()`` is consumed by
+``IdentifierCanonicalizationTransform`` in ``pipeline.py``, which:
+  1. Calls ``inject_canonical_entities`` to upsert one canonical
+     ``EntityNode`` per ``(entity_type, canonical)`` pair into Neo4j —
+     guarantees the canonical node exists before LLM extraction.
+  2. Appends a ``Канонические идентификаторы:`` block to the chunk
      text so the LLM uses canonical forms when building relationships
-     (Stage A taught the LLM this protocol via the system prompt).
+     (the system prompt teaches the LLM this protocol).
+
+When two detectors match overlapping spans (e.g. ``URL`` and
+``VKProfile`` both matching ``https://vk.com/user``), the higher
+priority specialised type wins via ``_resolve_overlaps``.
 
 ``postal`` (libpostal Python bindings) is imported optionally — when
 the C library isn't installed locally we fall back to a rule-based
@@ -47,16 +60,56 @@ except ImportError:  # pragma: no cover — depends on system libpostal-dev
 
 
 IdentifierType = Literal[
+    # Business / financial
     "PhoneNumber",
     "Email",
     "INN",
     "OGRN",
     "BIC",
+    "SNILS",
     "ContractNumber",
     "PostalAddress",
     "DocumentDate",
     "Amount",
+    # Digital identity
+    "URL",
+    "Domain",
+    "TelegramHandle",
+    "VKProfile",
+    "UUID",
+    # Device / hardware
+    "IMEI",
+    "MACAddress",
+    "LicensePlate",
+    "VIN",
 ]
+
+
+# Priority for overlap resolution.  When two detectors produce
+# overlapping matches, the one with the higher priority wins and
+# the lower-priority match is dropped.  Used by ``_resolve_overlaps``.
+# Rule of thumb: specialised types > generic types.
+_PRIORITY: dict[str, int] = {
+    "PhoneNumber": 100,
+    "Email": 100,
+    "INN": 100,
+    "OGRN": 100,
+    "BIC": 100,
+    "SNILS": 100,
+    "ContractNumber": 90,
+    "PostalAddress": 90,
+    "DocumentDate": 90,
+    "Amount": 90,
+    "IMEI": 95,
+    "MACAddress": 95,
+    "LicensePlate": 95,
+    "VIN": 95,
+    "UUID": 95,
+    "TelegramHandle": 80,
+    "VKProfile": 80,
+    "URL": 50,
+    "Domain": 10,
+}
 
 
 @dataclass(frozen=True)
@@ -478,6 +531,378 @@ def _extract_addresses(text: str) -> list[NormalizedIdentifier]:
     return out
 
 
+# ── URL / Domain ─────────────────────────────────────────────────────
+
+# Stops at whitespace, quotes, angle-brackets and a final punctuation
+# trailer (handled separately) so we don't pull `.`, `)`, etc. into the
+# canonical URL.
+_URL_RE = re.compile(
+    r"https?://[^\s<>\"']+",
+    re.IGNORECASE,
+)
+_URL_TRAIL_RE = re.compile(r"[\.,;:!?\)\]\}>]+$")
+
+_DOMAIN_RE = re.compile(
+    # subdomain.example.co.uk (1+ labels, last label 2-24 letters)
+    r"\b(?!-)(?:[a-z0-9-]{1,63}\.)+[a-z]{2,24}\b",
+    re.IGNORECASE,
+)
+# Common, real TLDs we trust without an SLD whitelist.  Anything else
+# falls through (so `payment.dec` isn't mistaken for a domain).  Add
+# more here if real corpus produces false negatives.
+_DOMAIN_TLD_ALLOW: frozenset[str] = frozenset({
+    "com", "net", "org", "io", "ai", "dev", "co", "uk", "de", "fr",
+    "ru", "su", "by", "ua", "kz", "uz", "am", "az", "ge", "kg", "tj",
+    "tm", "md", "rs", "pl", "cz", "sk", "lt", "lv", "ee", "fi", "se",
+    "no", "dk", "nl", "be", "at", "ch", "es", "pt", "it", "gr", "ie",
+    "edu", "gov", "mil", "info", "biz", "name", "pro", "tv", "me",
+    "app", "tech", "cloud", "online", "site", "store", "shop", "blog",
+    "team", "ws", "tg", "us", "ca", "cn", "jp", "kr", "in", "br",
+    "tr", "id", "th", "vn", "mx", "ar", "cl", "ng", "za", "il", "ae",
+    "sa", "eu", "su", "xyz",
+})
+
+
+def _normalize_url(raw: str) -> str:
+    """Lower-case scheme + host, strip trailing slash, no trailing punct."""
+    raw = _URL_TRAIL_RE.sub("", raw)
+    # Lower-case scheme + host while preserving path/query/fragment.
+    m = re.match(r"^(https?)://([^/?#]+)(.*)$", raw, re.IGNORECASE)
+    if not m:
+        return raw
+    scheme, host, rest = m.group(1).lower(), m.group(2).lower(), m.group(3)
+    if rest in ("", "/"):
+        rest = ""
+    return f"{scheme}://{host}{rest}"
+
+
+def _extract_urls(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _URL_RE.finditer(text):
+        raw = m.group(0)
+        cleaned = _URL_TRAIL_RE.sub("", raw)
+        start, end = m.span()
+        end = start + len(cleaned)
+        out.append(
+            NormalizedIdentifier(
+                entity_type="URL",
+                canonical=_normalize_url(cleaned),
+                original=cleaned,
+                span=(start, end),
+            )
+        )
+    return out
+
+
+def _extract_domains(text: str) -> list[NormalizedIdentifier]:
+    """Bare domains (no protocol). URL / Email / social detectors
+    have higher priority so their full URL forms win on overlap."""
+    out: list[NormalizedIdentifier] = []
+    for m in _DOMAIN_RE.finditer(text):
+        candidate = m.group(0)
+        tld = candidate.rsplit(".", 1)[1].lower()
+        if tld not in _DOMAIN_TLD_ALLOW:
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="Domain",
+                canonical=candidate.lower(),
+                original=candidate,
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── Social handles ───────────────────────────────────────────────────
+
+# `@username` (4-32 chars), `t.me/username`, `telegram.me/username`,
+# optionally with `https://` prefix.  Username rules from Telegram:
+# letters, digits, underscores; must start with a letter.
+_TELEGRAM_USER = r"[A-Za-z][A-Za-z0-9_]{3,31}"
+_TELEGRAM_RE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/(?P<user>" + _TELEGRAM_USER + r")"
+    r"|(?<![A-Za-z0-9._])@(?P<at>" + _TELEGRAM_USER + r")",
+    re.IGNORECASE,
+)
+
+_VK_RE = re.compile(
+    r"(?:https?://)?(?:m\.|new\.)?vk(?:\.com|\.ru|ontakte\.ru)"
+    # Path: VK usernames are letters/digits/underscores; `id12345` style
+    # is also allowed.  Trailing dots/commas are punctuation, not URL.
+    r"/(?P<path>[A-Za-z0-9_\-]+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_telegram(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _TELEGRAM_RE.finditer(text):
+        username = (m.group("user") or m.group("at") or "").lower()
+        if not username:
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="TelegramHandle",
+                canonical=f"@{username}",
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    return out
+
+
+def _extract_vk(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _VK_RE.finditer(text):
+        path = m.group("path")
+        if not path or path.lower() in {"id", "www", "feed", "im"}:
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="VKProfile",
+                canonical=f"vk.com/{path.lower()}",
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── UUID ─────────────────────────────────────────────────────────────
+
+_UUID_RE = re.compile(
+    r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_uuids(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _UUID_RE.finditer(text):
+        out.append(
+            NormalizedIdentifier(
+                entity_type="UUID",
+                canonical=m.group(0).lower(),
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── IMEI ─────────────────────────────────────────────────────────────
+
+_IMEI_RE = re.compile(r"\b\d{15}\b")
+
+
+def _luhn_ok(digits: str) -> bool:
+    """Standard Luhn checksum (IMEI / credit card)."""
+    s = 0
+    for i, ch in enumerate(reversed(digits)):
+        n = int(ch)
+        if i % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        s += n
+    return s % 10 == 0
+
+
+def _extract_imei(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _IMEI_RE.finditer(text):
+        digits = m.group(0)
+        if not _luhn_ok(digits):
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="IMEI",
+                canonical=digits,
+                original=digits,
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── MAC address ──────────────────────────────────────────────────────
+
+_MAC_RE = re.compile(
+    r"\b(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}\b",
+)
+
+
+def _extract_mac(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _MAC_RE.finditer(text):
+        raw = m.group(0)
+        canonical = raw.lower().replace("-", ":")
+        out.append(
+            NormalizedIdentifier(
+                entity_type="MACAddress",
+                canonical=canonical,
+                original=raw,
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── SNILS ────────────────────────────────────────────────────────────
+
+# Formatted form only — bare 11-digit numbers are too ambiguous
+# (collide with OGRN/etc.).  Acceptable: ``123-456-789 01`` or
+# ``123-456-789-01``.
+_SNILS_RE = re.compile(r"\b\d{3}-\d{3}-\d{3}[\s\-]\d{2}\b")
+
+
+def _snils_checksum_ok(digits: str) -> bool:
+    """11-digit SNILS: first 9 are the id, last 2 are the checksum.
+
+    Sum digit[i] * (9 - i) for i in 0..8, then mod 101 with special
+    cases for 100 / 101 (both → ``00``).
+    """
+    if len(digits) != 11:
+        return False
+    body, check = digits[:9], digits[9:]
+    s = sum(int(d) * (9 - i) for i, d in enumerate(body))
+    if s < 100:
+        expected = f"{s:02d}"
+    elif s in (100, 101):
+        expected = "00"
+    else:
+        rem = s % 101
+        expected = "00" if rem in (100, 101) else f"{rem:02d}"
+    return check == expected
+
+
+def _extract_snils(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _SNILS_RE.finditer(text):
+        raw = m.group(0)
+        digits = re.sub(r"\D", "", raw)
+        if not _snils_checksum_ok(digits):
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="SNILS",
+                canonical=digits,
+                original=raw,
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── Russian license plate ────────────────────────────────────────────
+
+# Russian car plates use a 12-letter Cyrillic subset that visually
+# matches Latin look-alikes.  Format: X NNN XX RR (1+3+2+2-3).  Spaces
+# / non-breaking spaces are optional between letter and digit groups.
+_RU_PLATE_LETTERS = "АВЕКМНОРСТУХ"
+_RU_PLATE_RE = re.compile(
+    rf"\b[{_RU_PLATE_LETTERS}]\d{{3}}[{_RU_PLATE_LETTERS}]{{2}}[\s ]?\d{{2,3}}\b",
+)
+
+
+def _extract_license_plates(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _RU_PLATE_RE.finditer(text):
+        raw = m.group(0)
+        # Canonical: no internal whitespace, upper-case.
+        canonical = re.sub(r"[\s ]+", "", raw).upper()
+        out.append(
+            NormalizedIdentifier(
+                entity_type="LicensePlate",
+                canonical=canonical,
+                original=raw,
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── VIN ──────────────────────────────────────────────────────────────
+
+# 17 chars, no I/O/Q.  Letters + digits.
+_VIN_RE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
+
+_VIN_WEIGHTS = (8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2)
+_VIN_TRANSLIT = {
+    **{str(d): d for d in range(10)},
+    "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7, "H": 8,
+    "J": 1, "K": 2, "L": 3, "M": 4, "N": 5,
+    "P": 7, "R": 9,
+    "S": 2, "T": 3, "U": 4, "V": 5, "W": 6, "X": 7, "Y": 8, "Z": 9,
+}
+
+
+def _vin_checksum_ok(vin: str) -> bool:
+    if len(vin) != 17:
+        return False
+    vin = vin.upper()
+    total = 0
+    for ch, w in zip(vin, _VIN_WEIGHTS):
+        v = _VIN_TRANSLIT.get(ch)
+        if v is None:
+            return False
+        total += v * w
+    rem = total % 11
+    expected = "X" if rem == 10 else str(rem)
+    return vin[8] == expected
+
+
+def _extract_vins(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _VIN_RE.finditer(text):
+        candidate = m.group(0).upper()
+        if not _vin_checksum_ok(candidate):
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="VIN",
+                canonical=candidate,
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── Overlap resolution ───────────────────────────────────────────────
+
+
+def _spans_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return not (a[1] <= b[0] or b[1] <= a[0])
+
+
+def _resolve_overlaps(
+    matches: list[NormalizedIdentifier],
+) -> list[NormalizedIdentifier]:
+    """Drop lower-priority matches whose span overlaps an already
+    accepted higher-priority match.
+
+    Resolution order: priority desc, then span start asc, then wider
+    span first (so ``https://vk.com/u`` beats the inner ``vk.com``).
+    """
+    ranked = sorted(
+        matches,
+        key=lambda m: (
+            -_PRIORITY.get(m.entity_type, 0),
+            m.span[0],
+            -(m.span[1] - m.span[0]),
+        ),
+    )
+    accepted: list[NormalizedIdentifier] = []
+    for m in ranked:
+        if any(_spans_overlap(m.span, kept.span) for kept in accepted):
+            continue
+        accepted.append(m)
+    accepted.sort(key=lambda m: m.span)
+    return accepted
+
+
 # ── public aggregator ────────────────────────────────────────────────
 
 
@@ -487,21 +912,38 @@ def extract_identifiers(text: str) -> list[NormalizedIdentifier]:
     Multiple occurrences of the same canonical form ARE returned (each
     with its own span). Deduplication for graph injection is the
     integration layer's responsibility (Stage C).
+
+    Overlap policy: when two detectors match overlapping spans (e.g.
+    ``URL`` and ``VKProfile`` both matching ``https://vk.com/user``),
+    the higher-priority specialised type wins via
+    ``_resolve_overlaps``.
     """
     if not text:
         return []
     found: list[NormalizedIdentifier] = []
+    # Business / financial
     found.extend(_extract_phones(text))
     found.extend(_extract_emails(text))
     found.extend(_extract_inns(text))
     found.extend(_extract_ogrn(text))
     found.extend(_extract_bic(text))
+    found.extend(_extract_snils(text))
     found.extend(_extract_contracts(text))
     found.extend(_extract_dates(text))
     found.extend(_extract_amounts(text))
     found.extend(_extract_addresses(text))
-    found.sort(key=lambda x: x.span)
-    return found
+    # Digital identity
+    found.extend(_extract_urls(text))
+    found.extend(_extract_domains(text))
+    found.extend(_extract_telegram(text))
+    found.extend(_extract_vk(text))
+    found.extend(_extract_uuids(text))
+    # Device / hardware
+    found.extend(_extract_imei(text))
+    found.extend(_extract_mac(text))
+    found.extend(_extract_license_plates(text))
+    found.extend(_extract_vins(text))
+    return _resolve_overlaps(found)
 
 
 # ── Stage-C helpers: payload + augment block builders ───────────────

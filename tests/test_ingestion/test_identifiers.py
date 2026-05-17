@@ -387,3 +387,193 @@ def test_build_augment_block_format() -> None:
 
 def test_build_augment_block_empty_input() -> None:
     assert build_augment_block([]) == ""
+
+
+# ── URL / Domain ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("https://example.com/", "https://example.com"),
+        ("HTTPS://EXAMPLE.COM/Path?q=1", "https://example.com/Path?q=1"),
+        ("http://foo.bar.dev/abc.", "http://foo.bar.dev/abc"),
+    ],
+)
+def test_url_canonicalises_scheme_host_and_trailing_slash(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(f"Ссылка: {raw}"), "URL")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+def test_bare_domain_picked_when_no_protocol() -> None:
+    found = _by_type(
+        extract_identifiers("Сайт example.com и Resource example.invalid."),
+        "Domain",
+    )
+    # Only `example.com` — `.invalid` isn't in our TLD allow-list.
+    assert [x.canonical for x in found] == ["example.com"]
+
+
+def test_url_supersedes_inner_domain() -> None:
+    out = extract_identifiers("Открой https://example.com/x")
+    # Domain regex matches `example.com` inside the URL; overlap
+    # resolver must drop it.
+    assert all(x.entity_type != "Domain" for x in out)
+
+
+# ── Social handles ───────────────────────────────────────────────────
+
+
+def test_telegram_at_handle() -> None:
+    found = _by_type(extract_identifiers("Контакт @ivan_dev для связи"), "TelegramHandle")
+    assert len(found) == 1
+    assert found[0].canonical == "@ivan_dev"
+
+
+def test_telegram_t_me_link_canonicalises_to_at() -> None:
+    found = _by_type(extract_identifiers("Telegram: t.me/Anna_PM"), "TelegramHandle")
+    assert len(found) == 1
+    assert found[0].canonical == "@anna_pm"
+
+
+def test_email_local_does_not_match_telegram_handle() -> None:
+    # `@example.com` inside `user@example.com` should NOT be a
+    # Telegram handle — Email's wider span (priority 100) wins.
+    out = extract_identifiers("Письмо ivan@example.com")
+    assert any(x.entity_type == "Email" for x in out)
+    assert all(x.entity_type != "TelegramHandle" for x in out)
+
+
+def test_vk_profile_url_and_short() -> None:
+    out = extract_identifiers("Профили: vk.com/anna_pm и https://m.vk.com/id12345")
+    vks = _by_type(out, "VKProfile")
+    assert sorted(x.canonical for x in vks) == [
+        "vk.com/anna_pm", "vk.com/id12345",
+    ]
+    # URL detector should NOT also produce a match for the
+    # `https://m.vk.com/id12345` — VKProfile has higher priority.
+    assert all(x.entity_type != "URL" for x in out)
+
+
+# ── UUID ─────────────────────────────────────────────────────────────
+
+
+def test_uuid_canonicalises_to_lowercase() -> None:
+    found = _by_type(
+        extract_identifiers("ID: 550E8400-E29B-41D4-A716-446655440000"),
+        "UUID",
+    )
+    assert len(found) == 1
+    assert found[0].canonical == "550e8400-e29b-41d4-a716-446655440000"
+
+
+# ── IMEI ─────────────────────────────────────────────────────────────
+
+
+def test_imei_valid_luhn_extracted() -> None:
+    # 356938035643809 has a valid Luhn checksum (sample from spec).
+    found = _by_type(extract_identifiers("IMEI 356938035643809"), "IMEI")
+    assert [x.canonical for x in found] == ["356938035643809"]
+
+
+def test_imei_invalid_luhn_rejected() -> None:
+    # Last digit flipped → fails Luhn → must NOT be returned.
+    found = _by_type(extract_identifiers("Нет IMEI 356938035643800"), "IMEI")
+    assert found == []
+
+
+# ── MAC address ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("00:1A:2B:3C:4D:5E", "00:1a:2b:3c:4d:5e"),
+        ("aa-bb-cc-dd-ee-ff", "aa:bb:cc:dd:ee:ff"),
+    ],
+)
+def test_mac_address_canonicalises(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(f"MAC: {raw}"), "MACAddress")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+# ── SNILS ────────────────────────────────────────────────────────────
+
+
+def test_snils_valid_checksum_extracted() -> None:
+    # 112-233-445 95 has the documented valid SNILS checksum.
+    found = _by_type(extract_identifiers("СНИЛС: 112-233-445 95"), "SNILS")
+    assert [x.canonical for x in found] == ["11223344595"]
+
+
+def test_snils_bare_11_digit_not_extracted() -> None:
+    # No dashes → ambiguous (OGRN territory) → SNILS detector skips it.
+    found = _by_type(extract_identifiers("ОГРН 11223344595"), "SNILS")
+    assert found == []
+
+
+def test_snils_invalid_checksum_rejected() -> None:
+    found = _by_type(extract_identifiers("СНИЛС: 112-233-445 00"), "SNILS")
+    assert found == []
+
+
+# ── Russian license plate ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("А123ВЕ77", "А123ВЕ77"),
+        ("М001ММ 199", "М001ММ199"),
+    ],
+)
+def test_license_plate(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(f"Номер {raw}"), "LicensePlate")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+def test_license_plate_latin_lookalike_rejected() -> None:
+    # Same shape but with Latin letters — not a valid RU plate.
+    found = _by_type(extract_identifiers("A123BE77"), "LicensePlate")
+    assert found == []
+
+
+# ── VIN ──────────────────────────────────────────────────────────────
+
+
+def test_vin_valid_checksum_extracted() -> None:
+    # `1M8GDM9AXKP042788` — classic VIN with valid mod-11 checksum.
+    found = _by_type(extract_identifiers("VIN: 1M8GDM9AXKP042788"), "VIN")
+    assert [x.canonical for x in found] == ["1M8GDM9AXKP042788"]
+
+
+def test_vin_invalid_checksum_rejected() -> None:
+    # First digit flipped 1→2 (weight 8 at pos 0) shifts the mod-11
+    # sum away from the expected ``X`` at position 8.
+    found = _by_type(extract_identifiers("VIN: 2M8GDM9AXKP042788"), "VIN")
+    assert found == []
+
+
+# ── Integration: a single corpus produces every new type ─────────────
+
+
+def test_kitchen_sink_extracts_all_new_types() -> None:
+    text = (
+        "Подпись: ivan@example.com, t.me/ivan_dev. "
+        "Сайт https://shop.example.com/cart. "
+        "Резервный домен example.ru. "
+        "Профиль ВК vk.com/anna_pm. "
+        "Телефон в IoT-шлюзе IMEI 356938035643809, MAC 00:1A:2B:3C:4D:5E. "
+        "Автомобиль А123ВЕ77 VIN 1M8GDM9AXKP042788. "
+        "СНИЛС 112-233-445 95. "
+        "ID: 550e8400-e29b-41d4-a716-446655440000."
+    )
+    out = extract_identifiers(text)
+    types = {x.entity_type for x in out}
+    assert {
+        "Email", "TelegramHandle", "URL", "Domain", "VKProfile",
+        "IMEI", "MACAddress", "LicensePlate", "VIN", "SNILS", "UUID",
+    } <= types
