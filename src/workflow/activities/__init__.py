@@ -1,4 +1,19 @@
-"""Activity functions invoked by `DocumentIngestWorkflow`."""
+"""Activity functions invoked by `DocumentIngestWorkflow`.
+
+Activities are split into two pools by GPU/LLM pressure:
+
+* ``LLM_ACTIVITIES`` — talk to the project LLM (LightRAG extraction
+  and cross-chunk merge / ER).  Run on the dedicated
+  ``settings.temporal.llm_task_queue`` queue with concurrency
+  capped at ``settings.temporal.llm_activity_concurrency`` (default 1)
+  so simultaneous workflows can't dogpile the local GPU.
+
+* ``MAIN_ACTIVITIES`` — IO-bound or embedding-only.  Run on the main
+  ``settings.temporal.task_queue`` queue with normal concurrency.
+
+``ALL_ACTIVITIES`` is kept for tests + small deployments that prefer
+a single worker pool.
+"""
 
 from src.workflow.activities.build_property_graph import build_property_graph
 from src.workflow.activities.extract_kg import extract_kg
@@ -9,20 +24,27 @@ from src.workflow.activities.inject_canonical import inject_canonical
 from src.workflow.activities.merge_and_resolve import merge_and_resolve
 from src.workflow.activities.parse_and_chunk import parse_and_chunk
 
-ALL_ACTIVITIES = [
+LLM_ACTIVITIES = [
+    extract_kg,
+    merge_and_resolve,
+]
+
+MAIN_ACTIVITIES = [
     fetch_source,
     parse_and_chunk,
     index_vector,
     inject_canonical,
-    extract_kg,
-    merge_and_resolve,
     build_property_graph,
     finalize,
     mark_failed,
 ]
 
+ALL_ACTIVITIES = MAIN_ACTIVITIES + LLM_ACTIVITIES
+
 __all__ = [
     "ALL_ACTIVITIES",
+    "LLM_ACTIVITIES",
+    "MAIN_ACTIVITIES",
     "build_property_graph",
     "extract_kg",
     "fetch_source",

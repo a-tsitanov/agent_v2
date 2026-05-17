@@ -18,6 +18,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
+from src.config import settings
 from src.workflow.contracts import (
     Ctx,
     FinalizeIn,
@@ -120,10 +121,28 @@ HAPPY_ACTIVITIES = [
 # ── tests ─────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _collapse_llm_queue(monkeypatch):
+    """Workflow routes extract_kg + merge_and_resolve to
+    `settings.temporal.llm_task_queue`.  In tests we collapse that
+    onto the per-test main queue so a single Worker can host every
+    stub.  Live two-queue routing is exercised by
+    `test_workflow_local.py`."""
+    # Each test sets its own queue name; we patch right before the
+    # Worker is created, but make sure the default is at least a
+    # known value so the workflow can resolve it deterministically.
+    monkeypatch.setattr(
+        settings.temporal, "llm_task_queue", "wf-test-llm-fallback",
+        raising=False,
+    )
+    yield
+
+
 @pytest.mark.asyncio
-async def test_happy_path_completed():
+async def test_happy_path_completed(monkeypatch):
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow],
@@ -139,7 +158,7 @@ async def test_happy_path_completed():
 
 
 @pytest.mark.asyncio
-async def test_graph_failure_downgrades_to_vector_only():
+async def test_graph_failure_downgrades_to_vector_only(monkeypatch):
     @activity.defn(name="extract_kg")
     async def boom(parsed: Parsed) -> KGExtracted:
         raise ApplicationError("LLM 503", non_retryable=True)
@@ -152,6 +171,7 @@ async def test_graph_failure_downgrades_to_vector_only():
 
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow], activities=activities,
@@ -165,7 +185,7 @@ async def test_graph_failure_downgrades_to_vector_only():
 
 
 @pytest.mark.asyncio
-async def test_vector_failure_runs_mark_failed_and_raises():
+async def test_vector_failure_runs_mark_failed_and_raises(monkeypatch):
     mark_failed_calls: list[MarkFailedIn] = []
 
     @activity.defn(name="mark_failed")
@@ -184,6 +204,7 @@ async def test_vector_failure_runs_mark_failed_and_raises():
 
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow], activities=activities,

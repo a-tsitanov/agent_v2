@@ -133,6 +133,15 @@ class TemporalSettings(BaseSettings):
     activity_concurrency: int = 4
     staging_bucket: str = "kb-staging"
 
+    # GPU-bound activities (LLM extract_kg + merge_and_resolve) run on
+    # a separate task queue so we can cap their concurrency
+    # independently of the IO-bound fast activities.  Default of 1
+    # serialises LLM calls — sane for a single local GPU.  Raise on
+    # multi-GPU hosts or when proxy-side batching makes parallel calls
+    # safe.
+    llm_task_queue: str = "kb-ingest-llm"
+    llm_activity_concurrency: int = 1
+
     @property
     def target(self) -> str:
         return f"{self.host}:{self.port}"

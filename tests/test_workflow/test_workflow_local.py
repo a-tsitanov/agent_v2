@@ -18,7 +18,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from src.config import settings
-from src.workflow.activities import ALL_ACTIVITIES
+from src.workflow.activities import LLM_ACTIVITIES, MAIN_ACTIVITIES
 from src.workflow.contracts import IngestParams
 from src.workflow.document_ingest import DocumentIngestWorkflow
 
@@ -44,7 +44,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_full_pipeline_happy_path():
+async def test_full_pipeline_happy_path(monkeypatch):
     fixture = (
         Path(__file__).parent.parent / "test_ingestion" / "fixtures" / "sample.txt"
     )
@@ -65,12 +65,22 @@ async def test_full_pipeline_happy_path():
         data_converter=pydantic_data_converter,
     )
     queue = f"kb-ingest-it-{doc_id}"
-    async with Worker(
+    llm_queue = f"{queue}-llm"
+    monkeypatch.setattr(
+        settings.temporal, "llm_task_queue", llm_queue, raising=False,
+    )
+    main_worker = Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow],
-        activities=ALL_ACTIVITIES,
+        activities=MAIN_ACTIVITIES,
         max_concurrent_activities=2,
-    ):
+    )
+    llm_worker = Worker(
+        client, task_queue=llm_queue,
+        activities=LLM_ACTIVITIES,
+        max_concurrent_activities=1,
+    )
+    async with main_worker, llm_worker:
         params = IngestParams(doc_id=str(doc_id), path=str(fixture))
         result = await client.execute_workflow(
             DocumentIngestWorkflow.run, params,

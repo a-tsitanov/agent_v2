@@ -16,6 +16,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
+    from src.config import settings
     from src.workflow.contracts import (
         Ctx,
         FinalizeIn,
@@ -109,9 +110,13 @@ class DocumentIngestWorkflow:
 
                 workflow.upsert_memo({"stage": "extract_kg"})
                 log.info("→ extract_kg (LLM heavy)")
+                # LLM-bound: routed to the GPU-serialised task queue
+                # so simultaneous workflows don't dogpile the local
+                # model.
                 kg = await workflow.execute_activity(
                     "extract_kg", parsed,
                     result_type=KGExtracted,
+                    task_queue=settings.temporal.llm_task_queue,
                     start_to_close_timeout=timedelta(hours=1),
                     heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=_GRAPH_HEAVY_RETRY,
@@ -123,9 +128,11 @@ class DocumentIngestWorkflow:
 
                 workflow.upsert_memo({"stage": "merge_and_resolve"})
                 log.info("→ merge_and_resolve")
+                # Also LLM-bound (cross-chunk merge + ER judge).
                 merged = await workflow.execute_activity(
                     "merge_and_resolve", kg,
                     result_type=Merged,
+                    task_queue=settings.temporal.llm_task_queue,
                     start_to_close_timeout=timedelta(minutes=30),
                     retry_policy=_DEFAULT_RETRY,
                 )
