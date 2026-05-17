@@ -17,6 +17,7 @@ from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel
+from temporalio.common import WorkflowIDReusePolicy
 
 from urllib3.exceptions import MaxRetryError
 
@@ -108,12 +109,19 @@ async def upload_document(
     # executes ``DocumentIngestWorkflow`` end-to-end (fetch → parse →
     # vector → graph → finalize).  The workflow id is derived from
     # ``doc_id`` so we get idempotent de-dup at the Temporal level.
+    #
+    # ``ALLOW_DUPLICATE_FAILED_ONLY`` blocks a fresh upload of the same
+    # doc_id from re-running a workflow that already succeeded (we'd
+    # silently re-index, paying the LLM bill again).  Failed workflows
+    # CAN be restarted under the same id — that's the explicit retry
+    # path: re-upload to retry an ingest that died terminally.
     client = await get_temporal_client()
     await client.start_workflow(
         DocumentIngestWorkflow.run,
         IngestParams(doc_id=str(doc_id), path=s3_uri),
         id=f"ingest-{doc_id}",
         task_queue=settings.temporal.task_queue,
+        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
     )
     logger.info(
         "ingest enqueued  doc_id={d}  path={p}  dept={dept}",

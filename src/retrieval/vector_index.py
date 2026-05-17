@@ -42,6 +42,13 @@ def build_vector_store(
         # the default LightRAG / enterprise-kb choice and matches what
         # most embedding models train against.
         similarity_metric="COSINE",
+        # `upsert_mode=True` makes `add(nodes)` call `client.upsert`
+        # instead of `client.insert`: re-inserting the same
+        # `node_id` overwrites the row rather than creating a
+        # duplicate.  Critical for workflow durability — Temporal
+        # may retry the `index_vector` activity if the worker
+        # crashes mid-batch.
+        upsert_mode=True,
     )
 
 
