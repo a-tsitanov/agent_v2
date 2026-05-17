@@ -46,14 +46,51 @@ class Injected(_Frozen):
     count: int
 
 
+class EntitySample(_Frozen):
+    """Compact entity representation suitable for inclusion in
+    activity results (kept small so Temporal UI doesn't truncate)."""
+
+    name: str
+    label: str
+
+
+class RelationSample(_Frozen):
+    source: str
+    target: str
+    label: str
+
+
+class DuplicateGroup(_Frozen):
+    """Pre-merge entity name that appeared `count` times across
+    chunks — exactly the candidates the merger collapses."""
+
+    name: str
+    count: int
+    labels: list[str] = []
+
+
 class KGExtracted(_Frozen):
     parsed: Parsed
     nodes_with_kg_uri: str
+    entity_count: int = 0
+    relation_count: int = 0
+    entity_labels_top: dict[str, int] = {}
+    relation_labels_top: dict[str, int] = {}
+    sample_entities: list[EntitySample] = []
+    sample_relations: list[RelationSample] = []
 
 
 class Merged(_Frozen):
     kg: KGExtracted
     merged_entities_uri: str
+    raw_entity_count: int = 0
+    merged_entity_count: int = 0
+    relation_count: int = 0
+    duplicate_groups: list[DuplicateGroup] = []
+    phones_collapsed: int = 0
+    phone_alias_map: dict[str, str] = {}
+    er_merged: int = 0
+    er_alias_map: dict[str, str] = {}
 
 
 class GraphBuilt(_Frozen):

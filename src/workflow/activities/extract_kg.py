@@ -22,7 +22,12 @@ from temporalio import activity
 
 from src.graph.index import build_kg_extractor
 from src.retrieval.llm import build_llm
-from src.workflow.contracts import KGExtracted, Parsed
+from src.workflow.contracts import (
+    EntitySample,
+    KGExtracted,
+    Parsed,
+    RelationSample,
+)
 from src.workflow.staging import build_staging_store
 
 _HEARTBEAT_SAMPLE_CAP = 20
@@ -31,11 +36,10 @@ _HEARTBEAT_LABEL_TOP = 10
 
 def _summarise_kg(nodes) -> dict:
     """Pull out small JSON-serialisable samples of what the extractor
-    emitted so the workflow UI can render them in the heartbeat
-    detail panel without us having to reach into the staging blob.
-
-    Capped at `_HEARTBEAT_SAMPLE_CAP` entities + relations.  Counters
-    cover the full set."""
+    emitted.  These are returned as part of `KGExtracted` so they are
+    visible on the `ActivityTaskCompleted` event in Temporal UI
+    after the activity finishes (heartbeat details only survive
+    while the activity is still running)."""
     entities = []
     relations = []
     for n in nodes:
@@ -56,18 +60,18 @@ def _summarise_kg(nodes) -> dict:
             rel_label_counts.most_common(_HEARTBEAT_LABEL_TOP),
         ),
         "sample_entities": [
-            {
-                "name": str(e.name)[:120],
-                "label": str(getattr(e, "label", "") or "")[:60],
-            }
+            EntitySample(
+                name=str(e.name)[:120],
+                label=str(getattr(e, "label", "") or "")[:60],
+            )
             for e in entities[:_HEARTBEAT_SAMPLE_CAP]
         ],
         "sample_relations": [
-            {
-                "source": str(getattr(r, "source_id", ""))[:120],
-                "target": str(getattr(r, "target_id", ""))[:120],
-                "label": str(getattr(r, "label", "") or "")[:60],
-            }
+            RelationSample(
+                source=str(getattr(r, "source_id", ""))[:120],
+                target=str(getattr(r, "target_id", ""))[:120],
+                label=str(getattr(r, "label", "") or "")[:60],
+            )
             for r in relations[:_HEARTBEAT_SAMPLE_CAP]
         ],
     }
@@ -98,14 +102,27 @@ async def extract_kg(parsed: Parsed) -> KGExtracted:
         summary["entity_count"], summary["relation_count"],
         summary["entity_labels_top"],
     )
-    activity.heartbeat({"stage": "extracted", **summary})
+    # Heartbeat carries the samples while the activity is running so
+    # they show up in the UI's Pending Activities panel.  The same data
+    # is included in the return value below so it persists after the
+    # activity completes.
+    activity.heartbeat({
+        "stage": "extracted",
+        "entity_count": summary["entity_count"],
+        "relation_count": summary["relation_count"],
+        "entity_labels_top": summary["entity_labels_top"],
+        "relation_labels_top": summary["relation_labels_top"],
+    })
 
     uri = staging.write_pickle(parsed.ctx.workflow_run_id, "kg", nodes)
-    activity.heartbeat({"stage": "staged", "uri": uri})
     logger.info(
         "extract_kg done  doc={d}  chunks={n}  entities={e}  relations={r}  "
         "uri={u}",
         d=parsed.ctx.doc_id, n=len(nodes),
         e=summary["entity_count"], r=summary["relation_count"], u=uri,
     )
-    return KGExtracted(parsed=parsed, nodes_with_kg_uri=uri)
+    return KGExtracted(
+        parsed=parsed,
+        nodes_with_kg_uri=uri,
+        **summary,
+    )

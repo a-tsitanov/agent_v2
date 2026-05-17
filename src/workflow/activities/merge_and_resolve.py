@@ -19,7 +19,6 @@ via heartbeats:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
 
 from llama_index.core.graph_stores.types import KG_NODES_KEY
 from loguru import logger
@@ -32,13 +31,13 @@ from src.graph.phone_consolidation import consolidate_phone_entities
 from src.graph.store import build_neo4j_graph_store
 from src.ingestion.embeddings import build_embedding_model
 from src.retrieval.llm import build_llm
-from src.workflow.contracts import KGExtracted, Merged
+from src.workflow.contracts import DuplicateGroup, KGExtracted, Merged
 from src.workflow.staging import build_staging_store
 
 _HEARTBEAT_SAMPLE_CAP = 20
 
 
-def _premerge_groups(nodes) -> tuple[int, list[dict[str, Any]]]:
+def _premerge_groups(nodes) -> tuple[int, list[DuplicateGroup]]:
     """Group raw extracted entities by name across all chunks.
 
     Names that appear more than once are exactly what `merge_kg_extraction`
@@ -59,15 +58,15 @@ def _premerge_groups(nodes) -> tuple[int, list[dict[str, Any]]]:
                 str(getattr(ent, "label", "") or ""),
             )
     dup_groups = [
-        {
-            "name": name[:120],
-            "count": len(labels),
-            "labels": sorted({lab for lab in labels if lab})[:4],
-        }
+        DuplicateGroup(
+            name=name[:120],
+            count=len(labels),
+            labels=sorted({lab for lab in labels if lab})[:4],
+        )
         for name, labels in by_name.items()
         if len(labels) > 1
     ]
-    dup_groups.sort(key=lambda g: -g["count"])
+    dup_groups.sort(key=lambda g: -g.count)
     return total, dup_groups[:_HEARTBEAT_SAMPLE_CAP]
 
 
@@ -125,12 +124,13 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         "phone_alias_map": _sample_map(_phone_map),
     })
 
+    er_map: dict[str, str] = {}
     if settings.agent.er_enabled:
         activity.logger.info("merge_and_resolve resolving entities (ER)")
         embed_model = build_embedding_model()
         graph_store = build_neo4j_graph_store()
         pre_er_count = len(merged_entities)
-        merged_entities, merged_relations, _er_map = await resolve_entities(
+        merged_entities, merged_relations, er_map = await resolve_entities(
             merged_entities, merged_relations, nodes,
             llm=llm, embed_model=embed_model, graph_store=graph_store,
             config=ERConfig(
@@ -143,8 +143,8 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
             "stage": "resolved",
             "entities_in": pre_er_count,
             "entities_out": len(merged_entities),
-            "er_merged": len(_er_map),
-            "er_alias_map": _sample_map(_er_map),
+            "er_merged": len(er_map),
+            "er_alias_map": _sample_map(er_map),
         })
     else:
         activity.heartbeat({"stage": "er_skipped"})
@@ -153,11 +153,21 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         kg.parsed.ctx.workflow_run_id, "merged",
         (merged_entities, merged_relations, nodes),
     )
-    activity.heartbeat({"stage": "staged", "uri": uri})
     logger.info(
         "merge_and_resolve done  doc={d}  raw={raw}  merged={e}  relations={r}",
         d=kg.parsed.ctx.doc_id,
         raw=raw_entity_count,
         e=len(merged_entities), r=len(merged_relations),
     )
-    return Merged(kg=kg, merged_entities_uri=uri)
+    return Merged(
+        kg=kg,
+        merged_entities_uri=uri,
+        raw_entity_count=raw_entity_count,
+        merged_entity_count=len(merged_entities),
+        relation_count=len(merged_relations),
+        duplicate_groups=dup_groups,
+        phones_collapsed=len(_phone_map),
+        phone_alias_map=_sample_map(_phone_map),
+        er_merged=len(er_map),
+        er_alias_map=_sample_map(er_map),
+    )
