@@ -107,7 +107,11 @@ Document file
 │                      PostalAddress,              │
 │                      DocumentDate, Amount.       │
 │           digital:   URL, Domain, TelegramHandle,│
-│                      VKProfile, UUID.            │
+│                      VKProfile, TwitterHandle,   │
+│                      InstagramHandle,            │
+│                      LinkedInProfile,            │
+│                      YouTubeChannel,             │
+│                      GitHubProfile, UUID.        │
 │           device:    IMEI (Luhn), MACAddress,    │
 │                      LicensePlate (RU pattern    │
 │                      + context-anchored generic),│

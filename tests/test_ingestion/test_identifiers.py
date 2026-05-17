@@ -456,6 +456,115 @@ def test_vk_profile_url_and_short() -> None:
     assert all(x.entity_type != "URL" for x in out)
 
 
+# ── Twitter / X ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("https://twitter.com/elonmusk", "@elonmusk"),
+        ("https://x.com/jack", "@jack"),
+        ("twitter.com/Anna_PM", "@anna_pm"),
+        ("Anna в твиттере @anna_dev", "@anna_dev"),
+        ("Twitter: @jdoe", "@jdoe"),
+    ],
+)
+def test_twitter_handle(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(raw), "TwitterHandle")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+def test_twitter_bare_at_without_context_falls_to_telegram() -> None:
+    out = extract_identifiers("Бот @bare_at без контекста")
+    assert all(x.entity_type != "TwitterHandle" for x in out)
+    assert any(
+        x.entity_type == "TelegramHandle" and x.canonical == "@bare_at"
+        for x in out
+    )
+
+
+# ── Instagram ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("https://instagram.com/anna_pm/", "@anna_pm"),
+        ("instagram.com/john.doe", "@john.doe"),
+        ("инсте @photo_anna", "@photo_anna"),
+        ("Insta: @official_ig", "@official_ig"),
+    ],
+)
+def test_instagram_handle(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(raw), "InstagramHandle")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+# ── LinkedIn ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("https://www.linkedin.com/in/john-doe-12345/",
+         "linkedin.com/in/john-doe-12345"),
+        ("linkedin.com/company/acme", "linkedin.com/company/acme"),
+        ("https://ru.linkedin.com/in/Ivan-Petrov", "linkedin.com/in/ivan-petrov"),
+    ],
+)
+def test_linkedin_profile(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(raw), "LinkedInProfile")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+# ── YouTube ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("youtube.com/@mkbhd", "youtube.com/@mkbhd"),
+        ("https://www.youtube.com/channel/UCBJycsmduvYEL83R_U4JriQ",
+         "youtube.com/channel/UCBJycsmduvYEL83R_U4JriQ"),
+        ("youtube.com/c/google", "youtube.com/c/google"),
+        ("youtube.com/user/legacy_name", "youtube.com/user/legacy_name"),
+    ],
+)
+def test_youtube_channel(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(raw), "YouTubeChannel")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+# ── GitHub ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,canonical",
+    [
+        ("github.com/octocat", "github.com/octocat"),
+        ("https://github.com/anthropics/claude-code",
+         "github.com/anthropics/claude-code"),
+        ("https://www.github.com/torvalds/linux",
+         "github.com/torvalds/linux"),
+    ],
+)
+def test_github_profile(raw, canonical) -> None:
+    found = _by_type(extract_identifiers(raw), "GitHubProfile")
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+def test_github_reserved_path_not_extracted() -> None:
+    # `github.com/marketplace` / `/topics` / `/settings` etc. are
+    # site sections, not user profiles.
+    out = extract_identifiers("Смотри github.com/marketplace/category/ai")
+    assert all(x.entity_type != "GitHubProfile" for x in out)
+
+
 # ── UUID ─────────────────────────────────────────────────────────────
 
 

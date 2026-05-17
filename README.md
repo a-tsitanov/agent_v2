@@ -117,7 +117,8 @@ canonicalisation transform when they appear:
   `OGRN`, `BIC`, `SNILS`, `ContractNumber`, `PostalAddress`,
   `DocumentDate`, `Amount`.
 - **Digital identity:** `URL`, `Domain`, `TelegramHandle`,
-  `VKProfile`, `UUID`.
+  `VKProfile`, `TwitterHandle`, `InstagramHandle`,
+  `LinkedInProfile`, `YouTubeChannel`, `GitHubProfile`, `UUID`.
 - **Device / hardware:** `IMEI` (Luhn-validated), `MACAddress`,
   `LicensePlate` (Russian Cyrillic-format directly, plus
   country-agnostic generic plates when a context phrase like

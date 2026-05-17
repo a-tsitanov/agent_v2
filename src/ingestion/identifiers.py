@@ -12,13 +12,15 @@ Why deterministic + canonical:
   to E.164 (``+74951234567``) so identical entities collapse to one
   node regardless of source formatting.
 
-Currently 19 types across three groups (see ``IdentifierType``):
+Currently 24 types across three groups (see ``IdentifierType``):
 
 * **Business / financial** — ``PhoneNumber``, ``Email``, ``INN``,
   ``OGRN``, ``BIC``, ``SNILS``, ``ContractNumber``,
   ``PostalAddress``, ``DocumentDate``, ``Amount``.
 * **Digital identity** — ``URL``, ``Domain``, ``TelegramHandle``,
-  ``VKProfile``, ``UUID``.
+  ``VKProfile``, ``TwitterHandle``, ``InstagramHandle``,
+  ``LinkedInProfile``, ``YouTubeChannel``, ``GitHubProfile``,
+  ``UUID``.
 * **Device / hardware** — ``IMEI`` (Luhn), ``MACAddress``,
   ``LicensePlate`` (RU Cyrillic shape directly + country-agnostic
   generic plates anchored to a context phrase such as ``"license
@@ -79,6 +81,11 @@ IdentifierType = Literal[
     "Domain",
     "TelegramHandle",
     "VKProfile",
+    "TwitterHandle",
+    "InstagramHandle",
+    "LinkedInProfile",
+    "YouTubeChannel",
+    "GitHubProfile",
     "UUID",
     # Device / hardware
     "IMEI",
@@ -110,6 +117,11 @@ _PRIORITY: dict[str, int] = {
     "UUID": 95,
     "TelegramHandle": 80,
     "VKProfile": 80,
+    "TwitterHandle": 80,
+    "InstagramHandle": 80,
+    "LinkedInProfile": 80,
+    "YouTubeChannel": 80,
+    "GitHubProfile": 80,
     "URL": 50,
     "Domain": 10,
 }
@@ -672,6 +684,209 @@ def _extract_vk(text: str) -> list[NormalizedIdentifier]:
     return out
 
 
+# ── Twitter / X ──────────────────────────────────────────────────────
+
+_TWITTER_USER = r"[A-Za-z0-9_]{1,15}"
+# URL forms `twitter.com/user` and `x.com/user`.  Plain `@user` is
+# ambiguous (could be Telegram, Instagram, Mastodon…) so we only
+# accept it when preceded by a Twitter/X context word.
+_TWITTER_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.|mobile\.)?(?:twitter|x)\.com/(?!i/|search\?|home\b)"
+    r"(?P<user>" + _TWITTER_USER + r")",
+    re.IGNORECASE,
+)
+_TWITTER_AT_RE = re.compile(
+    # Tolerant of Russian morphology ("твиттере", "твиттера", …)
+    # and English plurals/forms ("tweets", "tweeted").  Up to 12 chars
+    # of filler may sit between the trigger word and the `@user` so
+    # phrases like "в твиттере @anna_dev" land here, not in the
+    # generic Telegram catch-all.
+    r"(?:twitter[a-z]*|tweet[a-z]*|твиттер[а-я]*|x\.com)"
+    r"\s*[:\-]?\s*@(?P<at>" + _TWITTER_USER + r")",
+    re.IGNORECASE,
+)
+
+
+def _extract_twitter(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _TWITTER_URL_RE.finditer(text):
+        u = m.group("user")
+        out.append(
+            NormalizedIdentifier(
+                entity_type="TwitterHandle",
+                canonical=f"@{u.lower()}",
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    for m in _TWITTER_AT_RE.finditer(text):
+        u = m.group("at")
+        out.append(
+            NormalizedIdentifier(
+                entity_type="TwitterHandle",
+                canonical=f"@{u.lower()}",
+                # Original keeps the trigger phrase for traceability.
+                original=m.group(0),
+                # Wider span (incl. trigger word) wins over a bare
+                # `@user` Telegram match in `_resolve_overlaps`.
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── Instagram ────────────────────────────────────────────────────────
+
+_INSTA_USER = r"[A-Za-z0-9_.]{1,30}"
+_INSTA_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:instagram\.com|instagr\.am)/"
+    r"(?P<user>" + _INSTA_USER + r")/?",
+    re.IGNORECASE,
+)
+_INSTA_AT_RE = re.compile(
+    # Tolerant of morphology — see _TWITTER_AT_RE.
+    r"(?:instagram[a-z]*|insta[a-z]*|инстаграм[а-я]*|инст[а-я]*)"
+    r"\s*[:\-]?\s*@(?P<at>" + _INSTA_USER + r")",
+    re.IGNORECASE,
+)
+
+
+def _extract_instagram(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _INSTA_URL_RE.finditer(text):
+        u = m.group("user").lower()
+        u = u.rstrip(".,;:")
+        if u in {"p", "reel", "tv", "explore", "stories"}:
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="InstagramHandle",
+                canonical=f"@{u}",
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    for m in _INSTA_AT_RE.finditer(text):
+        u = m.group("at")
+        out.append(
+            NormalizedIdentifier(
+                entity_type="InstagramHandle",
+                canonical=f"@{u.lower()}",
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── LinkedIn ─────────────────────────────────────────────────────────
+
+_LINKEDIN_RE = re.compile(
+    r"(?:https?://)?(?:www\.|[a-z]{2}\.)?linkedin\.com/"
+    r"(?P<kind>in|company|school|pub)/(?P<slug>[A-Za-z0-9\-\._%]+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_linkedin(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _LINKEDIN_RE.finditer(text):
+        kind = m.group("kind").lower()
+        slug = m.group("slug")
+        # Strip URL trailing punctuation.
+        slug = slug.rstrip(".,;:)")
+        canonical = f"linkedin.com/{kind}/{slug.lower()}"
+        out.append(
+            NormalizedIdentifier(
+                entity_type="LinkedInProfile",
+                canonical=canonical,
+                original=m.group(0).rstrip(".,;:)"),
+                span=(m.start(), m.start() + len(m.group(0).rstrip(".,;:)"))),
+            )
+        )
+    return out
+
+
+# ── YouTube ──────────────────────────────────────────────────────────
+
+# Cover the canonical channel-style URLs.  Standalone video URLs
+# (`youtu.be/xyz`, `youtube.com/watch?v=xyz`) are NOT extracted as
+# channels — they fall through to the generic URL detector.
+_YOUTUBE_RE = re.compile(
+    r"(?:https?://)?(?:www\.|m\.)?youtube\.com/"
+    r"(?:@(?P<handle>[A-Za-z0-9_.\-]+)"
+    r"|channel/(?P<channel>UC[A-Za-z0-9_\-]{20,})"
+    r"|c/(?P<custom>[A-Za-z0-9_\-]+)"
+    r"|user/(?P<legacy>[A-Za-z0-9_\-]+))",
+    re.IGNORECASE,
+)
+
+
+def _extract_youtube(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _YOUTUBE_RE.finditer(text):
+        if m.group("handle"):
+            canonical = f"youtube.com/@{m.group('handle').lower()}"
+        elif m.group("channel"):
+            # Keep channel ID case (UC + base64-ish).
+            canonical = f"youtube.com/channel/{m.group('channel')}"
+        elif m.group("custom"):
+            canonical = f"youtube.com/c/{m.group('custom').lower()}"
+        else:
+            canonical = f"youtube.com/user/{m.group('legacy').lower()}"
+        out.append(
+            NormalizedIdentifier(
+                entity_type="YouTubeChannel",
+                canonical=canonical,
+                original=m.group(0),
+                span=m.span(),
+            )
+        )
+    return out
+
+
+# ── GitHub ───────────────────────────────────────────────────────────
+
+# `github.com/user` and `github.com/user/repo`.  Excludes reserved
+# top-level paths.
+_GITHUB_RESERVED = (
+    "marketplace", "topics", "trending", "collections", "events",
+    "settings", "notifications", "issues", "pulls", "search",
+    "explore", "login", "join", "about", "pricing", "features",
+    "enterprise", "team", "customer-stories", "security",
+)
+_GITHUB_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/"
+    r"(?P<user>[A-Za-z0-9](?:[A-Za-z0-9\-]{0,37}[A-Za-z0-9])?)"
+    r"(?:/(?P<repo>[A-Za-z0-9._\-]+))?",
+)
+
+
+def _extract_github(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _GITHUB_RE.finditer(text):
+        user = m.group("user")
+        if not user or user.lower() in _GITHUB_RESERVED:
+            continue
+        repo = m.group("repo")
+        if repo:
+            repo = repo.rstrip(".,;:)")
+            canonical = f"github.com/{user.lower()}/{repo}"
+            end = m.start("repo") + len(repo)
+        else:
+            canonical = f"github.com/{user.lower()}"
+            end = m.end("user")
+        out.append(
+            NormalizedIdentifier(
+                entity_type="GitHubProfile",
+                canonical=canonical,
+                original=text[m.start():end],
+                span=(m.start(), end),
+            )
+        )
+    return out
+
+
 # ── UUID ─────────────────────────────────────────────────────────────
 
 _UUID_RE = re.compile(
@@ -998,6 +1213,11 @@ def extract_identifiers(text: str) -> list[NormalizedIdentifier]:
     found.extend(_extract_domains(text))
     found.extend(_extract_telegram(text))
     found.extend(_extract_vk(text))
+    found.extend(_extract_twitter(text))
+    found.extend(_extract_instagram(text))
+    found.extend(_extract_linkedin(text))
+    found.extend(_extract_youtube(text))
+    found.extend(_extract_github(text))
     found.extend(_extract_uuids(text))
     # Device / hardware
     found.extend(_extract_imei(text))
