@@ -536,9 +536,58 @@ def test_license_plate(raw, canonical) -> None:
 
 
 def test_license_plate_latin_lookalike_rejected() -> None:
-    # Same shape but with Latin letters — not a valid RU plate.
+    # Same shape but with Latin letters — RU pattern won't match,
+    # and there's no plate-context keyword to trigger the generic
+    # detector either.  Must NOT be returned as a plate.
     found = _by_type(extract_identifiers("A123BE77"), "LicensePlate")
     assert found == []
+
+
+# ── Generic (non-RU) license plates: context-anchored ────────────────
+
+
+@pytest.mark.parametrize(
+    "context_phrase,raw,canonical",
+    [
+        ("license plate", "ABC1234", "ABC1234"),
+        ("plate number", "ABC-1234", "ABC1234"),
+        ("registration plate", "AB12 CDE", "AB12CDE"),
+        ("vehicle reg. number", "B-MK 1234", "BMK1234"),
+        ("car plate", "1ABC234", "1ABC234"),
+        ("гос. номер", "AB12CDE", "AB12CDE"),
+        ("номер автомобиля", "AB12CDE", "AB12CDE"),
+    ],
+)
+def test_generic_license_plate_with_context(
+    context_phrase, raw, canonical,
+) -> None:
+    found = _by_type(
+        extract_identifiers(f"{context_phrase}: {raw}"),
+        "LicensePlate",
+    )
+    assert len(found) == 1
+    assert found[0].canonical == canonical
+
+
+def test_generic_plate_without_context_is_not_extracted() -> None:
+    # No keyword nearby — must NOT be picked up as a plate, even
+    # though the shape itself matches.
+    found = _by_type(
+        extract_identifiers("Order ABC1234 paid in full."),
+        "LicensePlate",
+    )
+    assert found == []
+
+
+def test_generic_plate_alongside_ru_plate_in_same_text() -> None:
+    text = (
+        "RU side: гос. номер А123ВЕ77. "
+        "US side: license plate ABC1234."
+    )
+    canonicals = sorted(
+        x.canonical for x in _by_type(extract_identifiers(text), "LicensePlate")
+    )
+    assert canonicals == ["ABC1234", "А123ВЕ77"]
 
 
 # ── VIN ──────────────────────────────────────────────────────────────

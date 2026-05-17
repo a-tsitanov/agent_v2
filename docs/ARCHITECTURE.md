@@ -109,7 +109,8 @@ Document file
 │           digital:   URL, Domain, TelegramHandle,│
 │                      VKProfile, UUID.            │
 │           device:    IMEI (Luhn), MACAddress,    │
-│                      LicensePlate (RU),          │
+│                      LicensePlate (RU pattern    │
+│                      + context-anchored generic),│
 │                      VIN (mod-11).               │
 │         Overlap resolver favours specialised     │
 │         types over generic (URL > Domain etc.).  │

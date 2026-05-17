@@ -119,7 +119,10 @@ canonicalisation transform when they appear:
 - **Digital identity:** `URL`, `Domain`, `TelegramHandle`,
   `VKProfile`, `UUID`.
 - **Device / hardware:** `IMEI` (Luhn-validated), `MACAddress`,
-  `LicensePlate` (Russian-format), `VIN` (mod-11 checksum).
+  `LicensePlate` (Russian Cyrillic-format directly, plus
+  country-agnostic generic plates when a context phrase like
+  "license plate" / "гос. номер" / "vehicle reg. number" precedes
+  the token), `VIN` (mod-11 checksum).
 
 Detectors apply checksums where the spec defines one (Luhn for
 IMEI, mod-11 for VIN, the SNILS algorithm, INN/OGRN/BIC checks)

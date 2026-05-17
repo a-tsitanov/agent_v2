@@ -20,7 +20,10 @@ Currently 19 types across three groups (see ``IdentifierType``):
 * **Digital identity** — ``URL``, ``Domain``, ``TelegramHandle``,
   ``VKProfile``, ``UUID``.
 * **Device / hardware** — ``IMEI`` (Luhn), ``MACAddress``,
-  ``LicensePlate`` (RU), ``VIN`` (mod-11 checksum).
+  ``LicensePlate`` (RU Cyrillic shape directly + country-agnostic
+  generic plates anchored to a context phrase such as ``"license
+  plate"`` / ``"гос. номер"`` / ``"vehicle reg. number"``),
+  ``VIN`` (mod-11 checksum).
 
 The output of ``extract_identifiers()`` is consumed by
 ``IdentifierCanonicalizationTransform`` in ``pipeline.py``, which:
@@ -806,18 +809,76 @@ _RU_PLATE_RE = re.compile(
 )
 
 
+# Generic plate detector — country-agnostic but **context-anchored**.
+# A universal plate shape doesn't exist (US/UK/EU/CN/etc. all
+# differ).  Plain "4-10 alphanumerics" would false-positive on order
+# IDs, SKUs and tracking codes.  So we emit a match only when one of
+# the trigger phrases below precedes the plate token.
+_PLATE_CONTEXT_WORDS = (
+    r"license\s+plate"
+    r"|plate\s+(?:no\.?|number|#)"
+    r"|number\s+plate"
+    r"|car\s+plate"
+    r"|reg(?:istration)?\.?\s*(?:no\.?|number|plate)"
+    r"|vehicle\s+(?:plate|reg(?:istration)?\.?\s*(?:no\.?|number)?)"
+    r"|номер\s+(?:авто(?:мобиля)?|машины|т\.?с\.?|тс)"
+    r"|гос\.?\s*(?:номер|знак|рег\.?\s*знак)"
+    r"|рег(?:истрационный)?\.?\s*(?:знак|номер)"
+)
+# Plate token: Latin alphanumerics, 4-10 chars total, optional
+# internal single space / hyphen between groups.  At least one
+# letter AND one digit (enforced post-match by ``_looks_like_plate``).
+_PLATE_TOKEN = r"[A-Z0-9](?:[A-Z0-9\- ]{2,8})?[A-Z0-9]"
+_GENERIC_PLATE_RE = re.compile(
+    rf"(?:{_PLATE_CONTEXT_WORDS})\s*[:\-]?\s*(?P<plate>{_PLATE_TOKEN})",
+    re.IGNORECASE,
+)
+
+
+def _plate_canonical(raw: str) -> str:
+    """Upper-case, drop internal whitespace and hyphens."""
+    return re.sub(r"[\s\-]+", "", raw).upper()
+
+
+def _looks_like_plate(token: str) -> bool:
+    """4-10 alphanumeric chars with at least one letter AND one digit."""
+    alnum = re.sub(r"[\s\-]", "", token)
+    if not (4 <= len(alnum) <= 10):
+        return False
+    has_letter = any(ch.isalpha() for ch in alnum)
+    has_digit = any(ch.isdigit() for ch in alnum)
+    return has_letter and has_digit
+
+
 def _extract_license_plates(text: str) -> list[NormalizedIdentifier]:
     out: list[NormalizedIdentifier] = []
+    # 1) RU pattern-only: the Cyrillic shape is unique enough that
+    #    we don't need a context word.
     for m in _RU_PLATE_RE.finditer(text):
         raw = m.group(0)
-        # Canonical: no internal whitespace, upper-case.
-        canonical = re.sub(r"[\s ]+", "", raw).upper()
+        canonical = re.sub(r"[\s ]+", "", raw).upper()
         out.append(
             NormalizedIdentifier(
                 entity_type="LicensePlate",
                 canonical=canonical,
                 original=raw,
                 span=m.span(),
+            )
+        )
+    # 2) Generic / non-RU plates: only when one of the
+    #    ``_PLATE_CONTEXT_WORDS`` precedes the plate token.
+    for m in _GENERIC_PLATE_RE.finditer(text):
+        plate = m.group("plate").rstrip("-").rstrip()
+        if not _looks_like_plate(plate):
+            continue
+        start = m.start("plate")
+        end = start + len(plate)
+        out.append(
+            NormalizedIdentifier(
+                entity_type="LicensePlate",
+                canonical=_plate_canonical(plate),
+                original=plate,
+                span=(start, end),
             )
         )
     return out

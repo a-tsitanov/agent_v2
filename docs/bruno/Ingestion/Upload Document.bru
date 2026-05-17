@@ -80,7 +80,7 @@ docs {
   |-------|-------|
   | business | `PhoneNumber` (E.164), `Email`, `INN`, `OGRN`, `BIC`, `SNILS`, `ContractNumber`, `PostalAddress`, `DocumentDate`, `Amount` (RUB) |
   | digital  | `URL`, `Domain`, `TelegramHandle`, `VKProfile`, `UUID` |
-  | device   | `IMEI` (Luhn), `MACAddress`, `LicensePlate` (RU), `VIN` (mod-11) |
+  | device   | `IMEI` (Luhn), `MACAddress`, `LicensePlate` (RU directly + context-anchored generic), `VIN` (mod-11) |
 
   Overlap policy: when several detectors match overlapping spans
   (e.g. `URL` + `VKProfile` on `https://vk.com/user`), the
