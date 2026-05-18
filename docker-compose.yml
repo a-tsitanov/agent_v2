@@ -90,6 +90,65 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ── Wikibase: structured-data store (Wikidata-software stack) ───
+  # MySQL backs Wikibase's MediaWiki schema.
+  wikibase-mysql:
+    image: mariadb:11.4
+    environment:
+      MYSQL_DATABASE: my_wiki
+      MYSQL_USER: wikiuser
+      MYSQL_PASSWORD: ${WIKIBASE_DB_PASSWORD:-sqlpass}
+      MYSQL_ROOT_PASSWORD: ${WIKIBASE_DB_ROOT_PASSWORD:-rootpass}
+    volumes:
+      - wikibase_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  wikibase:
+    image: wikibase/wikibase-bundle:1.41.1-wmde.20
+    ports:
+      - "${WIKIBASE_HOST_PORT:-8181}:80"
+    environment:
+      DB_SERVER: wikibase-mysql:3306
+      MW_ADMIN_NAME: ${WIKIBASE_ADMIN_USER:-WikibaseAdmin}
+      MW_ADMIN_PASS: ${WIKIBASE_ADMIN_PASS:-ChangeMe-Wb-Admin-2026}
+      MW_ADMIN_EMAIL: admin@example.invalid
+      MW_WG_SECRET_KEY: ${WIKIBASE_SECRET_KEY:-deadbeefdeadbeefdeadbeefdeadbeef}
+      MW_WG_DEFAULT_SKIN: vector
+      DB_USER: wikiuser
+      DB_PASS: ${WIKIBASE_DB_PASSWORD:-sqlpass}
+      DB_NAME: my_wiki
+      WIKIBASE_PINGBACK: "false"
+    depends_on:
+      wikibase-mysql:
+        condition: service_healthy
+    volumes:
+      - wikibase_images:/var/www/html/images
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/wiki/Special:Version", "-o", "/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  wdqs:
+    image: wikibase/wdqs:0.3.137-wmde.20
+    ports:
+      - "${WIKIBASE_WDQS_PORT:-8989}:9999"
+    environment:
+      WIKIBASE_HOST: wikibase
+    depends_on:
+      wikibase:
+        condition: service_healthy
+    volumes:
+      - wikibase_wdqs_data:/wdqs/data
+    restart: unless-stopped
+
   # ── Relational DB: PostgreSQL 16 ────────────────────────────────────
   postgres:
     image: postgres:16-alpine
@@ -169,3 +228,6 @@ volumes:
   neo4j_data:
   neo4j_logs:
   pg_data:
+  wikibase_mysql_data:
+  wikibase_images:
+  wikibase_wdqs_data:
