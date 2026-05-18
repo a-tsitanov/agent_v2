@@ -23,6 +23,7 @@ from src.workflow.activities.index_vector import index_vector
 from src.workflow.activities.inject_canonical import inject_canonical
 from src.workflow.activities.merge_and_resolve import merge_and_resolve
 from src.workflow.activities.parse_and_chunk import parse_and_chunk
+from src.workflow.activities.push_wikibase import push_wikibase
 
 LLM_ACTIVITIES = [
     extract_kg,
@@ -35,6 +36,7 @@ MAIN_ACTIVITIES = [
     index_vector,
     inject_canonical,
     build_property_graph,
+    push_wikibase,
     finalize,
     mark_failed,
 ]
@@ -54,4 +56,5 @@ __all__ = [
     "mark_failed",
     "merge_and_resolve",
     "parse_and_chunk",
+    "push_wikibase",
 ]

@@ -13,10 +13,20 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 GraphStatus = Literal["completed", "vector_only"]
+WikibaseStatus = Literal["ok", "skipped", "failed"]
 
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True)
+
+
+class WikibasePushed(_Frozen):
+    status: WikibaseStatus
+    created_items: int = 0
+    updated_items: int = 0
+    external_id_statements: int = 0
+    relation_statements: int = 0
+    new_properties_created: int = 0
 
 
 class IngestParams(_Frozen):
@@ -104,6 +114,7 @@ class FinalizeIn(_Frozen):
     graph_status: GraphStatus
     entities: int = 0
     relations: int = 0
+    wikibase: WikibasePushed | None = None
 
 
 class MarkFailedIn(_Frozen):
@@ -118,3 +129,4 @@ class IngestResult(_Frozen):
     graph_status: GraphStatus
     entities: int = 0
     relations: int = 0
+    wikibase_status: WikibaseStatus = "skipped"
