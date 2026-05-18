@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>kb-llamaindex — архитектура и стек</title>
+<style>
+:root {
+  --bg-0: #0a0e1a;
+  --bg-1: #111726;
+  --bg-2: #1a2238;
+  --bg-card: rgba(255,255,255,.04);
+  --line: rgba(255,255,255,.10);
+  --line-strong: rgba(255,255,255,.18);
+  --text: #e8ecf5;
+  --text-dim: #a0a8bd;
+  --text-faint: #6b7593;
+  --accent: #6ee7f0;
+  --accent-2: #b794ff;
+  --accent-3: #f0a868;
+  --good: #5dd39e;
+  --warn: #ffb454;
+  --shadow: 0 10px 40px -10px rgba(0,0,0,.5);
+
+  --pers: #6ee7f0;        /* persistence */
+  --comp: #b794ff;        /* compute */
+  --fw:   #ffb454;        /* framework / runtime */
+  --ml:   #f06a96;        /* ML / models */
+  --obs:  #5dd39e;        /* observability */
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.bg-grid {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .35;
+  background:
+    radial-gradient(900px 600px at 15% -10%, rgba(110,231,240,.10), transparent 70%),
+    radial-gradient(900px 600px at 110% 10%, rgba(183,148,255,.10), transparent 70%),
+    linear-gradient(180deg, transparent, var(--bg-0));
+}
+.container { max-width: 1280px; margin: 0 auto; padding: 4rem 2rem; }
+
+/* --- HERO --- */
+.hero {
+  display: grid; gap: 1.25rem;
+  padding: 3rem 2rem;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(110,231,240,.06), rgba(183,148,255,.06));
+  box-shadow: var(--shadow);
+}
+.hero .eyebrow {
+  font-size: .8rem; letter-spacing: .25em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.hero h1 {
+  margin: 0; font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 700;
+  letter-spacing: -.02em;
+  background: linear-gradient(120deg, #fff 20%, var(--accent) 50%, var(--accent-2) 90%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero p { margin: 0; color: var(--text-dim); max-width: 64ch; font-size: 1.05rem; }
+.hero .pills { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
+.pill {
+  font-size: .78rem; padding: .35rem .7rem; border-radius: 999px;
+  border: 1px solid var(--line-strong); color: var(--text-dim);
+  background: var(--bg-card);
+}
+
+/* --- SECTION --- */
+section { margin-top: 5rem; }
+.section-head {
+  display: flex; align-items: baseline; gap: 1rem; margin-bottom: 2rem;
+}
+.section-head .num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-faint); font-size: .9rem;
+}
+.section-head h2 {
+  margin: 0; font-size: 1.6rem; font-weight: 600; letter-spacing: -.01em;
+}
+.section-head .lead {
+  margin-left: auto; color: var(--text-dim); max-width: 50ch; font-size: .95rem;
+  text-align: right;
+}
+
+/* --- STACK GRID --- */
+.stack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+.stack-cat {
+  border: 1px solid var(--line); border-radius: 16px;
+  background: var(--bg-card); padding: 1.5rem;
+  display: flex; flex-direction: column; gap: 1rem;
+  transition: border-color .15s, transform .15s;
+}
+.stack-cat:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+.stack-cat .cat-head { display: flex; align-items: center; gap: .75rem; }
+.stack-cat .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  box-shadow: 0 0 12px currentColor;
+}
+.stack-cat h3 {
+  margin: 0; font-size: .82rem; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--text-dim); font-weight: 600;
+}
+.tech-list { display: flex; flex-direction: column; gap: .75rem; }
+.tech {
+  display: grid; grid-template-columns: auto 1fr auto; gap: .85rem;
+  align-items: center; padding: .5rem 0;
+}
+.tech + .tech { border-top: 1px solid var(--line); padding-top: .85rem; }
+.tech .icon {
+  width: 34px; height: 34px; border-radius: 8px;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,.05); border: 1px solid var(--line);
+  font-size: .85rem; font-weight: 700;
+  color: var(--text);
+}
+.tech .meta { display: flex; flex-direction: column; gap: 2px; }
+.tech .name { font-weight: 600; font-size: .95rem; }
+.tech .role { font-size: .8rem; color: var(--text-dim); }
+.tech .port {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .72rem; color: var(--text-faint);
+  border: 1px dashed var(--line-strong); padding: .15rem .4rem; border-radius: 6px;
+}
+
+/* category accent dots */
+.cat-pers .dot { background: var(--pers); color: var(--pers); }
+.cat-comp .dot { background: var(--comp); color: var(--comp); }
+.cat-fw   .dot { background: var(--fw);   color: var(--fw); }
+.cat-ml   .dot { background: var(--ml);   color: var(--ml); }
+.cat-obs  .dot { background: var(--obs);  color: var(--obs); }
+
+/* --- PIPELINE --- */
+.pipeline-wrap { overflow-x: auto; padding-bottom: 1rem; margin: 0 -2rem; padding: 0 2rem 1rem; }
+.pipeline {
+  display: grid; grid-auto-flow: column; gap: 0; align-items: stretch;
+  min-width: max-content;
+}
+.step {
+  position: relative;
+  width: 230px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg-card);
+  padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: .55rem;
+  transition: border-color .15s, transform .15s;
+}
+.step:hover { border-color: var(--accent); transform: translateY(-2px); }
+.step + .step { margin-left: 28px; }
+.step + .step::before {
+  content: ""; position: absolute; left: -22px; top: 50%;
+  width: 16px; height: 2px; background: var(--line-strong);
+}
+.step + .step::after {
+  content: ""; position: absolute; left: -10px; top: 50%;
+  border: 5px solid transparent; border-left-color: var(--line-strong);
+  transform: translateY(-50%);
+}
+.step .step-n {
+  font-family: ui-monospace, monospace; font-size: .68rem; letter-spacing: .15em;
+  color: var(--text-faint); text-transform: uppercase;
+}
+.step .step-name {
+  font-weight: 700; font-size: .98rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent);
+}
+.step .step-desc { font-size: .82rem; color: var(--text-dim); }
+.step .step-tag {
+  margin-top: auto; display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .68rem; color: var(--text-faint);
+  font-family: ui-monospace, monospace;
+}
+.step .step-tag .qbadge {
+  background: rgba(183,148,255,.12); color: var(--accent-2);
+  padding: .12rem .4rem; border-radius: 4px;
+  border: 1px solid rgba(183,148,255,.25);
+}
+.step .step-tag.llm .qbadge { background: rgba(240,168,104,.12); color: var(--accent-3); border-color: rgba(240,168,104,.25); }
+.step.step-new { border: 1px solid rgba(110,231,240,.45); }
+.step.step-new::before { content: "NEW"; position: absolute; top: -10px; right: 12px;
+  font-size: .58rem; letter-spacing: .12em; font-weight: 700;
+  color: #0a0e1a; background: var(--accent); padding: .15rem .45rem; border-radius: 999px;
+}
+
+/* --- LAYERS DIAGRAM --- */
+.layers { display: grid; gap: 1rem; }
+.layer {
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg-card);
+  padding: 1.25rem 1.5rem;
+}
+.layer-head {
+  display: flex; align-items: center; gap: .75rem; margin-bottom: .85rem;
+}
+.layer-head h3 {
+  margin: 0; font-size: .82rem; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--text-dim); font-weight: 600;
+}
+.layer-head .tag {
+  margin-left: auto; font-family: ui-monospace, monospace; font-size: .72rem;
+  color: var(--text-faint);
+}
+.layer .items {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: .7rem;
+}
+.layer .item {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: .7rem .85rem;
+  background: rgba(255,255,255,.02);
+  display: flex; flex-direction: column; gap: .15rem;
+}
+.layer .item .h {
+  font-weight: 600; font-size: .9rem;
+}
+.layer .item .s { color: var(--text-dim); font-size: .76rem; }
+
+.layer-api    { border-left: 3px solid var(--fw); }
+.layer-orch   { border-left: 3px solid var(--comp); }
+.layer-store  { border-left: 3px solid var(--pers); }
+.layer-ml     { border-left: 3px solid var(--ml); }
+.layer-obs    { border-left: 3px solid var(--obs); }
+
+/* --- FOOTER --- */
+footer {
+  margin-top: 5rem; padding-top: 2.5rem;
+  border-top: 1px solid var(--line);
+  color: var(--text-faint); font-size: .8rem;
+  display: flex; gap: 1rem; flex-wrap: wrap; justify-content: space-between;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+footer a { color: var(--text-dim); text-decoration: none; border-bottom: 1px dashed var(--line-strong); }
+footer a:hover { color: var(--accent); }
+
+@media (max-width: 720px) {
+  .container { padding: 2rem 1rem; }
+  .section-head { flex-direction: column; align-items: flex-start; gap: .5rem; }
+  .section-head .lead { text-align: left; margin: 0; }
+}
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+
+<main class="container">
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="eyebrow">Enterprise Knowledge Base · v1</div>
+    <h1>kb-llamaindex</h1>
+    <p>
+      Многоязычный RAG-сервис на LlamaIndex с инкрементальным графом знаний.
+      Принимает документы, нормализует сущности в Wikibase / Neo4j / Milvus,
+      обслуживает hybrid- и agentic-поиск через FastAPI.
+      Полностью async, Temporal-оркестрация, self-hosted observability.
+    </p>
+    <div class="pills">
+      <span class="pill">Python 3.12</span>
+      <span class="pill">Async / await</span>
+      <span class="pill">Pydantic v2</span>
+      <span class="pill">Temporal workflows</span>
+      <span class="pill">LlamaIndex</span>
+      <span class="pill">Self-hosted</span>
+      <span class="pill">On-prem LLM</span>
+    </div>
+  </header>
+
+  <!-- 1 · TECH STACK -->
+  <section>
+    <div class="section-head">
+      <span class="num">01</span>
+      <h2>Технологический стек</h2>
+      <span class="lead">
+        Пять слоёв: фреймворки, оркестрация, хранилища, ML/LLM, наблюдаемость.
+      </span>
+    </div>
+
+    <div class="stack-grid">
+
+      <!-- Framework / runtime -->
+      <article class="stack-cat cat-fw">
+        <div class="cat-head"><span class="dot"></span><h3>Framework · Runtime</h3></div>
+        <div class="tech-list">
+          <div class="tech">
+            <div class="icon" style="color:#5cb85c">Py</div>
+            <div class="meta"><span class="name">Python 3.12 + asyncio</span><span class="role">async/await везде, type-hints, pydantic v2</span></div>
+            <span class="port">3.12</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#009688">FA</div>
+            <div class="meta"><span class="name">FastAPI + uvicorn</span><span class="role">REST API, валидация, OpenAPI</span></div>
+            <span class="port">:8000</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#ff6f61">Lx</div>
+            <div class="meta"><span class="name">LlamaIndex</span><span class="role">RAG-оркестрация, retrievers, prompts</span></div>
+            <span class="port">core</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Compute / orchestration -->
+      <article class="stack-cat cat-comp">
+        <div class="cat-head"><span class="dot"></span><h3>Compute · Orchestration</h3></div>
+        <div class="tech-list">
+          <div class="tech">
+            <div class="icon" style="color:#7c4dff">T</div>
+            <div class="meta"><span class="name">Temporal</span><span class="role">durable workflows, 2 task-queue (kb-ingest, kb-ingest-llm)</span></div>
+            <span class="port">:7233</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#ff6600">R</div>
+            <div class="meta"><span class="name">RabbitMQ + taskiq</span><span class="role">background tasks вне ingest pipeline</span></div>
+            <span class="port">:5672</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#2496ed">D</div>
+            <div class="meta"><span class="name">Docker Compose</span><span class="role">dev-окружение, 11 сервисов</span></div>
+            <span class="port">v2</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Persistence -->
+      <article class="stack-cat cat-pers">
+        <div class="cat-head"><span class="dot"></span><h3>Persistence · Storage</h3></div>
+        <div class="tech-list">
+          <div class="tech">
+            <div class="icon" style="color:#336791">Pg</div>
+            <div class="meta"><span class="name">PostgreSQL</span><span class="role">job state, document registry</span></div>
+            <span class="port">:5432</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#00b6c0">Ml</div>
+            <div class="meta"><span class="name">Milvus Distributed</span><span class="role">векторный поиск, BGE-M3 embeddings</span></div>
+            <span class="port">:19530</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#018bff">N4</div>
+            <div class="meta"><span class="name">Neo4j Enterprise</span><span class="role">property graph + cypher, KG-ядро</span></div>
+            <span class="port">:7687</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#c72e29">Wb</div>
+            <div class="meta"><span class="name">Wikibase</span><span class="role">канон. сущности, REST + SPARQL</span></div>
+            <span class="port">:8181</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#c5310a">M</div>
+            <div class="meta"><span class="name">MinIO (S3-API)</span><span class="role">сырые файлы + staging-блобы pipeline</span></div>
+            <span class="port">:9000</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#7bb0ff">Bz</div>
+            <div class="meta"><span class="name">wdqs · Blazegraph</span><span class="role">SPARQL поверх Wikibase</span></div>
+            <span class="port">:8989</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- ML / models -->
+      <article class="stack-cat cat-ml">
+        <div class="cat-head"><span class="dot"></span><h3>ML · Models</h3></div>
+        <div class="tech-list">
+          <div class="tech">
+            <div class="icon" style="color:#3aafa9">Ol</div>
+            <div class="meta"><span class="name">Ollama</span><span class="role">локальный LLM + embedding host</span></div>
+            <span class="port">:11434</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#7c4dff">Q3</div>
+            <div class="meta"><span class="name">Qwen3:8b</span><span class="role">главная LLM для extract_kg / ER / агент</span></div>
+            <span class="port">8B</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#ff8a65">B</div>
+            <div class="meta"><span class="name">BGE-M3</span><span class="role">multilingual dense embeddings</span></div>
+            <span class="port">1024</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#5dd39e">Rr</div>
+            <div class="meta"><span class="name">BGE-reranker-v2-m3</span><span class="role">пост-rerank поверх hybrid retrieval</span></div>
+            <span class="port">v2</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#888">LL</div>
+            <div class="meta"><span class="name">LiteLLM gateway</span><span class="role">unified API в prod, optional в dev</span></div>
+            <span class="port">opt</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Observability -->
+      <article class="stack-cat cat-obs">
+        <div class="cat-head"><span class="dot"></span><h3>Observability</h3></div>
+        <div class="tech-list">
+          <div class="tech">
+            <div class="icon" style="color:#0a85ff">Lf</div>
+            <div class="meta"><span class="name">LangFuse (self-hosted)</span><span class="role">трассировка LLM-вызовов, eval-runs</span></div>
+            <span class="port">:3000</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#7c4dff">Tu</div>
+            <div class="meta"><span class="name">Temporal UI</span><span class="role">workflow timeline, retry, replay</span></div>
+            <span class="port">:8233</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#5dd39e">Sl</div>
+            <div class="meta"><span class="name">structlog (JSON)</span><span class="role">unified app-logs</span></div>
+            <span class="port">stdout</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#888">RG</div>
+            <div class="meta"><span class="name">RAGAS</span><span class="role">offline-метрика качества (faithfulness · relevance)</span></div>
+            <span class="port">eval</span>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- 2 · INGEST PIPELINE -->
+  <section>
+    <div class="section-head">
+      <span class="num">02</span>
+      <h2>Ingest pipeline · Temporal workflow</h2>
+      <span class="lead">
+        9 активностей. Тяжёлые LLM-шаги изолированы в queue
+        <code style="color:var(--accent-3)">kb-ingest-llm</code> с concurrency=1
+        чтобы не положить GPU.
+      </span>
+    </div>
+
+    <div class="pipeline-wrap">
+      <div class="pipeline">
+
+        <div class="step">
+          <span class="step-n">01</span>
+          <span class="step-name">fetch_source</span>
+          <span class="step-desc">Скачать файл из MinIO (s3-URI из Postgres-job).</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">02</span>
+          <span class="step-name">parse_and_chunk</span>
+          <span class="step-desc">Парсинг (PDF/MD/TXT) + семантический чанкинг.</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">03</span>
+          <span class="step-name">index_vector</span>
+          <span class="step-desc">BGE-M3 embeddings → запись в Milvus collection.</span>
+          <span class="step-tag llm"><span class="qbadge">kb-ingest-llm</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">04</span>
+          <span class="step-name">inject_canonical</span>
+          <span class="step-desc">Regex/heuristics: ИНН, телефоны, e-mail, IMEI, VIN — 24 типа.</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">05</span>
+          <span class="step-name">extract_kg</span>
+          <span class="step-desc">LLM-извлечение сущностей и отношений (Qwen3:8b).</span>
+          <span class="step-tag llm"><span class="qbadge">kb-ingest-llm</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">06</span>
+          <span class="step-name">merge_and_resolve</span>
+          <span class="step-desc">ER: дедупликация сущностей по графу + identifier-folding.</span>
+          <span class="step-tag llm"><span class="qbadge">kb-ingest-llm</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">07</span>
+          <span class="step-name">build_property_graph</span>
+          <span class="step-desc">Запись KG в Neo4j: <code>:__Entity__</code>, <code>:Chunk</code>, типизир. рёбра.</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+        </div>
+
+        <div class="step step-new">
+          <span class="step-n">08</span>
+          <span class="step-name">push_wikibase</span>
+          <span class="step-desc">Owner-сущности → Items, идентификаторы → external-id, отношения → claims.</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+        </div>
+
+        <div class="step">
+          <span class="step-n">09</span>
+          <span class="step-name">finalize</span>
+          <span class="step-desc">Финальный статус в Postgres + cleanup staging-блобов.</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · APPLICATION LAYERS -->
+  <section>
+    <div class="section-head">
+      <span class="num">03</span>
+      <h2>Архитектурные слои приложения</h2>
+      <span class="lead">
+        Тонкий HTTP-edge → durable orchestrator → пять хранилищ + ML gateway.
+        Падение любого хранилища не блокирует ingest целиком — best-effort
+        graceful degradation.
+      </span>
+    </div>
+
+    <div class="layers">
+
+      <div class="layer layer-api">
+        <div class="layer-head"><h3>API layer · публичный edge</h3><span class="tag">FastAPI / uvicorn</span></div>
+        <div class="items">
+          <div class="item"><span class="h">POST /api/v1/ingest</span><span class="s">upload + enqueue Temporal workflow</span></div>
+          <div class="item"><span class="h">POST /api/v1/search</span><span class="s">hybrid retrieval (vector + graph)</span></div>
+          <div class="item"><span class="h">POST /api/v1/agent</span><span class="s">ReAct agentic search</span></div>
+          <div class="item"><span class="h">POST /api/v1/selfrag</span><span class="s">Self-RAG reflective synthesis</span></div>
+          <div class="item"><span class="h">GET /healthz</span><span class="s">deps health-probe</span></div>
+        </div>
+      </div>
+
+      <div class="layer layer-orch">
+        <div class="layer-head"><h3>Orchestration layer · durable workflows</h3><span class="tag">Temporal · 2 task queues</span></div>
+        <div class="items">
+          <div class="item"><span class="h">DocumentIngestWorkflow</span><span class="s">9 активностей, retry-policies, heartbeats</span></div>
+          <div class="item"><span class="h">kb-ingest (concurrency=4)</span><span class="s">лёгкие шаги: I/O, парсинг, запись</span></div>
+          <div class="item"><span class="h">kb-ingest-llm (concurrency=1)</span><span class="s">LLM-heavy: extract_kg, merge_and_resolve</span></div>
+          <div class="item"><span class="h">best-effort fallback</span><span class="s">сбой push_wikibase → vector_only, workflow not failed</span></div>
+        </div>
+      </div>
+
+      <div class="layer layer-store">
+        <div class="layer-head"><h3>Storage layer · 5 хранилищ</h3><span class="tag">Persistence</span></div>
+        <div class="items">
+          <div class="item"><span class="h">PostgreSQL</span><span class="s">documents-table: id, path, status, summary</span></div>
+          <div class="item"><span class="h">Milvus</span><span class="s">chunks + BGE-M3 vectors, hybrid index</span></div>
+          <div class="item"><span class="h">Neo4j</span><span class="s">property graph + <code>wikibase_qid</code> writeback</span></div>
+          <div class="item"><span class="h">Wikibase + MariaDB</span><span class="s">канон. KG, REST API, OAuth-готов</span></div>
+          <div class="item"><span class="h">MinIO</span><span class="s">bucket <code>kb-uploads</code> + <code>kb-staging</code></span></div>
+        </div>
+      </div>
+
+      <div class="layer layer-ml">
+        <div class="layer-head"><h3>ML layer · модели и пайплайны</h3><span class="tag">Local-first inference</span></div>
+        <div class="items">
+          <div class="item"><span class="h">Qwen3:8b · LLM</span><span class="s">extract_kg, ER-judge, ReAct-агент</span></div>
+          <div class="item"><span class="h">BGE-M3 · embeddings</span><span class="s">1024-dim, multilingual, на Ollama</span></div>
+          <div class="item"><span class="h">BGE-reranker-v2-m3</span><span class="s">cross-encoder rerank top-K → top-N</span></div>
+          <div class="item"><span class="h">Identifier extractors</span><span class="s">regex, 24 типа: ИНН/ОГРН/IMEI/VIN/…</span></div>
+        </div>
+      </div>
+
+      <div class="layer layer-obs">
+        <div class="layer-head"><h3>Observability · трассировка и метрики</h3><span class="tag">LangFuse · Temporal UI</span></div>
+        <div class="items">
+          <div class="item"><span class="h">LangFuse traces</span><span class="s">каждый LLM-вызов: latency, токены, prompt</span></div>
+          <div class="item"><span class="h">Temporal UI</span><span class="s">workflow timeline, retry-history, replay</span></div>
+          <div class="item"><span class="h">structlog → stdout</span><span class="s">JSON-логи всех сервисов</span></div>
+          <div class="item"><span class="h">RAGAS eval</span><span class="s">offline-faithfulness/recall на golden-set</span></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    <span>docs/architecture.html · сгенерировано из <code>CLAUDE.md</code> + <code>docs/ARCHITECTURE.md</code></span>
+    <span>2026 · kb-llamaindex</span>
+  </footer>
+
+</main>
+</body>
+</html>

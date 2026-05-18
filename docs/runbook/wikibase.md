@@ -66,7 +66,16 @@ print('properties cached:', rows[0]['n'])    # expect 27 (3 common + 24 identifi
 
 The bootstrap logs in as `WikibaseAdmin` using the password from `WIKIBASE_ADMIN_PASS` (default `ChangeMe-Wb-Admin-2026`). Match what is actually set in the compose env — if the project `.env` does not define `WIKIBASE_ADMIN_PASS`, both the container and the script will fall back to the default; if you change one, change both. MediaWiki refuses to start with a weaker admin password than its policy demands, hence the long default.
 
-A bot-password rotation via `Special:BotPasswords` is a documented TODO inside the script — for now admin creds are used for both bootstrap and runtime pushes. The "Main-account login deprecated" warning you'll see in MediaWiki logs is from this; it's cosmetic, not a failure.
+The bootstrap script also provisions the **runtime bot account** before doing API work. It auto-discovers the Wikibase container (compose label `com.docker.compose.service=wikibase`; override via `WIKIBASE_DOCKER_CONTAINER` env) and runs:
+
+```bash
+docker exec <wikibase-container> php /var/www/html/maintenance/run.php \
+    createAndPromote --bot --force "$WIKIBASE_BOT_USER" "$WIKIBASE_BOT_PASSWORD"
+```
+
+`--force` makes this idempotent. The bot account is what `push_wikibase` logs in as at ingest time — the bootstrap admin creds are only used for the bootstrap itself. The "Main-account login deprecated" warning in MediaWiki logs comes from the admin-side login; cosmetic.
+
+If you need to mint the bot user by hand (e.g. CI without docker daemon access), the equivalent one-liner is the command above; the password must be ≥8 characters or MediaWiki rejects it.
 
 ## 4. Enable the push activity
 
@@ -133,7 +142,54 @@ You should see:
 
 For owner-owner relations: re-ingest a document with clear relationships (e.g. "Иван работает в Ромашке") and confirm the Person Item gains a `WORKS_AT` (or whichever relation label the extractor produced) statement pointing at the Organization Item's Q-id.
 
-## 6. Re-ingest idempotency
+## 6. Querying via SPARQL (wdqs)
+
+WDQS (Blazegraph) is exposed at `http://localhost:8989`. Its query UI lives at `http://localhost:8989/`. Useful when you want graph-style traversal across the whole instance rather than per-Item lookups.
+
+**Caveat — sync lag.** WDQS pulls from the Wikibase change stream in batches; freshly-pushed Items typically appear in SPARQL within seconds, but under heavy ingest load that gap can stretch to a minute or two. The MediaWiki REST API (`wbgetentities`) is always authoritative; treat WDQS as eventually-consistent.
+
+**Common queries** (PIDs are stable for a given instance — confirm yours via `wbgetentities` if these are off):
+
+```sparql
+# 1. All Items of class Person (instance_of → Q1)
+SELECT ?item ?itemLabel WHERE {
+  ?item wdt:P2 wd:Q1 .
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ru,en". }
+}
+LIMIT 100
+```
+
+```sparql
+# 2. Find everything that points at a given entity (incoming relations)
+SELECT ?subject ?subjectLabel ?prop ?propLabel WHERE {
+  ?subject ?prop wd:Q14 .            # Q14 = the entity you care about
+  FILTER(STRSTARTS(STR(?prop), STR(wdt:)))
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ru,en". }
+}
+```
+
+```sparql
+# 3. Top-mentioned entities (sort by mention_count = P3)
+SELECT ?item ?itemLabel ?mentions WHERE {
+  ?item wdt:P3 ?mentions ;
+        wdt:P2 ?class .
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ru,en". }
+}
+ORDER BY DESC(?mentions)
+LIMIT 20
+```
+
+```sparql
+# 4. Entities with a specific external-id type (e.g. INN = P6)
+SELECT ?item ?itemLabel ?inn WHERE {
+  ?item wdt:P6 ?inn .
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ru,en". }
+}
+```
+
+If a query returns empty unexpectedly, hit the same data via the REST API to confirm the data is there but wdqs hasn't picked it up yet — `curl "http://localhost:8181/w/api.php?action=wbgetentities&ids=Q14&format=json&props=claims"`.
+
+## 7. Re-ingest idempotency
 
 Re-ingest the **same content** with a fresh `job_id`. Wikibase already knows the entities → push goes to the **update** path (statements added/refreshed, no new Items):
 
@@ -155,7 +211,7 @@ MATCH (e:__Entity__) RETURN e.name, e.wikibase_qid LIMIT 10
 
 Every canonical entity present in the previous run should have a non-null `wikibase_qid`. If they don't, see the troubleshooting row on QID writeback below.
 
-## 7. Disable temporarily
+## 8. Disable temporarily
 
 ```bash
 export WIKIBASE_ENABLED=false
@@ -165,7 +221,7 @@ uv run python -m src.workflow.worker &
 
 `push_wikibase` activity returns `status="skipped"` instantly without touching Wikibase or Neo4j caches. Ingest behaves exactly as it did before this feature.
 
-## 8. Full reset
+## 9. Full reset
 
 **WARNING — destructive.** The steps below delete every Item and Property in the local Wikibase instance, drop the MySQL volume, and remove the QID writeback from every Neo4j entity. Only do this on a dev/test instance.
 
@@ -194,7 +250,7 @@ uv run python -m scripts.setup_wikibase
 
 After this, the next ingest gets fresh QIDs (Q1, Q2, ...) — they won't match the old ones. Any external system that pinned to specific Q-ids needs to be reconciled.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -202,7 +258,8 @@ After this, the next ingest gets fresh QIDs (Q1, Q2, ...) — they won't match t
 | `push_wikibase` status="failed" in result | Wikibase container down / Neo4j cache empty / bootstrap not run | `docker compose -p kb-llamaindex ps wikibase` + verify cache counts (section 3) |
 | `Item not found` errors in Temporal logs | Bootstrap missed a step OR Neo4j cache was wiped | Re-run `uv run python -m scripts.setup_wikibase` |
 | `created_items > 0` on every re-ingest | QID writeback to Neo4j failing | Check `:__Entity__` nodes actually exist for these names (Neo4j-side bug); enable debug logs in `_persist_qid_for_entity` |
-| MediaWiki "Main-account login deprecated" warning in logs | Bootstrap using admin creds, not a bot password | Cosmetic; documented future migration to `Special:BotPasswords` (see section 10) |
+| MediaWiki "Main-account login deprecated" warning in logs | Bootstrap (admin path) + runtime bot login are both username/password style | Cosmetic; full migration to `Special:BotPasswords` token-auth is a future improvement (see section 11) |
+| `push_wikibase` keeps failing with `Login failed: Incorrect username or password` | KbBot user never provisioned, or its password drifted from `WIKIBASE_BOT_PASSWORD` | Re-run `uv run python -m scripts.setup_wikibase` — it idempotently reprovisions the bot via `createAndPromote --bot --force` |
 | `wbsearchentities` returning weird results | Label exists in wrong language slot | Confirm `WIKIBASE_LANGUAGE` matches what bootstrap used (default `ru`) |
 | Disk full on Docker Desktop | wdqs + Wikibase + MySQL + Milvus add up fast | `docker system df` + `docker builder prune -af` + `docker image prune -f` |
 | Wikibase UI shows raw labels instead of localized | Default skin / language config missing | Bootstrap sets `MW_WG_DEFAULT_SKIN=vector`; confirm via `Special:Version` |
@@ -210,12 +267,12 @@ After this, the next ingest gets fresh QIDs (Q1, Q2, ...) — they won't match t
 | `wikibase-mysql` healthcheck failing | Old healthcheck used `mysqladmin`, MariaDB image only ships `mariadb-admin` | Keep the `mariadb-admin ping` form in compose; do not "fix" it back |
 | MediaWiki rejects admin password on container start | Password below MediaWiki policy length / complexity | Use the long default `ChangeMe-Wb-Admin-2026` or set a comparable strong `WIKIBASE_ADMIN_PASS` |
 
-## 10. Future improvements
+## 11. Future improvements
 
 Follow-ups deferred per the source plan:
 
 - wdqs reindex automation (currently manual — reindex by hand if SPARQL goes stale).
-- Bot-password flow via `Special:BotPasswords` so we stop using the admin account at runtime.
+- Switch from username/password bot-login to token-based `Special:BotPasswords` flow for tighter scoping + audit. Bot **account** is already provisioned by bootstrap; only the auth mechanism is pending.
 - Wikidata cross-linking: emit `external-id` statements that point at public Q-ids on wikidata.org for shared entities.
 - ER `_cleanup_stored_losers` integration — when ER merges two canonical entities, issue `wbcreateredirect` from loser_qid to canon_qid so downstream SPARQL stays valid.
 - Multi-tenant separate Wikibase instances per department (today everyone shares one).
