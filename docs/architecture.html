@@ -195,6 +195,112 @@ section { margin-top: 5rem; }
   color: #0a0e1a; background: var(--accent); padding: .15rem .45rem; border-radius: 999px;
 }
 
+/* --- SYSTEM DIAGRAM --- */
+.diagram {
+  position: relative;
+  display: grid; gap: 1.5rem;
+  padding: 1.75rem 1.5rem 2rem;
+  border: 1px solid var(--line); border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(110,231,240,.03), rgba(183,148,255,.03)),
+    var(--bg-1);
+  overflow-x: auto;
+}
+.diag-row { display: grid; gap: 1rem; }
+.diag-row.cols-1 { grid-template-columns: 1fr; }
+.diag-row.cols-2 { grid-template-columns: 1fr 1fr; }
+.diag-row.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.diag-row.cols-5 { grid-template-columns: repeat(5, 1fr); }
+.diag-row.cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+.node {
+  border: 1px solid var(--line-strong); border-radius: 12px;
+  background: var(--bg-2);
+  padding: .85rem 1rem;
+  display: flex; flex-direction: column; gap: .25rem;
+  position: relative; min-height: 60px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.node .nh {
+  font-weight: 700; font-size: .88rem;
+  display: flex; align-items: center; gap: .4rem;
+}
+.node .nh .badge {
+  font-size: .58rem; letter-spacing: .1em; text-transform: uppercase;
+  padding: .12rem .4rem; border-radius: 4px;
+  background: rgba(255,255,255,.06); color: var(--text-dim);
+  border: 1px solid var(--line);
+  margin-left: auto;
+  font-family: ui-monospace, monospace; font-weight: 600;
+}
+.node .ns { font-size: .76rem; color: var(--text-dim); line-height: 1.35; }
+.node .ports { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
+.node .ports code {
+  font-family: ui-monospace, monospace; font-size: .68rem;
+  color: var(--text-faint); padding: .1rem .35rem; border-radius: 4px;
+  background: rgba(255,255,255,.04); border: 1px solid var(--line);
+}
+
+.node-client  { border-color: rgba(255,255,255,.15); }
+.node-api     { border-color: rgba(255,180,84,.35); background: linear-gradient(180deg, rgba(255,180,84,.05), var(--bg-2)); }
+.node-orch    { border-color: rgba(183,148,255,.35); background: linear-gradient(180deg, rgba(183,148,255,.05), var(--bg-2)); }
+.node-worker  { border-color: rgba(183,148,255,.25); }
+.node-rag     { border-color: rgba(255,106,150,.35); background: linear-gradient(180deg, rgba(255,106,150,.05), var(--bg-2)); }
+.node-store   { border-color: rgba(110,231,240,.35); background: linear-gradient(180deg, rgba(110,231,240,.05), var(--bg-2)); }
+.node-ml      { border-color: rgba(240,106,150,.30); }
+.node-obs     { border-color: rgba(93,211,158,.30); background: linear-gradient(180deg, rgba(93,211,158,.05), var(--bg-2)); }
+
+.flow-down {
+  position: relative; height: 26px;
+  display: grid; place-items: center;
+}
+.flow-down::before {
+  content: ""; width: 2px; height: 100%;
+  background: linear-gradient(180deg, var(--line-strong), transparent);
+}
+.flow-down::after {
+  content: ""; position: absolute; bottom: 0;
+  border: 5px solid transparent; border-top-color: var(--line-strong);
+}
+.flow-down.glow::before { background: linear-gradient(180deg, var(--accent), transparent); opacity: .6; }
+.flow-down.glow::after  { border-top-color: var(--accent); }
+
+.flow-label {
+  position: absolute; right: calc(50% + 14px); top: 4px;
+  font-family: ui-monospace, monospace; font-size: .68rem;
+  color: var(--text-faint); white-space: nowrap;
+}
+.flow-label.right { right: auto; left: calc(50% + 14px); }
+
+.diag-group {
+  border: 1px dashed var(--line); border-radius: 14px;
+  padding: 1rem;
+  display: grid; gap: .75rem;
+}
+.diag-group .gh {
+  font-size: .7rem; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--text-faint); font-weight: 600;
+}
+.diag-group .group-row { display: grid; gap: .75rem; }
+.diag-group .group-row.c2 { grid-template-columns: 1fr 1fr; }
+.diag-group .group-row.c3 { grid-template-columns: repeat(3, 1fr); }
+.diag-group .group-row.c5 { grid-template-columns: repeat(5, 1fr); }
+
+.diagram .legend {
+  display: flex; flex-wrap: wrap; gap: .8rem; padding-top: .5rem;
+  font-size: .7rem; color: var(--text-faint);
+  border-top: 1px dashed var(--line); margin-top: .25rem;
+  align-items: center;
+}
+.diagram .legend .key { display: inline-flex; align-items: center; gap: .35rem; }
+.diagram .legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--line-strong); }
+
+@media (max-width: 880px) {
+  .diag-row.cols-5, .diag-row.cols-4, .diag-row.cols-3 { grid-template-columns: repeat(2, 1fr); }
+  .diag-row.cols-2 { grid-template-columns: 1fr; }
+  .diag-group .group-row.c5, .diag-group .group-row.c3 { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* --- LAYERS DIAGRAM --- */
 .layers { display: grid; gap: 1rem; }
 .layer {
@@ -278,10 +384,200 @@ footer a:hover { color: var(--accent); }
     </div>
   </header>
 
-  <!-- 1 · TECH STACK -->
+  <!-- 1 · SYSTEM DIAGRAM -->
   <section>
     <div class="section-head">
       <span class="num">01</span>
+      <h2>Схема приложения</h2>
+      <span class="lead">
+        Runtime-топология: тонкий HTTP-edge → durable workflow → два пула воркеров → пять хранилищ.
+        ML-инференс отдельным слоем; observability смотрит на всё.
+      </span>
+    </div>
+
+    <div class="diagram">
+
+      <!-- 1. Клиент -->
+      <div class="diag-row cols-1">
+        <div class="node node-client">
+          <span class="nh">Client <span class="badge">curl · Bruno · UI</span></span>
+          <span class="ns">HTTPS-запросы: загрузка документов, поиск, агентный поиск.</span>
+        </div>
+      </div>
+
+      <div class="flow-down"><span class="flow-label">HTTPS · X-API-Key</span></div>
+
+      <!-- 2. API edge -->
+      <div class="diag-row cols-1">
+        <div class="node node-api">
+          <span class="nh">FastAPI · публичный API <span class="badge">:8000 / uvicorn</span></span>
+          <span class="ns">
+            Эндпоинты ingest / search / agent / selfrag / healthz.
+            Валидация (Pydantic v2), API-key auth, OpenAPI.
+          </span>
+          <div class="ports">
+            <code>POST /api/v1/ingest</code>
+            <code>POST /api/v1/search</code>
+            <code>POST /api/v1/agent</code>
+            <code>POST /api/v1/selfrag</code>
+            <code>GET /healthz</code>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Раздваивание на ingest vs search -->
+      <div class="diag-row cols-2">
+        <div class="flow-down glow"><span class="flow-label">ingest job</span></div>
+        <div class="flow-down"><span class="flow-label right">search query</span></div>
+      </div>
+
+      <div class="diag-row cols-2">
+
+        <!-- 3a. Ingest path: Temporal -->
+        <div class="diag-group">
+          <span class="gh">Ingest path · durable</span>
+
+          <div class="group-row c2">
+            <div class="node node-orch">
+              <span class="nh">Temporal server <span class="badge">:7233</span></span>
+              <span class="ns">DocumentIngestWorkflow, retry-policy, replay, history.</span>
+            </div>
+            <div class="node node-orch">
+              <span class="nh">Postgres (job) <span class="badge">:5432</span></span>
+              <span class="ns">Документы: id, путь, статус, summary.</span>
+            </div>
+          </div>
+
+          <div class="flow-down"><span class="flow-label">dispatch · 2 queues</span></div>
+
+          <div class="group-row c2">
+            <div class="node node-worker">
+              <span class="nh">Worker · kb-ingest <span class="badge">c=4</span></span>
+              <span class="ns">Лёгкие шаги: fetch, parse, index, inject, merge, push.</span>
+            </div>
+            <div class="node node-worker">
+              <span class="nh">Worker · kb-ingest-llm <span class="badge">c=1</span></span>
+              <span class="ns">LLM-heavy: extract_kg, ER-judge. GPU-safe.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3b. Search path: Retrievers -->
+        <div class="diag-group">
+          <span class="gh">Search path · LlamaIndex</span>
+
+          <div class="group-row c2">
+            <div class="node node-rag">
+              <span class="nh">Hybrid retriever</span>
+              <span class="ns">Vector (Milvus) + graph-walk (Neo4j), rerank BGE-v2.</span>
+            </div>
+            <div class="node node-rag">
+              <span class="nh">ReAct-агент</span>
+              <span class="ns">Tools: search, kg_lookup, identifier_extract.</span>
+            </div>
+          </div>
+
+          <div class="flow-down"><span class="flow-label">retrieve + synth</span></div>
+
+          <div class="group-row c2">
+            <div class="node node-rag">
+              <span class="nh">Self-RAG · reflective</span>
+              <span class="ns">Adaptive critique → refetch → final answer.</span>
+            </div>
+            <div class="node node-rag">
+              <span class="nh">Legacy ChatEngine</span>
+              <span class="ns">Простой single-pass, для baseline-эвал.</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="flow-down"><span class="flow-label">I/O — обе ветки</span></div>
+
+      <!-- 4. Storage row -->
+      <div class="diag-group">
+        <span class="gh">Storage layer · персистентность</span>
+        <div class="group-row c5">
+          <div class="node node-store">
+            <span class="nh">PostgreSQL <span class="badge">:5432</span></span>
+            <span class="ns">documents-table: id, path, status, summary, source_uri.</span>
+          </div>
+          <div class="node node-store">
+            <span class="nh">MinIO (S3) <span class="badge">:9000</span></span>
+            <span class="ns">Сырые файлы <code>kb-uploads</code> + staging-блобы <code>kb-staging</code>.</span>
+          </div>
+          <div class="node node-store">
+            <span class="nh">Milvus <span class="badge">:19530</span></span>
+            <span class="ns">Chunks + BGE-M3 эмбеддинги, hybrid index.</span>
+          </div>
+          <div class="node node-store">
+            <span class="nh">Neo4j <span class="badge">:7687</span></span>
+            <span class="ns"><code>:__Entity__</code>, <code>:Chunk</code>, типизир. рёбра, <code>wikibase_qid</code>.</span>
+          </div>
+          <div class="node node-store">
+            <span class="nh">Wikibase + wdqs <span class="badge">:8181 / :8989</span></span>
+            <span class="ns">Канон. KG (Items + Properties) + SPARQL endpoint.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-down"><span class="flow-label">embed · chat · rerank</span></div>
+
+      <!-- 5. ML row -->
+      <div class="diag-group">
+        <span class="gh">ML layer · модели</span>
+        <div class="group-row c3">
+          <div class="node node-ml">
+            <span class="nh">Ollama host <span class="badge">:11434</span></span>
+            <span class="ns">Локальный inference: <code>qwen3:8b</code> (LLM) + <code>bge-m3</code> (embed).</span>
+          </div>
+          <div class="node node-ml">
+            <span class="nh">BGE-reranker-v2-m3</span>
+            <span class="ns">Cross-encoder: top-K (40) → top-N (8) после retrieval.</span>
+          </div>
+          <div class="node node-ml">
+            <span class="nh">LiteLLM gateway <span class="badge">opt</span></span>
+            <span class="ns">В prod — unified API + retry; в dev опционально.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. Observability lane -->
+      <div class="diag-group">
+        <span class="gh">Observability · наблюдаемость</span>
+        <div class="group-row c3">
+          <div class="node node-obs">
+            <span class="nh">LangFuse <span class="badge">:3000</span></span>
+            <span class="ns">LLM-traces: latency, tokens, prompts, evals.</span>
+          </div>
+          <div class="node node-obs">
+            <span class="nh">Temporal UI <span class="badge">:8233</span></span>
+            <span class="ns">Workflow-timeline, retry-история, replay, search.</span>
+          </div>
+          <div class="node node-obs">
+            <span class="nh">structlog · JSON</span>
+            <span class="ns">Единый формат логов всех сервисов → stdout.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="key"><span class="sw" style="background:rgba(255,180,84,.4);border-color:rgba(255,180,84,.7)"></span>API edge</span>
+        <span class="key"><span class="sw" style="background:rgba(183,148,255,.4);border-color:rgba(183,148,255,.7)"></span>Orchestration</span>
+        <span class="key"><span class="sw" style="background:rgba(255,106,150,.4);border-color:rgba(255,106,150,.7)"></span>Retrieval / RAG</span>
+        <span class="key"><span class="sw" style="background:rgba(110,231,240,.4);border-color:rgba(110,231,240,.7)"></span>Storage</span>
+        <span class="key"><span class="sw" style="background:rgba(240,106,150,.4);border-color:rgba(240,106,150,.7)"></span>ML / Models</span>
+        <span class="key"><span class="sw" style="background:rgba(93,211,158,.4);border-color:rgba(93,211,158,.7)"></span>Observability</span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 2 · TECH STACK -->
+  <section>
+    <div class="section-head">
+      <span class="num">02</span>
       <h2>Технологический стек</h2>
       <span class="lead">
         Пять слоёв: фреймворки, оркестрация, хранилища, ML/LLM, наблюдаемость.
@@ -433,10 +729,10 @@ footer a:hover { color: var(--accent); }
     </div>
   </section>
 
-  <!-- 2 · INGEST PIPELINE -->
+  <!-- 3 · INGEST PIPELINE -->
   <section>
     <div class="section-head">
-      <span class="num">02</span>
+      <span class="num">03</span>
       <h2>Ingest pipeline · Temporal workflow</h2>
       <span class="lead">
         9 активностей. Тяжёлые LLM-шаги изолированы в queue
@@ -515,10 +811,10 @@ footer a:hover { color: var(--accent); }
     </div>
   </section>
 
-  <!-- 3 · APPLICATION LAYERS -->
+  <!-- 4 · APPLICATION LAYERS -->
   <section>
     <div class="section-head">
-      <span class="num">03</span>
+      <span class="num">04</span>
       <h2>Архитектурные слои приложения</h2>
       <span class="lead">
         Тонкий HTTP-edge → durable orchestrator → пять хранилищ + ML gateway.
