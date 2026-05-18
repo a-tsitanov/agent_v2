@@ -31,6 +31,7 @@ from src.workflow.contracts import (
     MarkFailedIn,
     Merged,
     Parsed,
+    WikibasePushed,
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
 
@@ -98,11 +99,19 @@ async def build_pg_stub(merged: Merged) -> GraphBuilt:
     return GraphBuilt(entities=2, relations=1)
 
 
+@activity.defn(name="push_wikibase")
+async def push_wikibase_stub(merged: Merged) -> WikibasePushed:
+    return WikibasePushed(status="skipped")
+
+
 @activity.defn(name="finalize")
 async def finalize_stub(payload: FinalizeIn) -> IngestResult:
     return IngestResult(
         doc_id=payload.ctx.doc_id, chunk_count=payload.indexed.count,
         graph_status=payload.graph_status,
+        wikibase_status=(
+            payload.wikibase.status if payload.wikibase else "skipped"
+        ),
     )
 
 
@@ -114,7 +123,7 @@ async def mark_failed_stub(payload: MarkFailedIn) -> None:
 HAPPY_ACTIVITIES = [
     fetch_source_stub, parse_and_chunk_stub, index_vector_stub,
     inject_canonical_stub, extract_kg_stub, merge_and_resolve_stub,
-    build_pg_stub, finalize_stub, mark_failed_stub,
+    build_pg_stub, push_wikibase_stub, finalize_stub, mark_failed_stub,
 ]
 
 
@@ -166,7 +175,7 @@ async def test_graph_failure_downgrades_to_vector_only(monkeypatch):
     activities = [
         fetch_source_stub, parse_and_chunk_stub, index_vector_stub,
         inject_canonical_stub, boom, merge_and_resolve_stub,
-        build_pg_stub, finalize_stub, mark_failed_stub,
+        build_pg_stub, push_wikibase_stub, finalize_stub, mark_failed_stub,
     ]
 
     client = await _connect()
@@ -199,7 +208,7 @@ async def test_vector_failure_runs_mark_failed_and_raises(monkeypatch):
     activities = [
         fetch_source_stub, parse_and_chunk_stub, boom,
         inject_canonical_stub, extract_kg_stub, merge_and_resolve_stub,
-        build_pg_stub, finalize_stub, record_failure,
+        build_pg_stub, push_wikibase_stub, finalize_stub, record_failure,
     ]
 
     client = await _connect()
@@ -218,3 +227,53 @@ async def test_vector_failure_runs_mark_failed_and_raises(monkeypatch):
 
     assert len(mark_failed_calls) == 1
     assert mark_failed_calls[0].params.doc_id == params.doc_id
+
+
+@pytest.mark.asyncio
+async def test_wikibase_status_propagates_to_result(monkeypatch):
+    """When push_wikibase returns status=ok, IngestResult.wikibase_status reflects it."""
+
+    @activity.defn(name="push_wikibase")
+    async def wb_ok(merged: Merged) -> WikibasePushed:
+        return WikibasePushed(
+            status="ok",
+            created_items=2, updated_items=1,
+            external_id_statements=5, relation_statements=3,
+            new_properties_created=0,
+        )
+
+    @activity.defn(name="finalize")
+    async def finalize_real(payload: FinalizeIn) -> IngestResult:
+        # Mirror the real finalize activity's contract handling so the
+        # test exercises the wikibase field passthrough end-to-end.
+        return IngestResult(
+            doc_id=payload.ctx.doc_id,
+            chunk_count=payload.indexed.count,
+            graph_status=payload.graph_status,
+            entities=payload.entities,
+            relations=payload.relations,
+            wikibase_status=(
+                payload.wikibase.status if payload.wikibase else "skipped"
+            ),
+        )
+
+    activities = [
+        fetch_source_stub, parse_and_chunk_stub, index_vector_stub,
+        inject_canonical_stub, extract_kg_stub, merge_and_resolve_stub,
+        build_pg_stub, wb_ok, finalize_real, mark_failed_stub,
+    ]
+
+    client = await _connect()
+    queue = f"wf-test-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[DocumentIngestWorkflow], activities=activities,
+    ):
+        params = IngestParams(doc_id=str(uuid.uuid4()), path="s3://kb-uploads/x")
+        result = await client.execute_workflow(
+            DocumentIngestWorkflow.run, params,
+            id=f"ingest-{params.doc_id}", task_queue=queue,
+        )
+    assert result.graph_status == "completed"
+    assert result.wikibase_status == "ok"

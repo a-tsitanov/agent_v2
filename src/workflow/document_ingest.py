@@ -54,6 +54,7 @@ with workflow.unsafe.imports_passed_through():
         MarkFailedIn,
         Merged,
         Parsed,
+        WikibasePushed,
     )
 
 
@@ -134,6 +135,10 @@ class DocumentIngestWorkflow:
 
             graph_status: str = "completed"
             built: GraphBuilt | None = None
+            # Bind ``merged`` outside the inner try so the post-graph
+            # ``push_wikibase`` block can safely reference it even when
+            # ``merge_and_resolve`` raised and the inner except path ran.
+            merged: Merged | None = None
             try:
                 workflow.upsert_memo({"stage": "inject_canonical"})
                 log.info("→ inject_canonical")
@@ -200,17 +205,49 @@ class DocumentIngestWorkflow:
                 log.warning("graph stage failed, downgrading to vector_only: %s", exc)
                 graph_status = "vector_only"
 
+            # Wikibase push lives OUTSIDE the inner try/except: the graph
+            # is already built and committed; Wikibase success/failure is
+            # an independent status and must not lie about graph_status.
+            # The activity itself is best-effort -- it never raises, it
+            # reports its outcome via ``WikibasePushed.status``.
+            wb: WikibasePushed = WikibasePushed(status="skipped")
+            if graph_status == "completed" and merged is not None:
+                workflow.upsert_memo({"stage": "push_wikibase"})
+                log.info("→ push_wikibase")
+                wb = await workflow.execute_activity(
+                    "push_wikibase", merged,
+                    result_type=WikibasePushed,
+                    start_to_close_timeout=timedelta(minutes=15),
+                    heartbeat_timeout=timedelta(minutes=2),
+                    schedule_to_close_timeout=timedelta(hours=6),
+                    retry_policy=_FAST_FOREVER,
+                )
+                log.info(
+                    "← push_wikibase  status=%s  created=%d  updated=%d  "
+                    "ext_ids=%d  rels=%d  new_props=%d",
+                    wb.status, wb.created_items, wb.updated_items,
+                    wb.external_id_statements, wb.relation_statements,
+                    wb.new_properties_created,
+                )
+            else:
+                log.info(
+                    "skipping push_wikibase  graph_status=%s  merged=%s",
+                    graph_status, "yes" if merged is not None else "no",
+                )
+
             entities = built.entities if built is not None else 0
             relations = built.relations if built is not None else 0
             workflow.upsert_memo({
                 "stage": "finalize",
                 "graph_status": graph_status,
+                "wikibase_status": wb.status,
                 "entities": entities,
                 "relations": relations,
             })
             log.info(
-                "→ finalize  graph_status=%s  entities=%d  relations=%d",
-                graph_status, entities, relations,
+                "→ finalize  graph_status=%s  wikibase_status=%s  "
+                "entities=%d  relations=%d",
+                graph_status, wb.status, entities, relations,
             )
             result = await workflow.execute_activity(
                 "finalize",
@@ -220,6 +257,7 @@ class DocumentIngestWorkflow:
                     graph_status=graph_status,
                     entities=entities,
                     relations=relations,
+                    wikibase=wb,
                 ),
                 result_type=IngestResult,
                 start_to_close_timeout=timedelta(minutes=10),
@@ -228,9 +266,9 @@ class DocumentIngestWorkflow:
             )
             log.info(
                 "workflow done  doc_id=%s  chunks=%d  status=%s  "
-                "entities=%d  relations=%d",
+                "entities=%d  relations=%d  wikibase=%s",
                 result.doc_id, result.chunk_count, result.graph_status,
-                result.entities, result.relations,
+                result.entities, result.relations, result.wikibase_status,
             )
             return result
         except ActivityError as exc:

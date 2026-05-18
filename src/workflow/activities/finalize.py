@@ -46,11 +46,16 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
     _rmtree(payload.ctx.cleanup_dir)
     activity.heartbeat({"stage": "local_cleaned"})
 
+    wikibase_status = (
+        payload.wikibase.status if payload.wikibase else "skipped"
+    )
     logger.info(
-        "finalize  doc={d}  status={s}  chunks={c}  entities={e}  relations={r}",
+        "finalize  doc={d}  status={s}  chunks={c}  entities={e}  "
+        "relations={r}  wikibase={w}",
         d=payload.ctx.doc_id, s=payload.graph_status,
         c=payload.indexed.count,
         e=payload.entities, r=payload.relations,
+        w=wikibase_status,
     )
     return IngestResult(
         doc_id=payload.ctx.doc_id,
@@ -58,6 +63,7 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
         graph_status=payload.graph_status,
         entities=payload.entities,
         relations=payload.relations,
+        wikibase_status=wikibase_status,
     )
 
 
