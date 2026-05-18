@@ -301,6 +301,88 @@ section { margin-top: 5rem; }
   .diag-group .group-row.c5, .diag-group .group-row.c3 { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* --- COMPONENT BLOCK DIAGRAM --- */
+.components {
+  position: relative;
+  display: grid; gap: 1rem;
+  padding: 1.5rem;
+  border: 1px solid var(--line); border-radius: 18px;
+  background: var(--bg-1);
+  overflow-x: auto;
+}
+.comp-pack {
+  border: 1px solid var(--line-strong); border-radius: 14px;
+  background: var(--bg-2);
+  padding: 1rem 1.25rem;
+  display: flex; flex-direction: column; gap: .75rem;
+  position: relative;
+}
+.comp-pack-head {
+  display: flex; align-items: baseline; gap: .8rem;
+  border-bottom: 1px dashed var(--line); padding-bottom: .55rem;
+}
+.comp-pack-head h3 {
+  margin: 0; font-size: .9rem; font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.comp-pack-head .role {
+  font-size: .72rem; color: var(--text-dim); letter-spacing: .08em; text-transform: uppercase;
+}
+.comp-pack-head .path {
+  margin-left: auto; font-family: ui-monospace, monospace;
+  font-size: .72rem; color: var(--text-faint);
+}
+
+.comp-modules { display: flex; flex-wrap: wrap; gap: .4rem; }
+.mod {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-family: ui-monospace, monospace; font-size: .72rem;
+  padding: .3rem .55rem; border-radius: 6px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.mod .desc { color: var(--text-faint); font-size: .68rem; margin-left: .15rem; }
+.mod.entry { background: rgba(110,231,240,.10); border-color: rgba(110,231,240,.45); }
+.mod.llm   { background: rgba(240,168,104,.10); border-color: rgba(240,168,104,.45); }
+.mod.new   { background: rgba(110,231,240,.16); border-color: var(--accent); position: relative; }
+.mod.new::after { content: "★"; color: var(--accent); margin-left: .25rem; }
+
+.comp-row { display: grid; gap: 1rem; }
+.comp-row.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.comp-row.cols-2 { grid-template-columns: 1fr 1fr; }
+
+.pack-api    { border-left: 4px solid var(--fw); }
+.pack-flow   { border-left: 4px solid var(--comp); }
+.pack-store  { border-left: 4px solid var(--pers); }
+.pack-graph  { border-left: 4px solid var(--pers); }
+.pack-ml     { border-left: 4px solid var(--ml); }
+.pack-rag    { border-left: 4px solid var(--ml); }
+.pack-cross  { border-left: 4px solid var(--obs); border-style: dashed; }
+
+.comp-arrow {
+  display: grid; place-items: center; height: 20px; position: relative;
+  font-family: ui-monospace, monospace; font-size: .68rem;
+  color: var(--text-faint);
+}
+.comp-arrow::before {
+  content: ""; position: absolute; left: 50%; top: 0; width: 2px; height: 100%;
+  background: linear-gradient(180deg, var(--line-strong), var(--line-strong));
+}
+.comp-arrow::after {
+  content: ""; position: absolute; left: 50%; bottom: -1px;
+  transform: translateX(-50%);
+  border: 5px solid transparent; border-top-color: var(--line-strong);
+}
+.comp-arrow span {
+  position: relative; z-index: 1;
+  background: var(--bg-1); padding: 0 .6rem;
+}
+
+@media (max-width: 880px) {
+  .comp-row.cols-3, .comp-row.cols-2 { grid-template-columns: 1fr; }
+}
+
 /* --- BLOCK FLOWCHART (SVG) --- */
 .flowchart {
   border: 1px solid var(--line); border-radius: 18px;
@@ -1153,6 +1235,202 @@ footer a:hover { color: var(--accent); }
         <span class="key"><span class="sw" style="background:rgba(183,148,255,.4);border-color:var(--accent-2)"></span>Decision</span>
         <span class="key"><span class="sw" style="background:rgba(255,106,150,.4);border-color:#f06a96"></span>Error / fallback</span>
         <span class="key"><span class="sw" style="background:rgba(160,168,189,.4);border-color:var(--text-faint)"></span>Skipped (off)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · COMPONENT BLOCK DIAGRAM -->
+  <section>
+    <div class="section-head">
+      <span class="num">06</span>
+      <h2>Компонентная блок-схема · модули кодовой базы</h2>
+      <span class="lead">
+        Карта Python-пакетов под <code>src/</code> со связями между слоями.
+        ★ — добавлено в текущем спринте (wikibase-population).
+      </span>
+    </div>
+
+    <div class="components">
+
+      <!-- API LAYER -->
+      <div class="comp-pack pack-api">
+        <div class="comp-pack-head">
+          <h3>API</h3>
+          <span class="role">публичный HTTP-edge</span>
+          <span class="path">src/api/</span>
+        </div>
+        <div class="comp-modules">
+          <span class="mod entry">main.py<span class="desc">FastAPI app · uvicorn entrypoint</span></span>
+          <span class="mod">auth.py<span class="desc">X-API-Key middleware</span></span>
+          <span class="mod">routes/ingest.py<span class="desc">POST /api/v1/ingest</span></span>
+          <span class="mod">routes/search.py<span class="desc">POST /api/v1/search</span></span>
+          <span class="mod">routes/agent.py<span class="desc">POST /api/v1/agent</span></span>
+          <span class="mod">routes/selfrag.py<span class="desc">POST /api/v1/selfrag</span></span>
+          <span class="mod">routes/health.py<span class="desc">GET /healthz</span></span>
+        </div>
+      </div>
+
+      <div class="comp-arrow"><span>submit job · retrieve</span></div>
+
+      <!-- ORCHESTRATION LAYER -->
+      <div class="comp-pack pack-flow">
+        <div class="comp-pack-head">
+          <h3>Workflow · Temporal</h3>
+          <span class="role">durable orchestration</span>
+          <span class="path">src/workflow/</span>
+        </div>
+        <div class="comp-modules">
+          <span class="mod entry">worker.py<span class="desc">worker entrypoint · 2 task-queues</span></span>
+          <span class="mod">client.py<span class="desc">Temporal client wrapper</span></span>
+          <span class="mod">document_ingest.py<span class="desc">DocumentIngestWorkflow definition</span></span>
+          <span class="mod">contracts.py<span class="desc">Pydantic models · IngestResult · WikibasePushed</span></span>
+          <span class="mod">staging.py<span class="desc">staging blob store · MinIO pickle</span></span>
+        </div>
+
+        <div class="comp-pack-head" style="margin-top:.5rem">
+          <h3>activities</h3>
+          <span class="role">9 шагов pipeline</span>
+          <span class="path">src/workflow/activities/</span>
+        </div>
+        <div class="comp-modules">
+          <span class="mod">fetch_source.py</span>
+          <span class="mod">parse_and_chunk.py</span>
+          <span class="mod llm">index_vector.py<span class="desc">embed → Milvus</span></span>
+          <span class="mod">inject_canonical.py<span class="desc">regex · 24 identifier types</span></span>
+          <span class="mod llm">extract_kg.py<span class="desc">LLM extraction</span></span>
+          <span class="mod llm">merge_and_resolve.py<span class="desc">ER</span></span>
+          <span class="mod">build_property_graph.py<span class="desc">→ Neo4j</span></span>
+          <span class="mod new">push_wikibase.py<span class="desc">→ Wikibase · best-effort</span></span>
+          <span class="mod">finalize.py<span class="desc">→ Postgres · cleanup</span></span>
+        </div>
+      </div>
+
+      <div class="comp-arrow"><span>uses · reads/writes</span></div>
+
+      <!-- 3-COLUMN: STORAGE · GRAPH · INGESTION -->
+      <div class="comp-row cols-3">
+
+        <!-- STORAGE -->
+        <div class="comp-pack pack-store">
+          <div class="comp-pack-head">
+            <h3>Storage</h3>
+            <span class="role">DB clients</span>
+            <span class="path">src/storage/</span>
+          </div>
+          <div class="comp-modules">
+            <span class="mod">minio.py<span class="desc">S3 client</span></span>
+            <span class="mod">postgres.py<span class="desc">documents-table</span></span>
+            <span class="mod">chunk_repository.py<span class="desc">Milvus collection</span></span>
+            <span class="mod new">wikibase.py<span class="desc">AsyncWikibase · push_entities</span></span>
+          </div>
+        </div>
+
+        <!-- GRAPH / KG -->
+        <div class="comp-pack pack-graph">
+          <div class="comp-pack-head">
+            <h3>Graph · KG</h3>
+            <span class="role">Neo4j + extraction</span>
+            <span class="path">src/graph/</span>
+          </div>
+          <div class="comp-modules">
+            <span class="mod">store.py<span class="desc">Neo4j graph-store</span></span>
+            <span class="mod">schema.py<span class="desc">indexes · constraints</span></span>
+            <span class="mod">index.py<span class="desc">PropertyGraphIndex</span></span>
+            <span class="mod">retriever.py<span class="desc">graph-walk retrieval</span></span>
+            <span class="mod llm">lightrag_extract.py</span>
+            <span class="mod">lightrag_parse.py</span>
+            <span class="mod">lightrag_prompts.py</span>
+            <span class="mod llm">entity_resolution.py<span class="desc">ER core</span></span>
+            <span class="mod">merge.py</span>
+            <span class="mod">phone_consolidation.py</span>
+          </div>
+        </div>
+
+        <!-- INGESTION HELPERS -->
+        <div class="comp-pack pack-ml">
+          <div class="comp-pack-head">
+            <h3>Ingestion</h3>
+            <span class="role">parse · normalize · embed</span>
+            <span class="path">src/ingestion/</span>
+          </div>
+          <div class="comp-modules">
+            <span class="mod">pipeline.py<span class="desc">LlamaIndex IngestionPipeline</span></span>
+            <span class="mod">run.py<span class="desc">CLI helper</span></span>
+            <span class="mod llm">embeddings.py<span class="desc">BGE-M3 wrapper</span></span>
+            <span class="mod">identifiers.py<span class="desc">24 типа · regex extract</span></span>
+            <span class="mod">identifier_transform.py<span class="desc">LlamaIndex node-transform</span></span>
+            <span class="mod">translate_transform.py<span class="desc">multilingual normalize</span></span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="comp-arrow"><span>queries · LLM-calls</span></div>
+
+      <!-- RETRIEVAL -->
+      <div class="comp-pack pack-rag">
+        <div class="comp-pack-head">
+          <h3>Retrieval</h3>
+          <span class="role">search engines · agents</span>
+          <span class="path">src/retrieval/</span>
+        </div>
+        <div class="comp-modules">
+          <span class="mod">hybrid.py<span class="desc">vector + graph fusion</span></span>
+          <span class="mod">vector_index.py<span class="desc">Milvus retriever</span></span>
+          <span class="mod">reranker.py<span class="desc">BGE-reranker-v2-m3</span></span>
+          <span class="mod">query_engine.py<span class="desc">LlamaIndex QE</span></span>
+          <span class="mod llm">llm.py<span class="desc">qwen3 / OpenAI wrapper</span></span>
+          <span class="mod llm">judge.py<span class="desc">relevance · faithfulness LLM</span></span>
+          <span class="mod llm">agent.py<span class="desc">legacy agent loop</span></span>
+          <span class="mod llm">react_agent.py<span class="desc">ReAct agent · tool-calling</span></span>
+          <span class="mod llm">reflective_synth.py<span class="desc">Self-RAG synthesis</span></span>
+          <span class="mod">_common.py<span class="desc">shared helpers</span></span>
+        </div>
+      </div>
+
+      <!-- CROSS-CUTTING -->
+      <div class="comp-row cols-2" style="margin-top:.5rem">
+
+        <div class="comp-pack pack-cross">
+          <div class="comp-pack-head">
+            <h3>Cross-cutting</h3>
+            <span class="role">config · DI · observability</span>
+            <span class="path">src/{config,di,utils,observability,models}/</span>
+          </div>
+          <div class="comp-modules">
+            <span class="mod entry">config.py<span class="desc">Settings · pydantic-settings · WikibaseSettings</span></span>
+            <span class="mod">di/providers.py<span class="desc">build_* фабрики</span></span>
+            <span class="mod">utils/logging.py<span class="desc">structlog · JSON</span></span>
+            <span class="mod">observability/trace.py<span class="desc">LangFuse callbacks</span></span>
+            <span class="mod">models/search.py<span class="desc">request/response schemas</span></span>
+          </div>
+        </div>
+
+        <div class="comp-pack pack-cross">
+          <div class="comp-pack-head">
+            <h3>Scripts · ops</h3>
+            <span class="role">bootstrap · smoke · wipe</span>
+            <span class="path">scripts/</span>
+          </div>
+          <div class="comp-modules">
+            <span class="mod new">setup_wikibase.py<span class="desc">10 base-classes + 27 properties + KbBot</span></span>
+            <span class="mod">setup_db.py<span class="desc">Postgres + Neo4j schema</span></span>
+            <span class="mod">wipe_db.py<span class="desc">tear-down dev state</span></span>
+            <span class="mod new">smoke_wikibase_push.py<span class="desc">live push без API</span></span>
+            <span class="mod">run_ragas.py<span class="desc">offline-eval</span></span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="legend" style="margin-top:.75rem;">
+        <span class="key"><span class="sw" style="background:rgba(255,180,84,.4);border-color:var(--fw)"></span>API layer</span>
+        <span class="key"><span class="sw" style="background:rgba(183,148,255,.4);border-color:var(--comp)"></span>Workflow / Temporal</span>
+        <span class="key"><span class="sw" style="background:rgba(110,231,240,.4);border-color:var(--pers)"></span>Storage · Graph</span>
+        <span class="key"><span class="sw" style="background:rgba(255,106,150,.4);border-color:var(--ml)"></span>ML · Retrieval</span>
+        <span class="key"><span class="sw" style="background:rgba(93,211,158,.4);border-color:var(--obs)"></span>Cross-cutting</span>
+        <span class="key"><span class="sw" style="background:rgba(240,168,104,.4);border-color:var(--accent-3)"></span>LLM-heavy module</span>
+        <span class="key"><span style="color:var(--accent)">★</span> новое в спринте</span>
       </div>
     </div>
   </section>
