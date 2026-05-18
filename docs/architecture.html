@@ -301,6 +301,38 @@ section { margin-top: 5rem; }
   .diag-group .group-row.c5, .diag-group .group-row.c3 { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* --- BLOCK FLOWCHART (SVG) --- */
+.flowchart {
+  border: 1px solid var(--line); border-radius: 18px;
+  background: var(--bg-1);
+  padding: 1.5rem;
+  overflow-x: auto;
+}
+.flowchart svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+
+.fc-text { fill: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.fc-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.fc-dim  { fill: var(--text-dim); }
+.fc-faint{ fill: var(--text-faint); }
+
+.fc-shape { stroke-width: 1.5; }
+.fc-start { fill: rgba(110,231,240,.10); stroke: var(--accent); }
+.fc-end   { fill: rgba(93,211,158,.10); stroke: var(--good); }
+.fc-proc  { fill: var(--bg-2); stroke: var(--line-strong); }
+.fc-llm   { fill: rgba(240,168,104,.08); stroke: var(--accent-3); }
+.fc-dec   { fill: rgba(183,148,255,.08); stroke: var(--accent-2); }
+.fc-err   { fill: rgba(255,106,150,.08); stroke: #f06a96; }
+.fc-fail  { fill: rgba(255,106,150,.16); stroke: #f06a96; }
+.fc-skip  { fill: rgba(160,168,189,.10); stroke: var(--text-faint); }
+
+.fc-line { stroke: var(--line-strong); stroke-width: 1.5; fill: none; }
+.fc-line-glow { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: .8; }
+.fc-line-err { stroke: #f06a96; stroke-width: 1.5; fill: none; stroke-dasharray: 4 3; }
+
+.fc-arrow { fill: var(--line-strong); }
+.fc-arrow-glow { fill: var(--accent); }
+.fc-arrow-err { fill: #f06a96; }
+
 /* --- LAYERS DIAGRAM --- */
 .layers { display: grid; gap: 1rem; }
 .layer {
@@ -877,6 +909,251 @@ footer a:hover { color: var(--accent); }
         </div>
       </div>
 
+    </div>
+  </section>
+
+  <!-- 5 · BLOCK FLOWCHART -->
+  <section>
+    <div class="section-head">
+      <span class="num">05</span>
+      <h2>Блок-схема ingest-алгоритма</h2>
+      <span class="lead">
+        Классическая нотация: ромбы — решения, прямоугольники — операции,
+        пунктир — ошибки и fallback'и. Best-effort: сбои в graph- и
+        wikibase-фазах не валят весь workflow.
+      </span>
+    </div>
+
+    <div class="flowchart">
+      <svg viewBox="0 0 980 1820" role="img" aria-label="Блок-схема ingest pipeline">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="fc-arrow"/>
+          </marker>
+          <marker id="ar-glow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="fc-arrow-glow"/>
+          </marker>
+          <marker id="ar-err" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="fc-arrow-err"/>
+          </marker>
+        </defs>
+
+        <!-- 1: Start -->
+        <g>
+          <rect class="fc-shape fc-start" x="370" y="20" width="240" height="50" rx="25" ry="25"/>
+          <text class="fc-text fc-mono" x="490" y="50" text-anchor="middle" font-size="13" font-weight="700">START · POST /api/v1/ingest</text>
+        </g>
+        <path class="fc-line" d="M490,70 L490,98" marker-end="url(#ar)"/>
+
+        <!-- 2: Validate -->
+        <g>
+          <rect class="fc-shape fc-proc" x="350" y="100" width="280" height="50" rx="6"/>
+          <text class="fc-text" x="490" y="125" text-anchor="middle" font-size="13" font-weight="600">Auth + multipart validate</text>
+          <text class="fc-text fc-dim fc-mono" x="490" y="142" text-anchor="middle" font-size="11">X-API-Key · file size · content-type</text>
+        </g>
+        <path class="fc-line" d="M490,150 L490,178" marker-end="url(#ar)"/>
+
+        <!-- 3: Decision: valid? -->
+        <g>
+          <polygon class="fc-shape fc-dec" points="490,180 620,235 490,290 360,235"/>
+          <text class="fc-text" x="490" y="232" text-anchor="middle" font-size="13" font-weight="600">payload valid?</text>
+          <text class="fc-text fc-dim" x="490" y="248" text-anchor="middle" font-size="11">api-key, ≤MAX_SIZE</text>
+        </g>
+        <!-- yes path down -->
+        <path class="fc-line-glow" d="M490,290 L490,318" marker-end="url(#ar-glow)"/>
+        <text class="fc-text fc-dim fc-mono" x="500" y="308" font-size="11">yes</text>
+        <!-- no path right → reject -->
+        <path class="fc-line-err" d="M620,235 L820,235" marker-end="url(#ar-err)"/>
+        <text class="fc-text fc-dim fc-mono" x="715" y="228" text-anchor="middle" font-size="11">no</text>
+        <g>
+          <rect class="fc-shape fc-err" x="700" y="210" width="240" height="50" rx="25" ry="25"/>
+          <text class="fc-text" x="820" y="232" text-anchor="middle" font-size="13" font-weight="600">return 4xx</text>
+          <text class="fc-text fc-dim fc-mono" x="820" y="248" text-anchor="middle" font-size="11">401 / 415 / 413</text>
+        </g>
+
+        <!-- 4: Upload + create job -->
+        <g>
+          <rect class="fc-shape fc-proc" x="330" y="320" width="320" height="62" rx="6"/>
+          <text class="fc-text" x="490" y="345" text-anchor="middle" font-size="13" font-weight="600">Upload → MinIO · INSERT documents row</text>
+          <text class="fc-text fc-dim fc-mono" x="490" y="364" text-anchor="middle" font-size="11">bucket=kb-uploads · status='pending'</text>
+        </g>
+        <path class="fc-line" d="M490,382 L490,408" marker-end="url(#ar)"/>
+
+        <!-- 5: Submit workflow -->
+        <g>
+          <rect class="fc-shape fc-proc" x="350" y="410" width="280" height="50" rx="6"/>
+          <text class="fc-text" x="490" y="435" text-anchor="middle" font-size="13" font-weight="600">Submit Temporal workflow</text>
+          <text class="fc-text fc-dim fc-mono" x="490" y="452" text-anchor="middle" font-size="11">DocumentIngestWorkflow · queue=kb-ingest</text>
+        </g>
+        <path class="fc-line" d="M490,460 L490,488" marker-end="url(#ar)"/>
+
+        <!-- 6: Return 202 -->
+        <g>
+          <rect class="fc-shape fc-end" x="370" y="490" width="240" height="50" rx="25" ry="25"/>
+          <text class="fc-text fc-mono" x="490" y="520" text-anchor="middle" font-size="13" font-weight="700">return 202 · {job_id}</text>
+        </g>
+
+        <!-- Async worker divider -->
+        <line class="fc-line" x1="60" y1="580" x2="920" y2="580" stroke-dasharray="6 4"/>
+        <text class="fc-text fc-faint fc-mono" x="490" y="575" text-anchor="middle" font-size="11">─── async · Temporal worker ───</text>
+
+        <!-- 7: fetch_source -->
+        <g>
+          <rect class="fc-shape fc-proc" x="370" y="600" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="627" text-anchor="middle" font-size="12.5" font-weight="700">fetch_source</text>
+        </g>
+        <path class="fc-line" d="M490,644 L490,668" marker-end="url(#ar)"/>
+
+        <!-- 8: parse_and_chunk -->
+        <g>
+          <rect class="fc-shape fc-proc" x="370" y="670" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="697" text-anchor="middle" font-size="12.5" font-weight="700">parse_and_chunk</text>
+        </g>
+        <path class="fc-line" d="M490,714 L490,738" marker-end="url(#ar)"/>
+
+        <!-- 9: index_vector (LLM-ish: embedding) -->
+        <g>
+          <rect class="fc-shape fc-llm" x="370" y="740" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="763" text-anchor="middle" font-size="12.5" font-weight="700">index_vector</text>
+          <text class="fc-text fc-dim" x="490" y="777" text-anchor="middle" font-size="10">BGE-M3 → Milvus</text>
+        </g>
+        <path class="fc-line" d="M490,784 L490,808" marker-end="url(#ar)"/>
+
+        <!-- 10: inject_canonical -->
+        <g>
+          <rect class="fc-shape fc-proc" x="370" y="810" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="833" text-anchor="middle" font-size="12.5" font-weight="700">inject_canonical</text>
+          <text class="fc-text fc-dim" x="490" y="847" text-anchor="middle" font-size="10">regex · 24 типа идентификаторов</text>
+        </g>
+        <path class="fc-line" d="M490,854 L490,878" marker-end="url(#ar)"/>
+
+        <!-- 11: extract_kg (LLM) -->
+        <g>
+          <rect class="fc-shape fc-llm" x="370" y="880" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="903" text-anchor="middle" font-size="12.5" font-weight="700">extract_kg</text>
+          <text class="fc-text fc-dim" x="490" y="917" text-anchor="middle" font-size="10">LLM · qwen3:8b · kb-ingest-llm</text>
+        </g>
+        <path class="fc-line" d="M490,924 L490,948" marker-end="url(#ar)"/>
+
+        <!-- 12: merge_and_resolve (LLM) -->
+        <g>
+          <rect class="fc-shape fc-llm" x="370" y="950" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="973" text-anchor="middle" font-size="12.5" font-weight="700">merge_and_resolve</text>
+          <text class="fc-text fc-dim" x="490" y="987" text-anchor="middle" font-size="10">ER · identifier folding</text>
+        </g>
+        <path class="fc-line" d="M490,994 L490,1018" marker-end="url(#ar)"/>
+
+        <!-- 13: build_property_graph -->
+        <g>
+          <rect class="fc-shape fc-proc" x="370" y="1020" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="1043" text-anchor="middle" font-size="12.5" font-weight="700">build_property_graph</text>
+          <text class="fc-text fc-dim" x="490" y="1057" text-anchor="middle" font-size="10">→ Neo4j</text>
+        </g>
+        <path class="fc-line" d="M490,1064 L490,1088" marker-end="url(#ar)"/>
+
+        <!-- 14: Decision: graph step failed? -->
+        <g>
+          <polygon class="fc-shape fc-dec" points="490,1090 620,1145 490,1200 360,1145"/>
+          <text class="fc-text" x="490" y="1142" text-anchor="middle" font-size="13" font-weight="600">graph fase OK?</text>
+          <text class="fc-text fc-dim" x="490" y="1158" text-anchor="middle" font-size="10">Neo4j down? ER raise?</text>
+        </g>
+        <!-- no (failed) → branch right → set vector_only -->
+        <path class="fc-line-err" d="M620,1145 L720,1145" marker-end="url(#ar-err)"/>
+        <text class="fc-text fc-dim fc-mono" x="670" y="1138" text-anchor="middle" font-size="11">no</text>
+        <g>
+          <rect class="fc-shape fc-err" x="720" y="1118" width="220" height="54" rx="6"/>
+          <text class="fc-text" x="830" y="1140" text-anchor="middle" font-size="13" font-weight="600">graph_status =</text>
+          <text class="fc-text fc-mono" x="830" y="1158" text-anchor="middle" font-size="12" font-weight="700">"vector_only"</text>
+        </g>
+        <!-- yes (ok) ↓ -->
+        <path class="fc-line-glow" d="M490,1200 L490,1228" marker-end="url(#ar-glow)"/>
+        <text class="fc-text fc-dim fc-mono" x="500" y="1218" font-size="11">yes</text>
+
+        <!-- 15: push_wikibase (entry) -->
+        <g>
+          <rect class="fc-shape fc-proc" x="370" y="1230" width="240" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="1253" text-anchor="middle" font-size="12.5" font-weight="700">push_wikibase</text>
+          <text class="fc-text fc-dim" x="490" y="1267" text-anchor="middle" font-size="10">best-effort</text>
+        </g>
+        <path class="fc-line" d="M490,1274 L490,1298" marker-end="url(#ar)"/>
+
+        <!-- 16: Decision: WIKIBASE_ENABLED? -->
+        <g>
+          <polygon class="fc-shape fc-dec" points="490,1300 620,1355 490,1410 360,1355"/>
+          <text class="fc-text" x="490" y="1352" text-anchor="middle" font-size="13" font-weight="600">WIKIBASE_ENABLED?</text>
+        </g>
+        <!-- no → skipped (right) -->
+        <path class="fc-line-err" d="M620,1355 L720,1355" marker-end="url(#ar-err)"/>
+        <text class="fc-text fc-dim fc-mono" x="670" y="1348" text-anchor="middle" font-size="11">no</text>
+        <g>
+          <rect class="fc-shape fc-skip" x="720" y="1328" width="220" height="54" rx="6"/>
+          <text class="fc-text" x="830" y="1350" text-anchor="middle" font-size="13" font-weight="600">wikibase_status =</text>
+          <text class="fc-text fc-mono" x="830" y="1368" text-anchor="middle" font-size="12" font-weight="700">"skipped"</text>
+        </g>
+        <!-- yes ↓ -->
+        <path class="fc-line-glow" d="M490,1410 L490,1438" marker-end="url(#ar-glow)"/>
+        <text class="fc-text fc-dim fc-mono" x="500" y="1428" font-size="11">yes</text>
+
+        <!-- 17: Login + push items+claims -->
+        <g>
+          <rect class="fc-shape fc-proc" x="320" y="1440" width="340" height="54" rx="6"/>
+          <text class="fc-text" x="490" y="1462" text-anchor="middle" font-size="13" font-weight="600">Login as KbBot · push Items + claims</text>
+          <text class="fc-text fc-dim fc-mono" x="490" y="1478" text-anchor="middle" font-size="11">create | update · identifier-folding · lazy props</text>
+        </g>
+        <path class="fc-line" d="M490,1494 L490,1518" marker-end="url(#ar)"/>
+
+        <!-- 18: Decision: had entities AND nothing landed? -->
+        <g>
+          <polygon class="fc-shape fc-dec" points="490,1520 660,1585 490,1650 320,1585"/>
+          <text class="fc-text" x="490" y="1576" text-anchor="middle" font-size="13" font-weight="600">items создались / обновились?</text>
+          <text class="fc-text fc-dim" x="490" y="1592" text-anchor="middle" font-size="10">или entities==0 (legit empty)</text>
+        </g>
+        <!-- no (entities>0 but 0 landed) → failed -->
+        <path class="fc-line-err" d="M660,1585 L720,1585" marker-end="url(#ar-err)"/>
+        <text class="fc-text fc-dim fc-mono" x="690" y="1578" text-anchor="middle" font-size="11">no</text>
+        <g>
+          <rect class="fc-shape fc-fail" x="720" y="1558" width="220" height="54" rx="6"/>
+          <text class="fc-text" x="830" y="1580" text-anchor="middle" font-size="13" font-weight="600">wikibase_status =</text>
+          <text class="fc-text fc-mono" x="830" y="1598" text-anchor="middle" font-size="12" font-weight="700">"failed"</text>
+        </g>
+        <!-- yes ↓ writeback -->
+        <path class="fc-line-glow" d="M490,1650 L490,1678" marker-end="url(#ar-glow)"/>
+        <text class="fc-text fc-dim fc-mono" x="500" y="1668" font-size="11">yes</text>
+
+        <!-- 19: status=ok + writeback -->
+        <g>
+          <rect class="fc-shape fc-proc" x="310" y="1680" width="360" height="54" rx="6"/>
+          <text class="fc-text" x="490" y="1702" text-anchor="middle" font-size="13" font-weight="600">status="ok" · write QIDs back to Neo4j</text>
+          <text class="fc-text fc-dim fc-mono" x="490" y="1718" text-anchor="middle" font-size="11">SET e.wikibase_qid = $qid (идемпотентность)</text>
+        </g>
+
+        <!-- Convergence lines from right column back to center for finalize -->
+        <!-- from vector_only -->
+        <path class="fc-line-err" d="M830,1172 L830,1740 L490,1740" marker-end="url(#ar-err)"/>
+        <!-- from skipped -->
+        <path class="fc-line-err" d="M830,1382 L830,1740" />
+        <!-- from failed (already on x=830 going down) -->
+        <path class="fc-line-err" d="M830,1612 L830,1740" />
+        <!-- from happy path down -->
+        <path class="fc-line" d="M490,1734 L490,1760" marker-end="url(#ar)"/>
+
+        <!-- 20: finalize -->
+        <g>
+          <rect class="fc-shape fc-proc" x="350" y="1762" width="280" height="44" rx="6"/>
+          <text class="fc-text fc-mono" x="490" y="1785" text-anchor="middle" font-size="12.5" font-weight="700">finalize</text>
+          <text class="fc-text fc-dim" x="490" y="1799" text-anchor="middle" font-size="10">update Postgres · cleanup staging</text>
+        </g>
+
+      </svg>
+
+      <div class="legend" style="margin-top:1rem;">
+        <span class="key"><span class="sw" style="background:rgba(110,231,240,.4);border-color:var(--accent)"></span>Start / End</span>
+        <span class="key"><span class="sw" style="background:var(--bg-2);border-color:var(--line-strong)"></span>Process</span>
+        <span class="key"><span class="sw" style="background:rgba(240,168,104,.4);border-color:var(--accent-3)"></span>LLM-heavy (kb-ingest-llm)</span>
+        <span class="key"><span class="sw" style="background:rgba(183,148,255,.4);border-color:var(--accent-2)"></span>Decision</span>
+        <span class="key"><span class="sw" style="background:rgba(255,106,150,.4);border-color:#f06a96"></span>Error / fallback</span>
+        <span class="key"><span class="sw" style="background:rgba(160,168,189,.4);border-color:var(--text-faint)"></span>Skipped (off)</span>
+      </div>
     </div>
   </section>
 
