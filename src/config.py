@@ -232,6 +232,29 @@ class IngestionSettings(BaseSettings):
     semantic_chunking: bool = False
 
 
+class WikibaseSettings(BaseSettings):
+    """Self-hosted Wikibase populator settings.
+
+    When ``enabled=True``, ``DocumentIngestWorkflow`` calls
+    ``push_wikibase`` after a successful graph build and pushes
+    canonical entities + typed relations + identifier statements
+    into Wikibase.  Default disabled — operator opts in after
+    running ``scripts/setup_wikibase.py`` to bootstrap the bot
+    user and the base-class Items.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="WIKIBASE_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = False
+    base_url: str = "http://localhost:8181"
+    bot_user: str = "KbBot"
+    bot_password: SecretStr = SecretStr("botpass")
+    language: str = "ru"
+    timeout_s: float = 30.0
+
+
 class AgentSettings(BaseSettings):
     """Knobs for the agentic search endpoints (`/agent`, `/selfrag`)."""
 
@@ -313,6 +336,10 @@ class Settings(BaseSettings):
     def agent(self) -> AgentSettings:
         return AgentSettings()
 
+    @cached_property
+    def wikibase(self) -> WikibaseSettings:
+        return WikibaseSettings()
+
 
 settings = Settings()
 
@@ -328,5 +355,6 @@ __all__ = [
     "PostgresSettings",
     "Settings",
     "TemporalSettings",
+    "WikibaseSettings",
     "settings",
 ]

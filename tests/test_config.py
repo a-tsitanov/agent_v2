@@ -52,3 +52,27 @@ def test_logging_configures_without_error() -> None:
 
     configure_logging(level="debug", json_output=False)
     configure_logging(level="info", json_output=True)
+
+
+def test_wikibase_settings_defaults():
+    from src.config import settings
+    w = settings.wikibase
+    assert w.enabled is False           # opt-in
+    assert w.base_url == "http://localhost:8181"
+    assert w.bot_user == "KbBot"
+    assert w.language == "ru"
+    assert w.timeout_s == 30.0
+
+
+def test_wikibase_enabled_via_env(monkeypatch):
+    """Build a fresh `WikibaseSettings` under a monkey-patched env.
+    Avoids `reload(cfg)` which would leave the module-level
+    `settings` singleton in a permanently-broken state for other
+    tests in this file (cf. the same pattern in
+    test_llm_cache_disabled_via_env)."""
+    from src.config import WikibaseSettings
+    monkeypatch.setenv("WIKIBASE_ENABLED", "true")
+    monkeypatch.setenv("WIKIBASE_BASE_URL", "http://wb.internal:8181")
+    fresh = WikibaseSettings()
+    assert fresh.enabled is True
+    assert fresh.base_url == "http://wb.internal:8181"
