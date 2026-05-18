@@ -54,7 +54,11 @@ async def test_happy_path_runs_push_entities(monkeypatch):
     monkeypatch.setattr(settings.wikibase, "enabled", True, raising=False)
 
     staging = MagicMock()
-    staging.read_pickle.return_value = ([], [], [])
+    # One owner entity in the staging blob so the zero-counters
+    # guard isn't tripped (which would otherwise mask happy-path).
+    staging.read_pickle.return_value = (
+        [MagicMock(name="ent-1")], [], [],
+    )
     gs = MagicMock()
     gs.structured_query.side_effect = [
         [{"label": "Person", "qid": "Q1"}],     # base classes
@@ -82,7 +86,9 @@ async def test_happy_path_runs_push_entities(monkeypatch):
     ) as push_fn, patch(
         "src.workflow.activities.push_wikibase.activity"
     ):
-        wb_factory.from_settings.return_value = wb_client
+        # `from_settings` is async — must await — so the test mock has
+        # to be an AsyncMock to support `await` in the activity.
+        wb_factory.from_settings = AsyncMock(return_value=wb_client)
         out = await push_wikibase(_fake_merged())
 
     assert out.status == "ok"
@@ -92,6 +98,105 @@ async def test_happy_path_runs_push_entities(monkeypatch):
     assert out.relation_statements == 4
     assert out.new_properties_created == 1
     push_fn.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_zero_counters_marked_failed_not_ok(monkeypatch):
+    """If push_entities returns counters where created+updated == 0
+    yet we DID receive entities to push, treat as failed.  Catches
+    the silent-no-op class of bugs (e.g. wb_client was a coroutine
+    object so every per-owner create_item raised, push_entities's
+    inner try/except swallowed each, top-level returned all zeros).
+    """
+    from src.config import settings
+    from src.workflow.activities.push_wikibase import push_wikibase
+
+    monkeypatch.setattr(settings.wikibase, "enabled", True, raising=False)
+
+    staging = MagicMock()
+    # 3 entities went in...
+    staging.read_pickle.return_value = (
+        [MagicMock(name=f"ent-{i}") for i in range(3)], [], [],
+    )
+    gs = MagicMock()
+    gs.structured_query.side_effect = [
+        [{"label": "Person", "qid": "Q1"}],
+        [{"label": "PhoneNumber", "pid": "P4"}],
+    ]
+    # ...but nothing landed in Wikibase.
+    zero_counts = {
+        "created_items": 0, "updated_items": 0,
+        "external_id_statements": 0, "relation_statements": 0,
+        "new_properties_created": 0,
+    }
+
+    wb_client = MagicMock()
+    with patch(
+        "src.workflow.activities.push_wikibase.build_staging_store",
+        return_value=staging,
+    ), patch(
+        "src.workflow.activities.push_wikibase.build_neo4j_graph_store",
+        return_value=gs,
+    ), patch(
+        "src.workflow.activities.push_wikibase.AsyncWikibase",
+    ) as wb_factory, patch(
+        "src.workflow.activities.push_wikibase.push_entities",
+        new=AsyncMock(return_value=zero_counts),
+    ), patch(
+        "src.workflow.activities.push_wikibase.activity"
+    ):
+        wb_factory.from_settings = AsyncMock(return_value=wb_client)
+        out = await push_wikibase(_fake_merged())
+
+    assert out.status == "failed", (
+        "had work to do but produced no items — must NOT report ok"
+    )
+    # Counters still surfaced for diagnostics.
+    assert out.created_items == 0
+    assert out.updated_items == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_input_returns_ok(monkeypatch):
+    """An ingest with no entities to push (empty merged blob) IS a
+    valid no-op — status="ok" with all zeros is honest here."""
+    from src.config import settings
+    from src.workflow.activities.push_wikibase import push_wikibase
+
+    monkeypatch.setattr(settings.wikibase, "enabled", True, raising=False)
+
+    staging = MagicMock()
+    staging.read_pickle.return_value = ([], [], [])  # genuinely empty
+    gs = MagicMock()
+    gs.structured_query.side_effect = [
+        [{"label": "Person", "qid": "Q1"}],
+        [{"label": "PhoneNumber", "pid": "P4"}],
+    ]
+    zero_counts = {
+        "created_items": 0, "updated_items": 0,
+        "external_id_statements": 0, "relation_statements": 0,
+        "new_properties_created": 0,
+    }
+
+    wb_client = MagicMock()
+    with patch(
+        "src.workflow.activities.push_wikibase.build_staging_store",
+        return_value=staging,
+    ), patch(
+        "src.workflow.activities.push_wikibase.build_neo4j_graph_store",
+        return_value=gs,
+    ), patch(
+        "src.workflow.activities.push_wikibase.AsyncWikibase",
+    ) as wb_factory, patch(
+        "src.workflow.activities.push_wikibase.push_entities",
+        new=AsyncMock(return_value=zero_counts),
+    ), patch(
+        "src.workflow.activities.push_wikibase.activity"
+    ):
+        wb_factory.from_settings = AsyncMock(return_value=wb_client)
+        out = await push_wikibase(_fake_merged())
+
+    assert out.status == "ok"
 
 
 @pytest.mark.asyncio

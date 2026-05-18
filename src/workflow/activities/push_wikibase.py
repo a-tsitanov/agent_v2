@@ -48,7 +48,15 @@ async def push_wikibase(merged: Merged) -> WikibasePushed:
             "properties": len(property_pids),
         })
 
-        wb_client = AsyncWikibase.from_settings(settings.wikibase)
+        # AsyncWikibase.from_settings is `async def` (it logs into the
+        # Wikibase REST API to obtain a session), so we MUST await it.
+        # Forgetting the `await` produced a coroutine object that then
+        # surfaced inside push_entities as `'coroutine' object has no
+        # attribute 'create_item'` for every owner — push_entities's
+        # per-owner try/except swallowed each, leaving counters at 0
+        # and returning status="ok" misleadingly.  See test
+        # `test_push_wikibase_zero_counters_marked_failed` below.
+        wb_client = await AsyncWikibase.from_settings(settings.wikibase)
         activity.heartbeat({"stage": "pushing", "entities": len(entities)})
 
         counts = await push_entities(
@@ -57,6 +65,21 @@ async def push_wikibase(merged: Merged) -> WikibasePushed:
             base_class_qids=base_class_qids, property_pids=property_pids,
         )
         activity.heartbeat({"stage": "pushed", **counts})
+
+        # Detect the silent-no-op case: there were owner entities to
+        # push but nothing landed.  Mark failed so the operator can
+        # see it in the workflow result instead of a misleading ok.
+        had_work = bool(entities)
+        nothing_done = (
+            counts["created_items"] == 0
+            and counts["updated_items"] == 0
+        )
+        if had_work and nothing_done:
+            activity.logger.warning(
+                "push_wikibase: %d entities in, 0 items created/updated -- "
+                "treating as failed", len(entities),
+            )
+            return WikibasePushed(status="failed", **counts)
         return WikibasePushed(status="ok", **counts)
     except Exception as exc:  # noqa: BLE001
         activity.logger.warning(
