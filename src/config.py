@@ -287,6 +287,39 @@ class AgentSettings(BaseSettings):
     enable_legacy_agent: bool = False
 
 
+class MetricsSettings(BaseSettings):
+    """Worker-side Prometheus exporter (Stage 2 of analytics plan).
+
+    When ``enabled=True``, the worker installs a process-wide
+    ``temporalio.runtime.Runtime`` with a ``PrometheusConfig`` listener
+    on ``bind_address``.  Prometheus (running in docker compose) scrapes
+    this endpoint from ``host.docker.internal:<port>``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="METRICS_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = True
+    bind_address: str = "0.0.0.0:9090"
+
+
+class AnalyticsSettings(BaseSettings):
+    """Version-tag plumbing for the ingest-metrics layer.
+
+    Submit-time tag (``X-Version-Tag`` header on /ingest) falls back to
+    ``default_version_tag``; ``env_name`` labels the deployment for
+    Temporal search attributes and the Postgres ``ingest_metrics`` rows.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="ANALYTICS_", env_file=".env", extra="ignore",
+    )
+
+    default_version_tag: str = "unspecified"
+    env_name: str = "dev-local"
+
+
 # ── composed top-level settings ──────────────────────────────────────
 
 
@@ -340,15 +373,25 @@ class Settings(BaseSettings):
     def wikibase(self) -> WikibaseSettings:
         return WikibaseSettings()
 
+    @cached_property
+    def metrics(self) -> MetricsSettings:
+        return MetricsSettings()
+
+    @cached_property
+    def analytics(self) -> AnalyticsSettings:
+        return AnalyticsSettings()
+
 
 settings = Settings()
 
 
 __all__ = [
+    "AnalyticsSettings",
     "ApiSettings",
     "AgentSettings",
     "IngestionSettings",
     "LiteLLMSettings",
+    "MetricsSettings",
     "MilvusSettings",
     "MinioSettings",
     "Neo4jSettings",
