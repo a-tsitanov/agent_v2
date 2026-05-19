@@ -123,7 +123,7 @@
       "datasource": { "type": "prometheus", "uid": "prom-kb" },
       "targets": [
         {
-          "expr": "sum by (activity_type) (rate(temporal_activity_succeed[5m]) * 60)",
+          "expr": "sum by (activity_type) (rate(temporal_activity_succeed_endtoend_latency_count[5m]) * 60)",
           "refId": "A",
           "legendFormat": "{{activity_type}}"
         }
@@ -141,7 +141,7 @@
       "datasource": { "type": "prometheus", "uid": "prom-kb" },
       "targets": [
         {
-          "expr": "sum by (activity_type) (rate(temporal_activity_failed[5m]) * 300)",
+          "expr": "sum by (activity_type) (rate(temporal_activity_execution_failed[5m]) * 300)",
           "refId": "A",
           "legendFormat": "{{activity_type}}"
         }

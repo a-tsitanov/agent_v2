@@ -22,7 +22,7 @@ and ``insert_metrics`` IO.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timezone
 
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHistory
@@ -71,7 +71,7 @@ def parse_activity_timings(
         elif et == EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED:
             attrs = ev.activity_task_started_event_attributes
             started[attrs.scheduled_event_id] = (
-                ev.event_time.ToDatetime(),
+                ev.event_time.ToDatetime(tzinfo=timezone.utc),
                 attrs.attempt or 1,
             )
         elif et in _TERMINAL_TYPES:
@@ -83,7 +83,7 @@ def parse_activity_timings(
                 continue
             name = scheduled[sched_id]
             started_at, attempt = started[sched_id]
-            completed_at = ev.event_time.ToDatetime()
+            completed_at = ev.event_time.ToDatetime(tzinfo=timezone.utc)
             duration_ms = max(
                 0, int((completed_at - started_at).total_seconds() * 1000),
             )
