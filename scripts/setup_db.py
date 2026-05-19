@@ -54,6 +54,34 @@ CREATE INDEX IF NOT EXISTS documents_department_idx
 """
 
 
+_INGEST_METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS ingest_metrics (
+    id              BIGSERIAL PRIMARY KEY,
+    doc_id          UUID        NOT NULL,
+    workflow_id     TEXT        NOT NULL,
+    workflow_run_id TEXT        NOT NULL,
+    activity_name   TEXT        NOT NULL,
+    attempt         INT         NOT NULL DEFAULT 1,
+    duration_ms     BIGINT      NOT NULL,
+    started_at      TIMESTAMPTZ NOT NULL,
+    completed_at    TIMESTAMPTZ NOT NULL,
+    version_tag     TEXT,
+    model           TEXT,
+    env             TEXT,
+    UNIQUE (workflow_run_id, activity_name, attempt)
+);
+
+CREATE INDEX IF NOT EXISTS ingest_metrics_doc_id_idx
+    ON ingest_metrics (doc_id);
+CREATE INDEX IF NOT EXISTS ingest_metrics_version_tag_idx
+    ON ingest_metrics (version_tag);
+CREATE INDEX IF NOT EXISTS ingest_metrics_completed_at_idx
+    ON ingest_metrics (completed_at);
+CREATE INDEX IF NOT EXISTS ingest_metrics_activity_idx
+    ON ingest_metrics (activity_name);
+"""
+
+
 def setup_postgres() -> None:
     pg = settings.postgres
     logger.info(
@@ -65,6 +93,7 @@ def setup_postgres() -> None:
     ) as conn:
         with conn.cursor() as cur:
             cur.execute(_DOCUMENTS_DDL)
+            cur.execute(_INGEST_METRICS_DDL)
     logger.info("postgres setup  done")
 
 
