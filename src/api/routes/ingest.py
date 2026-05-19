@@ -118,15 +118,26 @@ async def upload_document(
     # CAN be restarted under the same id — that's the explicit retry
     # path: re-upload to retry an ingest that died terminally.
     # Analytics labels: explicit header wins, else AnalyticsSettings default.
-    # Model + env are always auto-captured from runtime config so a model
-    # swap (env LITELLM_LLM_MODEL=...) is reflected without operator effort.
+    # Models are auto-captured from runtime config so model swaps
+    # (LITELLM_*_MODEL env changes) are reflected without operator effort.
+    # All three role models are snapshotted at submit time and propagated
+    # via IngestParams → FinalizeIn → ingest_metrics rows; this guarantees
+    # each row's `model` column reflects the model that activity actually
+    # used (per Stage 4 of the multimodel plan).
     version_tag = x_version_tag or settings.analytics.default_version_tag
-    model = settings.litellm.llm_model
+    cfg = settings.litellm
+    model = cfg.llm_model
+    extraction_model = cfg.model_for("extraction")
+    judge_model = cfg.model_for("judge")
+    search_model = cfg.model_for("search")
     env_name = settings.analytics.env_name
     search_attrs = {
-        "VersionTag": [version_tag],
-        "Model": [model],
-        "Env": [env_name],
+        "VersionTag":      [version_tag],
+        "Model":           [model],
+        "ExtractionModel": [extraction_model],
+        "JudgeModel":      [judge_model],
+        "SearchModel":     [search_model],
+        "Env":             [env_name],
     }
 
     client = await get_temporal_client()
@@ -135,7 +146,11 @@ async def upload_document(
             DocumentIngestWorkflow.run,
             IngestParams(
                 doc_id=str(doc_id), path=s3_uri,
-                version_tag=version_tag, model=model, env=env_name,
+                version_tag=version_tag, model=model,
+                extraction_model=extraction_model,
+                judge_model=judge_model,
+                search_model=search_model,
+                env=env_name,
             ),
             id=f"ingest-{doc_id}",
             task_queue=settings.temporal.task_queue,
@@ -160,9 +175,10 @@ async def upload_document(
         ) from exc
     logger.info(
         "ingest enqueued  doc_id={d}  path={p}  dept={dept}  "
-        "version_tag={v}  model={m}  env={e}",
+        "version_tag={v}  model={m}  ext={ext}  judge={j}  search={s}  env={e}",
         d=doc_id, p=s3_uri, dept=department,
-        v=version_tag, m=model, e=env_name,
+        v=version_tag, m=model, ext=extraction_model,
+        j=judge_model, s=search_model, e=env_name,
     )
     return IngestEnqueuedResponse(job_id=doc_id)
 

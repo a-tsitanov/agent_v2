@@ -83,9 +83,12 @@ CREATE INDEX IF NOT EXISTS ingest_metrics_activity_idx
 
 
 _ANALYTICS_SEARCH_ATTRS: dict[str, str] = {
-    "VersionTag": "KEYWORD",
-    "Model":      "KEYWORD",
-    "Env":        "KEYWORD",
+    "VersionTag":      "KEYWORD",
+    "Model":           "KEYWORD",   # global default snapshot
+    "ExtractionModel": "KEYWORD",   # per-role snapshot
+    "JudgeModel":      "KEYWORD",
+    "SearchModel":     "KEYWORD",
+    "Env":             "KEYWORD",
 }
 
 

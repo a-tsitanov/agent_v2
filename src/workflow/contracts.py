@@ -38,7 +38,13 @@ class IngestParams(_Frozen):
     # match `AnalyticsSettings` so older callers without the header
     # continue to work.
     version_tag: str = "unspecified"
-    model: str = ""
+    model: str = ""           # global default snapshot (LITELLM_LLM_MODEL)
+    # Per-role model snapshots taken at submit time so finalize can
+    # write the right model into ingest_metrics per activity.  Empty
+    # ⇒ that role falls back to ``model``.
+    extraction_model: str = ""
+    judge_model: str = ""
+    search_model: str = ""
     env: str = ""
 
 
@@ -135,9 +141,12 @@ class FinalizeIn(_Frozen):
     relations: int = 0
     wikibase: WikibasePushed | None = None
     # Analytics tags propagated from IngestParams so the finalize-side
-    # metrics-extractor hook (Stage 5) labels every ingest_metrics row.
+    # metrics-extractor hook labels every ingest_metrics row.
     version_tag: str = "unspecified"
-    model: str = ""
+    model: str = ""            # default fallback (LITELLM_LLM_MODEL)
+    extraction_model: str = ""
+    judge_model: str = ""
+    search_model: str = ""
     env: str = ""
 
 

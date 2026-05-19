@@ -104,6 +104,81 @@ def test_empty_history_yields_no_rows():
     assert rows == []
 
 
+def test_per_activity_model_resolution_via_role_map():
+    """The extractor must consult ACTIVITY_TO_ROLE and pick the
+    matching entry from ``models_per_role`` for each row.  Non-LLM
+    activities (role=None) get NULL.  Falls back to the default
+    ``model`` arg when the role-specific snapshot is empty."""
+    base = _BASE
+    h = _hist(
+        # extract_kg → extraction role → extraction_model
+        _scheduled(5, "extract_kg", base),
+        _started(6, 5, 1, base + timedelta(seconds=1)),
+        _completed(7, 5, base + timedelta(seconds=2)),
+        # merge_and_resolve → judge role → judge_model
+        _scheduled(8, "merge_and_resolve", base + timedelta(seconds=3)),
+        _started(9, 8, 1, base + timedelta(seconds=4)),
+        _completed(10, 8, base + timedelta(seconds=5)),
+        # fetch_source → role=None → NULL
+        _scheduled(11, "fetch_source", base + timedelta(seconds=6)),
+        _started(12, 11, 1, base + timedelta(seconds=7)),
+        _completed(13, 11, base + timedelta(seconds=8)),
+        # parse_and_chunk → extraction (translator) → extraction_model
+        _scheduled(14, "parse_and_chunk", base + timedelta(seconds=9)),
+        _started(15, 14, 1, base + timedelta(seconds=10)),
+        _completed(16, 14, base + timedelta(seconds=11)),
+    )
+    rows = parse_activity_timings(
+        h, **{**_LABELS, "model": "default-fallback"},
+        models_per_role={
+            "extraction": "qwen3:8b",
+            "judge":      "qwen2.5:3b",
+            "search":     "qwen3:8b",
+        },
+    )
+    by_name = {r.activity_name: r for r in rows}
+    assert by_name["extract_kg"].model == "qwen3:8b"
+    assert by_name["merge_and_resolve"].model == "qwen2.5:3b"
+    assert by_name["fetch_source"].model is None
+    assert by_name["parse_and_chunk"].model == "qwen3:8b"
+
+
+def test_role_with_empty_snapshot_falls_back_to_default_model():
+    """When ``models_per_role[role]`` is empty, the extractor falls
+    back to the ``model`` argument (a snapshot of LITELLM_LLM_MODEL).
+    """
+    h = _hist(
+        _scheduled(5, "extract_kg", _BASE),
+        _started(6, 5, 1, _BASE + timedelta(seconds=1)),
+        _completed(7, 5, _BASE + timedelta(seconds=2)),
+    )
+    rows = parse_activity_timings(
+        h, **{**_LABELS, "model": "default-fallback"},
+        models_per_role={"extraction": "", "judge": "", "search": ""},
+    )
+    assert rows[0].model == "default-fallback"
+
+
+def test_models_per_role_omitted_uses_default_model_for_llm_activities():
+    """Backward compat: callers that don't pass models_per_role get
+    the default ``model`` for every LLM activity (matches the
+    pre-Stage-4 behaviour)."""
+    h = _hist(
+        _scheduled(5, "extract_kg", _BASE),
+        _started(6, 5, 1, _BASE + timedelta(seconds=1)),
+        _completed(7, 5, _BASE + timedelta(seconds=2)),
+        _scheduled(8, "fetch_source", _BASE + timedelta(seconds=3)),
+        _started(9, 8, 1, _BASE + timedelta(seconds=4)),
+        _completed(10, 8, _BASE + timedelta(seconds=5)),
+    )
+    rows = parse_activity_timings(h, **_LABELS)
+    by_name = {r.activity_name: r for r in rows}
+    # extract_kg → role=extraction, but no models_per_role → use `model` arg.
+    assert by_name["extract_kg"].model == "qwen3:8b"
+    # fetch_source → role=None → NULL regardless.
+    assert by_name["fetch_source"].model is None
+
+
 def test_single_activity_one_row_with_correct_duration():
     started = _BASE + timedelta(seconds=10)
     finished = started + timedelta(milliseconds=2_500)
@@ -121,7 +196,12 @@ def test_single_activity_one_row_with_correct_duration():
     assert r.started_at == started
     assert r.completed_at == finished
     assert r.version_tag == "t-abc"
-    assert r.model == "qwen3:8b"
+    # fetch_source carries role=None in ACTIVITY_TO_ROLE → model is
+    # NULL (no LLM was called for this stage).  See
+    # tests/test_observability/test_ingest_metrics_extractor.py::
+    # test_per_activity_model_resolution_via_role_map for the
+    # role-resolution path.
+    assert r.model is None
     assert r.env == "dev-local"
 
 

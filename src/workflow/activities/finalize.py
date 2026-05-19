@@ -74,8 +74,8 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
 
 
 async def _persist_ingest_metrics(payload: FinalizeIn) -> None:
-    """Pull this workflow's history, derive per-activity durations,
-    and persist them into ``ingest_metrics``.
+    """Pull parent + child workflow histories, derive per-activity
+    durations, and persist them into ``ingest_metrics``.
 
     Best-effort — any failure (Temporal momentarily unavailable,
     Postgres connectivity, malformed history) is logged but does
@@ -84,31 +84,73 @@ async def _persist_ingest_metrics(payload: FinalizeIn) -> None:
     own COMPLETED event, so finalize's own duration is recorded
     only on the NEXT ingest's read.  Acceptable for v1; a
     self-instrumented finalize timing line is Phase 2.
+
+    Child workflow (``graph-{doc_id}`` — see ``GraphBuildWorkflow``):
+    its history holds ``merge_and_resolve`` and ``build_property_graph``
+    events.  We fetch it on best-effort — if the graph half was
+    skipped (``vector_only`` downgrade) the child never started and
+    the fetch returns an error, which we swallow.
     """
     try:
         client = await get_temporal_client()
         info = activity.info()
-        handle = client.get_workflow_handle(
+        models_per_role = {
+            "extraction": payload.extraction_model,
+            "judge":      payload.judge_model,
+            "search":     payload.search_model,
+        }
+
+        # 1. Parent history (the vector half + push_wikibase + finalize'
+        # so-far).
+        parent_handle = client.get_workflow_handle(
             info.workflow_id, run_id=info.workflow_run_id,
         )
-        history = await handle.fetch_history()
+        parent_history = await parent_handle.fetch_history()
         rows = parse_activity_timings(
-            history,
+            parent_history,
             doc_id=payload.ctx.doc_id,
             workflow_id=info.workflow_id,
             workflow_run_id=info.workflow_run_id,
             version_tag=payload.version_tag,
             model=payload.model,
             env=payload.env,
+            models_per_role=models_per_role,
         )
+
+        # 2. Child history — best-effort.  When graph_status="vector_only"
+        # the child never ran, so the fetch yields "not found"; that's
+        # fine and we just skip the merge-side rows.
+        child_id = f"graph-{payload.ctx.doc_id}"
+        try:
+            child_handle = client.get_workflow_handle(child_id)
+            child_history = await child_handle.fetch_history()
+            child_rows = parse_activity_timings(
+                child_history,
+                doc_id=payload.ctx.doc_id,
+                workflow_id=child_id,
+                workflow_run_id=info.workflow_run_id,
+                version_tag=payload.version_tag,
+                model=payload.model,
+                env=payload.env,
+                models_per_role=models_per_role,
+            )
+            rows.extend(child_rows)
+        except Exception as exc:  # noqa: BLE001
+            activity.logger.info(
+                "ingest_metrics: child history fetch skipped (%s)", exc,
+            )
+
         if not rows:
             activity.logger.info("ingest_metrics: no completed activities yet")
             return
         store = build_ingest_metrics_store()
         inserted = await store.insert_metrics(rows)
         activity.logger.info(
-            "ingest_metrics  rows=%d  inserted=%d  version_tag=%s  model=%s",
-            len(rows), inserted, payload.version_tag, payload.model,
+            "ingest_metrics  rows=%d  inserted=%d  version_tag=%s  "
+            "extraction=%s  judge=%s",
+            len(rows), inserted, payload.version_tag,
+            payload.extraction_model or payload.model,
+            payload.judge_model or payload.model,
         )
     except Exception as exc:  # noqa: BLE001
         activity.logger.warning(

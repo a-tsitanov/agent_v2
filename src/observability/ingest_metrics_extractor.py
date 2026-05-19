@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHistory
 
+from src.observability.role_map import ACTIVITY_TO_ROLE
 from src.storage.ingest_metrics import MetricRow
 
 
@@ -47,15 +48,25 @@ def parse_activity_timings(
     version_tag: str,
     model: str,
     env: str,
+    models_per_role: dict[str, str] | None = None,
 ) -> list[MetricRow]:
     """Return one ``MetricRow`` per (activity, attempt) found in the
     given workflow history.
+
+    ``models_per_role`` is a snapshot of
+    ``{"extraction": "...", "judge": "...", "search": "..."}``
+    captured at submit time.  For each activity, the per-row ``model``
+    is resolved via ``ACTIVITY_TO_ROLE[name]`` → ``models_per_role[role]``
+    with fallback to the ``model`` argument; non-LLM activities
+    (``role=None``) write ``model=NULL`` (honest: nothing
+    model-specific happened).
 
     Activities still in flight at the time of the call (no terminal
     event yet) are skipped.  Retries appear as separate rows with
     monotonically increasing ``attempt`` because Temporal emits a
     new ``ACTIVITY_TASK_SCHEDULED`` event per retry.
     """
+    models_per_role = models_per_role or {}
     # event_id of the SCHEDULED event → activity name
     scheduled: dict[int, str] = {}
     # scheduled_event_id → (started_at, attempt)  — attempt only lives
@@ -87,6 +98,19 @@ def parse_activity_timings(
             duration_ms = max(
                 0, int((completed_at - started_at).total_seconds() * 1000),
             )
+            # Resolve the per-row model: lookup the role this
+            # activity uses, then pull the snapshotted model for that
+            # role; fall back to the default ``model`` argument when
+            # the per-role snapshot is empty; emit NULL for non-LLM
+            # activities (role=None — fetch, embed, regex, etc.).
+            role = ACTIVITY_TO_ROLE.get(name)
+            if role is None:
+                row_model: str | None = None
+            else:
+                row_model = (
+                    models_per_role.get(role) or model or None
+                )
+
             rows.append(MetricRow(
                 doc_id=doc_id,
                 workflow_id=workflow_id,
@@ -97,7 +121,7 @@ def parse_activity_timings(
                 started_at=started_at,
                 completed_at=completed_at,
                 version_tag=version_tag or None,
-                model=model or None,
+                model=row_model,
                 env=env or None,
             ))
 
