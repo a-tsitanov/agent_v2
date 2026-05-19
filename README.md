@@ -91,6 +91,18 @@ export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
 - **LangFuse** — http://localhost:3000 (LLM traces).
 - **Temporal UI** — http://localhost:8080 (workflow timeline).
 
+### Documentation map
+
+| Where to start | What you'll find |
+|---|---|
+| [`docs/runbook/README.md`](docs/runbook/README.md) | Index of operator runbooks (analytics, wikibase, **multimodel + GraphBuildWorkflow**) |
+| [`docs/runbook/multimodel.md`](docs/runbook/multimodel.md) | Per-role LLM (extraction/judge/search) + child workflow + per-activity model in `ingest_metrics`.  Detailed reading guide with code excerpts. |
+| [`docs/runbook/analytics.md`](docs/runbook/analytics.md) | Grafana / Prometheus / `ingest_metrics` schema + version_tag mechanics |
+| [`docs/runbook/wikibase.md`](docs/runbook/wikibase.md) | Wikibase population + SPARQL examples |
+| [`docs/MODELS.md`](docs/MODELS.md) | Per-role model guidance + escalation table |
+| [`docs/architecture.html`](docs/architecture.html) | Visual system map (5 sections — open in browser) |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Top-level reference (partially pre-Temporal — see banner) |
+
 ## Directory layout
 
 ```

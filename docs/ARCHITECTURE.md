@@ -11,6 +11,17 @@ This document is the **single map** of the system — every other
 doc (`DEPLOYMENT.md`, `QUERY.md`, `MODELS.md`) drills into a
 specific layer.
 
+> ⚠️ **Note (2026-05-19):** Section 3 «Ingestion data flow» below
+> describes the **taskiq-era** pipeline; the current implementation
+> uses **Temporal workflows** with a `DocumentIngestWorkflow` parent
+> + `GraphBuildWorkflow` child (for `merge_and_resolve` +
+> `build_property_graph`).  Per-activity model attribution lives in
+> the Postgres `ingest_metrics` table.  Read the updated story in
+> [`runbook/multimodel.md`](runbook/multimodel.md) (current state +
+> code excerpts) and [`runbook/analytics.md`](runbook/analytics.md)
+> (observability).  This section is retained as a reference for the
+> pre-Temporal design — it will be rewritten in a future sprint.
+
 ---
 
 ## 1. Top-level data flow
