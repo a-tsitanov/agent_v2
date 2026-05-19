@@ -12,9 +12,13 @@ the existing project can navigate this one without surprises.
 from __future__ import annotations
 
 from functools import cached_property
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+LLMRole = Literal["extraction", "judge", "search"]
 
 
 # ── per-subsystem settings ───────────────────────────────────────────
@@ -115,10 +119,29 @@ class LiteLLMSettings(BaseSettings):
     # function-calling reliability tests; see docs/MODELS.md for
     # escalation path.
     llm_model: str = "qwen3:8b"
+    # Per-role overrides — empty ("") means "use ``llm_model``".  Keeps
+    # single-model deployments simple; cap into a per-role model when
+    # the operator wants the cheap/fast model for high-volume judge
+    # calls (cross-chunk merge + ER pair-wise yes/no) while keeping a
+    # stronger model for extraction or the user-facing answer agent.
+    # See ``model_for`` for resolution semantics.
+    extraction_model: str = ""
+    judge_model: str = ""
+    search_model: str = ""
     embedding_model: str = "nomic-embed-text"
     embedding_dim: int = 768
     timeout_s: float = 900.0
     max_retries: int = 2
+
+    def model_for(self, role: LLMRole) -> str:
+        """Return the configured model name for ``role`` with fallback
+        to ``llm_model`` when the role-specific field is empty."""
+        override = {
+            "extraction": self.extraction_model,
+            "judge":      self.judge_model,
+            "search":     self.search_model,
+        }[role]
+        return override or self.llm_model
 
 
 class TemporalSettings(BaseSettings):

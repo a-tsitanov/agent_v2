@@ -76,3 +76,36 @@ def test_wikibase_enabled_via_env(monkeypatch):
     fresh = WikibaseSettings()
     assert fresh.enabled is True
     assert fresh.base_url == "http://wb.internal:8181"
+
+
+def test_per_role_model_falls_back_to_llm_model(monkeypatch):
+    """When the role-specific env var is empty, model_for() returns
+    LITELLM_LLM_MODEL so existing single-model deployments don't break."""
+    from src.config import LiteLLMSettings
+
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "fallback-model")
+    monkeypatch.delenv("LITELLM_EXTRACTION_MODEL", raising=False)
+    monkeypatch.delenv("LITELLM_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("LITELLM_SEARCH_MODEL", raising=False)
+
+    fresh = LiteLLMSettings()
+    assert fresh.model_for("extraction") == "fallback-model"
+    assert fresh.model_for("judge") == "fallback-model"
+    assert fresh.model_for("search") == "fallback-model"
+
+
+def test_per_role_model_explicit_override(monkeypatch):
+    """Each role-specific env-var wins over LITELLM_LLM_MODEL."""
+    from src.config import LiteLLMSettings
+
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "default-model")
+    monkeypatch.setenv("LITELLM_EXTRACTION_MODEL", "ext-14b")
+    monkeypatch.setenv("LITELLM_JUDGE_MODEL", "judge-3b")
+    monkeypatch.setenv("LITELLM_SEARCH_MODEL", "search-7b")
+
+    fresh = LiteLLMSettings()
+    assert fresh.model_for("extraction") == "ext-14b"
+    assert fresh.model_for("judge") == "judge-3b"
+    assert fresh.model_for("search") == "search-7b"
+    # Legacy llm_model still readable for callers that don't use role.
+    assert fresh.llm_model == "default-model"
