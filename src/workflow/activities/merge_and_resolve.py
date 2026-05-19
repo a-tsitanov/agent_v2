@@ -30,7 +30,7 @@ from src.graph.merge import merge_kg_extraction
 from src.graph.phone_consolidation import consolidate_phone_entities
 from src.graph.store import build_neo4j_graph_store
 from src.ingestion.embeddings import build_embedding_model
-from src.retrieval.llm import build_llm
+from src.retrieval.llm import build_judge_llm
 from src.workflow.contracts import DuplicateGroup, KGExtracted, Merged
 from src.workflow.staging import build_staging_store
 
@@ -95,7 +95,7 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         "duplicate_groups": dup_groups,
     })
 
-    llm = build_llm()
+    llm = build_judge_llm()
 
     activity.logger.info(
         "merge_and_resolve merging  chunks=%d  raw_entities=%d  duplicate_groups=%d",

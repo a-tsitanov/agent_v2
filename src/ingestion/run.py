@@ -53,14 +53,17 @@ def main() -> None:
     args = _parse_args()
     configure_logging(level=settings.api.log_level)
 
-    from src.retrieval.llm import build_llm
+    from src.retrieval.llm import build_extraction_llm
 
     embed_model = build_embedding_model()
     pipeline = build_ingestion_pipeline(
         embed_model=embed_model if args.semantic else None,
         semantic=args.semantic,
         cache_dir=settings.ingestion.cache_dir,
-        translator_llm=build_llm() if settings.ingestion.translate_to_russian else None,
+        translator_llm=(
+            build_extraction_llm()
+            if settings.ingestion.translate_to_russian else None
+        ),
     )
 
     logger.info("reading documents from {p}", p=args.input_dir)

@@ -32,7 +32,7 @@ from src.retrieval.agent import (
     SynthesizerProtocol,
 )
 from src.retrieval.judge import LLMJudge
-from src.retrieval.llm import build_llm
+from src.retrieval.llm import build_search_llm
 from src.retrieval.vector_index import build_vector_index, build_vector_store
 from src.storage.chunk_repository import ChunkRepository
 from src.storage.postgres import AsyncPostgres
@@ -49,7 +49,12 @@ class CommonProvider(Provider):
 
     @provide
     def llm(self) -> LLM:
-        return build_llm()
+        # DI-injected LLM goes to /agent, /selfrag, /legacy/agent —
+        # all user-facing answer paths.  Stage 2 of the multimodel
+        # plan: route them to the "search" role so the operator can
+        # set a latency-balanced model independent from the heavy
+        # extraction/judge workloads on the ingest path.
+        return build_search_llm()
 
     @provide
     def embed_model(self) -> BaseEmbedding:

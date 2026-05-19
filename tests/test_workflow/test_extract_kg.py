@@ -28,7 +28,7 @@ async def test_runs_extractor_and_writes_kg_blob():
         "src.workflow.activities.extract_kg.build_kg_extractor",
         return_value=extractor,
     ), patch(
-        "src.workflow.activities.extract_kg.build_llm",
+        "src.workflow.activities.extract_kg.build_extraction_llm",
         return_value=MagicMock(),
     ), patch(
         "src.workflow.activities.extract_kg.activity"

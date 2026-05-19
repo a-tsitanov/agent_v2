@@ -19,7 +19,7 @@ from src.ingestion.translate_transform import (
     FULL_TRANSLATED_TEXT_KEY,
     ORIGINAL_DOC_LENGTH_KEY,
 )
-from src.retrieval.llm import build_llm
+from src.retrieval.llm import build_extraction_llm
 from src.workflow.contracts import Ctx, Parsed
 from src.workflow.staging import build_staging_store
 
@@ -37,7 +37,7 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
     activity.logger.info("parse_and_chunk start  target=%s", target)
     activity.heartbeat({"stage": "init", "target": str(target)})
 
-    llm = build_llm()
+    llm = build_extraction_llm()
     embed_model = build_embedding_model()
     pipeline = build_ingestion_pipeline(
         embed_model=embed_model,

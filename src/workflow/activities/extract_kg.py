@@ -21,7 +21,7 @@ from loguru import logger
 from temporalio import activity
 
 from src.graph.index import build_kg_extractor
-from src.retrieval.llm import build_llm
+from src.retrieval.llm import build_extraction_llm
 from src.workflow.contracts import (
     EntitySample,
     KGExtracted,
@@ -89,7 +89,7 @@ async def extract_kg(parsed: Parsed) -> KGExtracted:
     nodes = staging.read_pickle(parsed.nodes_uri)
     activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
-    llm = build_llm()
+    llm = build_extraction_llm()
     extractor = build_kg_extractor(llm, mode="lightrag")
     activity.logger.info("extract_kg invoking LLM extractor  chunks=%d", len(nodes))
     activity.heartbeat({"stage": "extracting", "chunks": len(nodes)})

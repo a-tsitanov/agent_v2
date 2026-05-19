@@ -29,7 +29,7 @@ async def test_merge_consolidate_resolve_chain():
         "src.workflow.activities.merge_and_resolve.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.merge_and_resolve.build_llm",
+        "src.workflow.activities.merge_and_resolve.build_judge_llm",
         return_value=MagicMock(),
     ), patch(
         "src.workflow.activities.merge_and_resolve.merge_kg_extraction",
@@ -76,7 +76,7 @@ async def test_runs_er_when_enabled():
         "src.workflow.activities.merge_and_resolve.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.merge_and_resolve.build_llm",
+        "src.workflow.activities.merge_and_resolve.build_judge_llm",
         return_value=MagicMock(),
     ), patch(
         "src.workflow.activities.merge_and_resolve.build_embedding_model",
