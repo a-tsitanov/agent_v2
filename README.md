@@ -73,6 +73,13 @@ uv run pytest -q
 curl -F file=@doc.txt -H "X-API-Key: $API_KEY" \
      -H "X-Version-Tag: qwen3-baseline" \
      localhost:8000/api/v1/ingest
+
+# Per-role LLM swap (e.g. cheaper judge model for high-volume ER calls):
+export LITELLM_JUDGE_MODEL=qwen2.5:3b      # only merge_and_resolve uses this
+export LITELLM_EXTRACTION_MODEL=qwen3:8b   # extract_kg + translator
+export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
+# (restart worker + API to pick up env)
+# ingest_metrics rows now carry the per-activity model — see docs/MODELS.md.
 ```
 
 ### Observability

@@ -68,15 +68,15 @@ system: System topology {
     style.fill: "#fef2f8"
     style.stroke: "#f06a96"
 
-    a1: 1 · fetch_source           { style.fill: "#fce7f3" }
-    a2: 2 · parse_and_chunk        { style.fill: "#fce7f3" }
-    a3: 3 · index_vector           { style.fill: "#ffe4b5" }
-    a4: 4 · inject_canonical       { style.fill: "#fce7f3" }
-    a5: 5 · extract_kg             { style.fill: "#ffe4b5" }
-    a6: 6 · merge_and_resolve      { style.fill: "#ffe4b5" }
-    a7: 7 · build_property_graph   { style.fill: "#fce7f3" }
-    a8: 8 · push_wikibase          { style.fill: "#fce7f3" }
-    a9: 9 · finalize               { style.fill: "#dcfce7" }
+    a1: 1 · fetch_source                                  { style.fill: "#fce7f3" }
+    a2: "2 · parse_and_chunk\nrole=extraction"            { style.fill: "#fce7f3" }
+    a3: 3 · index_vector                                  { style.fill: "#ffe4b5" }
+    a4: 4 · inject_canonical                              { style.fill: "#fce7f3" }
+    a5: "5 · extract_kg\nrole=extraction"                 { style.fill: "#ffe4b5" }
+    a6: "6 · merge_and_resolve\nrole=judge (child)"       { style.fill: "#ffe4b5" }
+    a7: "7 · build_property_graph\n(child)"               { style.fill: "#fce7f3" }
+    a8: 8 · push_wikibase                                 { style.fill: "#fce7f3" }
+    a9: 9 · finalize                                      { style.fill: "#dcfce7" }
 
     a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9
   }

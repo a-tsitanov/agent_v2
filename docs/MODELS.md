@@ -9,9 +9,51 @@ the `model_list` in `docker/litellm_config.yaml`.
 
 | Role | Model | Why |
 |---|---|---|
-| LLM | `qwen3:8b` | Reliable Hermes-style tool calling, structured output, multilingual. |
+| LLM | `qwen3:8b` | Reliable Hermes-style tool calling, structured output, multilingual.  Used as fallback for all three application roles below when no per-role override is set. |
 | Embedding | `nomic-embed-text` | 768-dim, fast, decent quality on English/Russian. |
 | Reranker | not configured | Optional layer; would slot between retriever and synthesizer. |
+
+## Per-role LLMs
+
+The project routes LLM calls through three role-keyed factories
+(`src/retrieval/llm.py`).  Each role has an optional env var; empty
+⇒ falls back to `LITELLM_LLM_MODEL` so single-model deployments work
+without further config.
+
+| Env var | Role | Used by | Workload character | Recommended size |
+|---|---|---|---|---|
+| `LITELLM_EXTRACTION_MODEL` | extraction | `extract_kg`, `parse_and_chunk` (translator), CLI ingest | high-volume KG triples + translation; full chunk text in/out | biggest available — needs deep reading |
+| `LITELLM_JUDGE_MODEL` | judge | `merge_and_resolve` (cross-chunk merge summary + ER pair-wise yes/no) | high call volume, mostly binary outputs, schema-strict | cheapest/fastest that still emits valid JSON |
+| `LITELLM_SEARCH_MODEL` | search | `/api/v1/agent`, `/selfrag`, `/legacy/agent` route LLMs (via DI) | user-facing latency, multi-turn tool calls | balanced — speed matters, must do function calls |
+
+Per-row `ingest_metrics.model` reflects the model **actually used** for
+each activity (see `docs/runbook/analytics.md`).  A model swap shows up
+in the version-compare Grafana dashboard only on rows for the swapped
+role's activities — e.g. setting `LITELLM_JUDGE_MODEL=gpt-4o-2024-08-06`
+changes only `merge_and_resolve` rows; `extract_kg` rows stay on the
+extraction model.
+
+### Smoke verification
+
+```bash
+# Submit batch A with default models
+curl -F file=@doc.txt -H "X-Version-Tag: baseline" \
+     -H "X-API-Key: $API_KEY" localhost:8000/api/v1/ingest
+
+# Swap judge, restart worker + API
+export LITELLM_JUDGE_MODEL=qwen2.5:14b
+# (restart processes)
+
+# Submit batch B
+curl -F file=@doc.txt -H "X-Version-Tag: judge-14b" ... /api/v1/ingest
+
+# Verify in Postgres
+psql -c "SELECT activity_name, model, version_tag FROM ingest_metrics
+         WHERE version_tag IN ('baseline','judge-14b')
+         ORDER BY activity_name, version_tag"
+```
+
+Expected: only `merge_and_resolve` rows differ in `model`.
 
 `MILVUS_DIM` MUST equal the embedding model's output dim (768 for
 `nomic-embed-text`, 1024 for `bge-m3`).  Changing the embed model

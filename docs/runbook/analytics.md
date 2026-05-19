@@ -103,6 +103,23 @@ open http://localhost:3001/d/kb-ingest-version-compare/
 
 Все три auto-loaded из `infra/grafana/dashboards/*.json` через provisioning. Чтобы поправить — отредактировать JSON и `docker compose restart grafana` (либо вызвать `POST /api/admin/provisioning/dashboards/reload`).
 
+## 6a. Per-activity model column (multimodel-плагин)
+
+Каждая строка `ingest_metrics` несёт `model` — модель, **фактически использованную** именно для этой активности. Резолвится в момент `finalize` через `src/observability/role_map.py:ACTIVITY_TO_ROLE`:
+
+| Activity | LLM role | `model` колонка |
+|---|---|---|
+| `parse_and_chunk` | extraction | snapshot LITELLM_EXTRACTION_MODEL (с fallback на LITELLM_LLM_MODEL) |
+| `extract_kg` | extraction | то же |
+| `merge_and_resolve` | judge | snapshot LITELLM_JUDGE_MODEL |
+| `fetch_source` / `index_vector` / `inject_canonical` / `build_property_graph` / `push_wikibase` / `finalize` | — | `NULL` (LLM не звался) |
+
+Snapshot моделей делает API в момент `/ingest` (см. `src/api/routes/ingest.py`), значения летят в `IngestParams` → `FinalizeIn` → `parse_activity_timings(..., models_per_role={...})`. Поэтому смена `LITELLM_*_MODEL` в env **между** ingest'ами немедленно отражается на новых строках, а старые сохраняют исторический model.
+
+Compare-дашборд (`/d/kb-ingest-version-compare/`) теперь показывает `model_A` / `model_B` в delta-таблице (отдельный JSON-update Stage 5) и отдельную таблицу `Per-stage model usage` для side-by-side debug'а.
+
+**Каверзный случай — child workflow.** Активности `merge_and_resolve` и `build_property_graph` живут в `GraphBuildWorkflow` (child от `DocumentIngestWorkflow`). Их event-history лежит в **отдельной** workflow execution (`graph-{doc_id}`). `finalize._persist_ingest_metrics` явно тянет обе истории и мерджит в один список. Если parent выпал в `vector_only` (child failed), child-history просто не существует — fetch swallow'ит ошибку и в `ingest_metrics` ляжет только parent-side rows.
+
 ## 7. Retention
 
 | Слой | Retention |

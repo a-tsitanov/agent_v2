@@ -892,7 +892,7 @@ footer a:hover { color: var(--accent); }
         <div class="step">
           <span class="step-n">02</span>
           <span class="step-name">parse_and_chunk</span>
-          <span class="step-desc">Парсинг (PDF/MD/TXT) + семантический чанкинг.</span>
+          <span class="step-desc">Парсинг + semantic chunking + translator · role=<b>extraction</b>.</span>
           <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
         </div>
 
@@ -913,22 +913,22 @@ footer a:hover { color: var(--accent); }
         <div class="step">
           <span class="step-n">05</span>
           <span class="step-name">extract_kg</span>
-          <span class="step-desc">LLM-извлечение сущностей и отношений (Qwen3:8b).</span>
+          <span class="step-desc">LLM-извлечение сущностей и отношений · role=<b>extraction</b> · модель из <code>LITELLM_EXTRACTION_MODEL</code>.</span>
           <span class="step-tag llm"><span class="qbadge">kb-ingest-llm</span></span>
         </div>
 
         <div class="step">
           <span class="step-n">06</span>
           <span class="step-name">merge_and_resolve</span>
-          <span class="step-desc">ER: дедупликация сущностей по графу + identifier-folding.</span>
+          <span class="step-desc">ER pair-wise judge · role=<b>judge</b> · модель из <code>LITELLM_JUDGE_MODEL</code> · <i>(внутри GraphBuildWorkflow child)</i>.</span>
           <span class="step-tag llm"><span class="qbadge">kb-ingest-llm</span></span>
         </div>
 
         <div class="step">
           <span class="step-n">07</span>
           <span class="step-name">build_property_graph</span>
-          <span class="step-desc">Запись KG в Neo4j: <code>:__Entity__</code>, <code>:Chunk</code>, типизир. рёбра.</span>
-          <span class="step-tag"><span class="qbadge">kb-ingest</span></span>
+          <span class="step-desc">Запись KG в Neo4j · <i>(внутри GraphBuildWorkflow child)</i>.</span>
+          <span class="step-tag"><span class="qbadge">kb-ingest-llm</span></span>
         </div>
 
         <div class="step step-new">
