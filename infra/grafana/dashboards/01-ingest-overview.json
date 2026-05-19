@@ -1,0 +1,166 @@
+{
+  "title": "Ingest · Overview (live)",
+  "uid": "kb-ingest-overview",
+  "tags": ["kb-llamaindex", "ingest", "live"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Активных pollers (kb-ingest)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "sum(temporal_num_pollers{task_queue=\"kb-ingest\"})",
+          "refId": "A",
+          "legendFormat": "kb-ingest"
+        }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Активных pollers (kb-ingest-llm)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "sum(temporal_num_pollers{task_queue=\"kb-ingest-llm\"})",
+          "refId": "A",
+          "legendFormat": "kb-ingest-llm"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Слоты — занято / свободно (kb-ingest)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "sum(temporal_worker_task_slots_used{task_queue=\"kb-ingest\"})",
+          "refId": "A",
+          "legendFormat": "used"
+        },
+        {
+          "expr": "sum(temporal_worker_task_slots_available{task_queue=\"kb-ingest\"})",
+          "refId": "B",
+          "legendFormat": "available"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Слоты — занято / свободно (kb-ingest-llm)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "sum(temporal_worker_task_slots_used{task_queue=\"kb-ingest-llm\"})",
+          "refId": "A",
+          "legendFormat": "used"
+        },
+        {
+          "expr": "sum(temporal_worker_task_slots_available{task_queue=\"kb-ingest-llm\"})",
+          "refId": "B",
+          "legendFormat": "available"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "p95 latency по активности (сек)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, activity_type) (rate(temporal_activity_execution_latency_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "{{activity_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["max", "mean"] }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "p50 latency по активности (сек)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, activity_type) (rate(temporal_activity_execution_latency_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "{{activity_type}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["max", "mean"] }
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Throughput — succeeded activities/min",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "sum by (activity_type) (rate(temporal_activity_succeed[5m]) * 60)",
+          "refId": "A",
+          "legendFormat": "{{activity_type}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Failed activities / 5m",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prom-kb" },
+      "targets": [
+        {
+          "expr": "sum by (activity_type) (rate(temporal_activity_failed[5m]) * 300)",
+          "refId": "A",
+          "legendFormat": "{{activity_type}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Recent ingests (Postgres ingest_metrics)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 22 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT completed_at, doc_id, workflow_run_id, version_tag, model,\n       SUM(duration_ms) AS total_ms,\n       COUNT(*) AS n_activities\n  FROM ingest_metrics\n GROUP BY completed_at, doc_id, workflow_run_id, version_tag, model\n ORDER BY completed_at DESC\n LIMIT 25"
+        }
+      ]
+    }
+  ]
+}

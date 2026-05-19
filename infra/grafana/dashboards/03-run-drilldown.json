@@ -1,0 +1,102 @@
+{
+  "title": "Ingest · Run drill-down (Postgres)",
+  "uid": "kb-ingest-run-drilldown",
+  "tags": ["kb-llamaindex", "ingest", "drill-down"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-30d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "doc_id",
+        "type": "query",
+        "label": "doc_id",
+        "datasource": { "type": "postgres", "uid": "pg-kb" },
+        "query": "SELECT doc_id::text AS __text, doc_id::text AS __value FROM (SELECT DISTINCT doc_id, MAX(completed_at) AS last FROM ingest_metrics GROUP BY doc_id ORDER BY last DESC LIMIT 50) s",
+        "refresh": 1,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total wall-time (мс)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT SUM(duration_ms) AS total_ms FROM ingest_metrics WHERE doc_id = '$doc_id'::uuid"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Версия / модель",
+      "gridPos": { "h": 4, "w": 12, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT DISTINCT version_tag || '  ·  ' || COALESCE(model, '(no model)') AS label FROM ingest_metrics WHERE doc_id = '$doc_id'::uuid"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Activities (rows)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COUNT(*) FROM ingest_metrics WHERE doc_id = '$doc_id'::uuid"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Длительность каждого этапа (мс)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT activity_name, duration_ms\n  FROM ingest_metrics\n WHERE doc_id = '$doc_id'::uuid\n ORDER BY started_at"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Timeline таблица",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT activity_name, attempt, started_at, completed_at, duration_ms\n  FROM ingest_metrics\n WHERE doc_id = '$doc_id'::uuid\n ORDER BY started_at, attempt"
+        }
+      ]
+    }
+  ]
+}

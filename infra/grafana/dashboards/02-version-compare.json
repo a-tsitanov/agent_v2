@@ -1,0 +1,117 @@
+{
+  "title": "Ingest · Version compare (Postgres)",
+  "uid": "kb-ingest-version-compare",
+  "tags": ["kb-llamaindex", "ingest", "compare"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "version_a",
+        "type": "query",
+        "label": "version A",
+        "datasource": { "type": "postgres", "uid": "pg-kb" },
+        "query": "SELECT DISTINCT version_tag FROM ingest_metrics WHERE version_tag IS NOT NULL ORDER BY 1",
+        "current": { "selected": false, "text": "unspecified", "value": "unspecified" },
+        "refresh": 1,
+        "includeAll": false
+      },
+      {
+        "name": "version_b",
+        "type": "query",
+        "label": "version B",
+        "datasource": { "type": "postgres", "uid": "pg-kb" },
+        "query": "SELECT DISTINCT version_tag FROM ingest_metrics WHERE version_tag IS NOT NULL ORDER BY 1",
+        "current": { "selected": false, "text": "unspecified", "value": "unspecified" },
+        "refresh": 1,
+        "includeAll": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "n ingests · $version_a",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COUNT(DISTINCT workflow_run_id) AS n FROM ingest_metrics WHERE version_tag = '$version_a'"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "n ingests · $version_b",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COUNT(DISTINCT workflow_run_id) AS n FROM ingest_metrics WHERE version_tag = '$version_b'"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total wall-time · A vs B (avg ms / ingest)",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT 'A: ' || '$version_a' AS label, AVG(total_ms) AS ms FROM (SELECT workflow_run_id, SUM(duration_ms) AS total_ms FROM ingest_metrics WHERE version_tag = '$version_a' GROUP BY workflow_run_id) s\nUNION ALL\nSELECT 'B: ' || '$version_b', AVG(total_ms) FROM (SELECT workflow_run_id, SUM(duration_ms) AS total_ms FROM ingest_metrics WHERE version_tag = '$version_b' GROUP BY workflow_run_id) s"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "AVG duration_ms по этапу — $version_a (синий) vs $version_b (оранжевый)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT activity_name,\n       AVG(CASE WHEN version_tag = '$version_a' THEN duration_ms END) AS avg_a,\n       AVG(CASE WHEN version_tag = '$version_b' THEN duration_ms END) AS avg_b\n  FROM ingest_metrics\n WHERE version_tag IN ('$version_a', '$version_b')\n GROUP BY activity_name\n ORDER BY activity_name"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ms" }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "groupWidth": 0.8,
+        "barWidth": 0.85,
+        "showValue": "auto",
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Delta таблица — B - A (мс и %)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "pg-kb" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "WITH a AS (SELECT activity_name, AVG(duration_ms) AS avg_ms, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms FROM ingest_metrics WHERE version_tag = '$version_a' GROUP BY activity_name),\n     b AS (SELECT activity_name, AVG(duration_ms) AS avg_ms, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_ms FROM ingest_metrics WHERE version_tag = '$version_b' GROUP BY activity_name)\nSELECT COALESCE(a.activity_name, b.activity_name) AS activity,\n       ROUND(a.avg_ms::numeric, 0) AS avg_ms_A,\n       ROUND(b.avg_ms::numeric, 0) AS avg_ms_B,\n       ROUND((b.avg_ms - a.avg_ms)::numeric, 0) AS delta_ms,\n       CASE WHEN a.avg_ms > 0 THEN ROUND(((b.avg_ms - a.avg_ms) / a.avg_ms * 100)::numeric, 1) END AS delta_pct,\n       ROUND(a.p95_ms::numeric, 0) AS p95_A,\n       ROUND(b.p95_ms::numeric, 0) AS p95_B\n  FROM a FULL OUTER JOIN b USING (activity_name)\n ORDER BY activity"
+        }
+      ]
+    }
+  ]
+}
