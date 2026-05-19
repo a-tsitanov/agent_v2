@@ -662,12 +662,26 @@ footer a:hover { color: var(--accent); }
         <span class="gh">Observability · наблюдаемость</span>
         <div class="group-row c3">
           <div class="node node-obs">
+            <span class="nh">Prometheus <span class="badge">:9092</span></span>
+            <span class="ns">Скрейпит worker'а на :9090 — activity p50/p95 + throughput.</span>
+          </div>
+          <div class="node node-obs">
+            <span class="nh">Grafana <span class="badge">:3001</span></span>
+            <span class="ns">3 dashboard: overview / version-compare / drill-down.</span>
+          </div>
+          <div class="node node-obs">
             <span class="nh">LangFuse <span class="badge">:3000</span></span>
             <span class="ns">LLM-traces: latency, tokens, prompts, evals.</span>
           </div>
+        </div>
+        <div class="group-row c3">
           <div class="node node-obs">
-            <span class="nh">Temporal UI <span class="badge">:8233</span></span>
+            <span class="nh">Temporal UI <span class="badge">:8080</span></span>
             <span class="ns">Workflow-timeline, retry-история, replay, search.</span>
+          </div>
+          <div class="node node-obs">
+            <span class="nh">ingest_metrics (PG)</span>
+            <span class="ns">Frozen per-ingest рядов — version_tag compare.</span>
           </div>
           <div class="node node-obs">
             <span class="nh">structlog · JSON</span>
@@ -818,6 +832,16 @@ footer a:hover { color: var(--accent); }
         <div class="cat-head"><span class="dot"></span><h3>Observability</h3></div>
         <div class="tech-list">
           <div class="tech">
+            <div class="icon" style="color:#e6522c">Pm</div>
+            <div class="meta"><span class="name">Prometheus</span><span class="role">скрейпит worker'а — activity p50/p95, throughput</span></div>
+            <span class="port">:9092</span>
+          </div>
+          <div class="tech">
+            <div class="icon" style="color:#f46800">Gf</div>
+            <div class="meta"><span class="name">Grafana</span><span class="role">3 dashboard: overview / compare / drill-down</span></div>
+            <span class="port">:3001</span>
+          </div>
+          <div class="tech">
             <div class="icon" style="color:#0a85ff">Lf</div>
             <div class="meta"><span class="name">LangFuse (self-hosted)</span><span class="role">трассировка LLM-вызовов, eval-runs</span></div>
             <span class="port">:3000</span>
@@ -825,7 +849,7 @@ footer a:hover { color: var(--accent); }
           <div class="tech">
             <div class="icon" style="color:#7c4dff">Tu</div>
             <div class="meta"><span class="name">Temporal UI</span><span class="role">workflow timeline, retry, replay</span></div>
-            <span class="port">:8233</span>
+            <span class="port">:8080</span>
           </div>
           <div class="tech">
             <div class="icon" style="color:#5dd39e">Sl</div>

@@ -34,7 +34,7 @@ History of the initial 9-stage build is in `CHANGELOG.md`.
 ## Prerequisites
 
 - Docker Compose stack (etcd / minio / milvus / postgres / neo4j /
-  rabbitmq / litellm).
+  rabbitmq / litellm / prometheus / grafana).
 - **Ollama running on the host** with required models pulled:
   ```bash
   ollama pull qwen3:8b
@@ -68,7 +68,21 @@ curl -X POST localhost:8000/api/v1/search \
 
 # Tests
 uv run pytest -q
+
+# Tag an ingest batch for analytics (Grafana compare-by-version):
+curl -F file=@doc.txt -H "X-API-Key: $API_KEY" \
+     -H "X-Version-Tag: qwen3-baseline" \
+     localhost:8000/api/v1/ingest
 ```
+
+### Observability
+
+- **Grafana** — http://localhost:3001 (admin/admin).  Three
+  dashboards under `kb-llamaindex` folder: Ingest Overview (live),
+  Version compare, Run drill-down.  See `docs/runbook/analytics.md`.
+- **Prometheus** — http://localhost:9092 (scrapes worker on :9090).
+- **LangFuse** — http://localhost:3000 (LLM traces).
+- **Temporal UI** — http://localhost:8080 (workflow timeline).
 
 ## Directory layout
 
