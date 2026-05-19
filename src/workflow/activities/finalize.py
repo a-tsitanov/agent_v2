@@ -12,7 +12,10 @@ from pathlib import Path
 from loguru import logger
 from temporalio import activity
 
+from src.observability.ingest_metrics_extractor import parse_activity_timings
+from src.storage.ingest_metrics import build_ingest_metrics_store
 from src.storage.postgres import AsyncPostgres
+from src.workflow.client import get_temporal_client
 from src.workflow.contracts import FinalizeIn, IngestResult, MarkFailedIn
 from src.workflow.staging import build_staging_store
 
@@ -46,6 +49,9 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
     _rmtree(payload.ctx.cleanup_dir)
     activity.heartbeat({"stage": "local_cleaned"})
 
+    await _persist_ingest_metrics(payload)
+    activity.heartbeat({"stage": "metrics_written"})
+
     wikibase_status = (
         payload.wikibase.status if payload.wikibase else "skipped"
     )
@@ -65,6 +71,49 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
         relations=payload.relations,
         wikibase_status=wikibase_status,
     )
+
+
+async def _persist_ingest_metrics(payload: FinalizeIn) -> None:
+    """Pull this workflow's history, derive per-activity durations,
+    and persist them into ``ingest_metrics``.
+
+    Best-effort — any failure (Temporal momentarily unavailable,
+    Postgres connectivity, malformed history) is logged but does
+    not fail the workflow.  Note that ``fetch_history`` from inside
+    ``finalize`` sees the history up to (but not including) finalize's
+    own COMPLETED event, so finalize's own duration is recorded
+    only on the NEXT ingest's read.  Acceptable for v1; a
+    self-instrumented finalize timing line is Phase 2.
+    """
+    try:
+        client = await get_temporal_client()
+        info = activity.info()
+        handle = client.get_workflow_handle(
+            info.workflow_id, run_id=info.workflow_run_id,
+        )
+        history = await handle.fetch_history()
+        rows = parse_activity_timings(
+            history,
+            doc_id=payload.ctx.doc_id,
+            workflow_id=info.workflow_id,
+            workflow_run_id=info.workflow_run_id,
+            version_tag=payload.version_tag,
+            model=payload.model,
+            env=payload.env,
+        )
+        if not rows:
+            activity.logger.info("ingest_metrics: no completed activities yet")
+            return
+        store = build_ingest_metrics_store()
+        inserted = await store.insert_metrics(rows)
+        activity.logger.info(
+            "ingest_metrics  rows=%d  inserted=%d  version_tag=%s  model=%s",
+            len(rows), inserted, payload.version_tag, payload.model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        activity.logger.warning(
+            "ingest_metrics persist failed (best-effort): %s", exc,
+        )
 
 
 @activity.defn
