@@ -28,6 +28,12 @@ from src.workflow.activities.push_wikibase import push_wikibase
 LLM_ACTIVITIES = [
     extract_kg,
     merge_and_resolve,
+    # build_property_graph is registered on BOTH queues so the
+    # GraphBuildWorkflow child (running on kb-ingest-llm) can claim it
+    # locally without a cross-queue dispatch override.  The Neo4j-write
+    # itself isn't LLM-bound, so the LLM concurrency cap doesn't
+    # starve it under normal load.
+    build_property_graph,
 ]
 
 MAIN_ACTIVITIES = [

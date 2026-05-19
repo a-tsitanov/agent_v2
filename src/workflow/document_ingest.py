@@ -37,8 +37,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
+from temporalio.exceptions import ActivityError, ChildWorkflowError
+from temporalio.workflow import ParentClosePolicy
 
 with workflow.unsafe.imports_passed_through():
     from src.config import settings
@@ -56,6 +57,7 @@ with workflow.unsafe.imports_passed_through():
         Parsed,
         WikibasePushed,
     )
+    from src.workflow.graph_build import GraphBuildWorkflow
 
 
 # Forever-retry profiles.  ``maximum_attempts=0`` means no cap on
@@ -170,38 +172,31 @@ class DocumentIngestWorkflow:
                     kg.nodes_with_kg_uri,
                 )
 
-                workflow.upsert_memo({"stage": "merge_and_resolve"})
-                log.info("→ merge_and_resolve")
-                # Also LLM-bound (cross-chunk merge + ER judge).
-                merged = await workflow.execute_activity(
-                    "merge_and_resolve", kg,
-                    result_type=Merged,
+                workflow.upsert_memo({"stage": "graph_build_child"})
+                log.info("→ GraphBuildWorkflow (child, queue=%s)",
+                         settings.temporal.llm_task_queue)
+                # merge_and_resolve + build_property_graph now run as
+                # a Temporal child workflow so they get independent
+                # retry / visibility / scheduling.  Parent awaits — keeps
+                # "ingest complete" semantics simple.  ChildWorkflowError
+                # is caught below alongside ActivityError so a stuck
+                # child still downgrades to vector_only without failing
+                # the whole document.
+                gb_result = await workflow.execute_child_workflow(
+                    GraphBuildWorkflow.run, kg,
+                    id=f"graph-{params.doc_id}",
                     task_queue=settings.temporal.llm_task_queue,
-                    start_to_close_timeout=timedelta(hours=1),
-                    heartbeat_timeout=timedelta(minutes=5),
-                    schedule_to_close_timeout=timedelta(hours=24),
-                    retry_policy=_HEAVY_FOREVER,
+                    parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
+                    id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
                 )
+                merged = gb_result.merged
+                built = gb_result.built
                 log.info(
-                    "← merge_and_resolve  merged_uri=%s",
+                    "← GraphBuildWorkflow  merged_uri=%s  entities=%d  relations=%d",
                     merged.merged_entities_uri,
-                )
-
-                workflow.upsert_memo({"stage": "build_property_graph"})
-                log.info("→ build_property_graph")
-                built = await workflow.execute_activity(
-                    "build_property_graph", merged,
-                    result_type=GraphBuilt,
-                    start_to_close_timeout=timedelta(hours=1),
-                    heartbeat_timeout=timedelta(minutes=5),
-                    schedule_to_close_timeout=timedelta(hours=24),
-                    retry_policy=_FAST_FOREVER,
-                )
-                log.info(
-                    "← build_property_graph  entities=%d  relations=%d",
                     built.entities, built.relations,
                 )
-            except ActivityError as exc:
+            except (ActivityError, ChildWorkflowError) as exc:
                 log.warning("graph stage failed, downgrading to vector_only: %s", exc)
                 graph_status = "vector_only"
 

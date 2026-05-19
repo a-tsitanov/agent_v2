@@ -116,6 +116,17 @@ class GraphBuilt(_Frozen):
     relations: int
 
 
+class GraphBuildResult(_Frozen):
+    """Output of the ``GraphBuildWorkflow`` child — bundles the
+    ``Merged`` staging-blob descriptor (needed by the post-graph
+    ``push_wikibase`` activity in the parent) with the ``GraphBuilt``
+    counters for ``finalize``.  Composition keeps both upstream fields
+    intact instead of grafting fields onto an existing contract."""
+
+    merged: Merged
+    built: GraphBuilt
+
+
 class FinalizeIn(_Frozen):
     ctx: Ctx
     indexed: Indexed

@@ -34,6 +34,7 @@ from src.workflow.contracts import (
     WikibasePushed,
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
+from src.workflow.graph_build import GraphBuildWorkflow
 
 
 def _temporal_up(host: str = "localhost", port: int = 7233) -> bool:
@@ -154,7 +155,7 @@ async def test_happy_path_completed(monkeypatch):
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
-        workflows=[DocumentIngestWorkflow],
+        workflows=[DocumentIngestWorkflow, GraphBuildWorkflow],
         activities=HAPPY_ACTIVITIES,
     ):
         params = IngestParams(doc_id=str(uuid.uuid4()), path="s3://kb-uploads/x")
@@ -183,7 +184,41 @@ async def test_graph_failure_downgrades_to_vector_only(monkeypatch):
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
-        workflows=[DocumentIngestWorkflow], activities=activities,
+        workflows=[DocumentIngestWorkflow, GraphBuildWorkflow], activities=activities,
+    ):
+        params = IngestParams(doc_id=str(uuid.uuid4()), path="s3://kb-uploads/x")
+        result = await client.execute_workflow(
+            DocumentIngestWorkflow.run, params,
+            id=f"ingest-{params.doc_id}", task_queue=queue,
+        )
+    assert result.graph_status == "vector_only"
+
+
+@pytest.mark.asyncio
+async def test_graph_failure_via_child_downgrades(monkeypatch):
+    """Failure inside the child GraphBuildWorkflow surfaces as
+    ChildWorkflowError in the parent.  The parent's except
+    ``(ActivityError, ChildWorkflowError)`` must still downgrade to
+    ``vector_only`` and let the workflow finish cleanly — same
+    behaviour as when the activity-only path failed before Stage 3."""
+
+    @activity.defn(name="merge_and_resolve")
+    async def merge_boom(kg: KGExtracted) -> Merged:
+        raise ApplicationError("merge LLM 500", non_retryable=True)
+
+    activities = [
+        fetch_source_stub, parse_and_chunk_stub, index_vector_stub,
+        inject_canonical_stub, extract_kg_stub, merge_boom,
+        build_pg_stub, push_wikibase_stub, finalize_stub, mark_failed_stub,
+    ]
+
+    client = await _connect()
+    queue = f"wf-test-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[DocumentIngestWorkflow, GraphBuildWorkflow],
+        activities=activities,
     ):
         params = IngestParams(doc_id=str(uuid.uuid4()), path="s3://kb-uploads/x")
         result = await client.execute_workflow(
@@ -216,7 +251,7 @@ async def test_vector_failure_runs_mark_failed_and_raises(monkeypatch):
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
-        workflows=[DocumentIngestWorkflow], activities=activities,
+        workflows=[DocumentIngestWorkflow, GraphBuildWorkflow], activities=activities,
     ):
         params = IngestParams(doc_id=str(uuid.uuid4()), path="s3://kb-uploads/x")
         with pytest.raises(Exception):
@@ -268,7 +303,7 @@ async def test_wikibase_status_propagates_to_result(monkeypatch):
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
-        workflows=[DocumentIngestWorkflow], activities=activities,
+        workflows=[DocumentIngestWorkflow, GraphBuildWorkflow], activities=activities,
     ):
         params = IngestParams(doc_id=str(uuid.uuid4()), path="s3://kb-uploads/x")
         result = await client.execute_workflow(

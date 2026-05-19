@@ -35,6 +35,7 @@ from temporalio.worker import Worker
 from src.config import settings
 from src.workflow.activities import LLM_ACTIVITIES, MAIN_ACTIVITIES
 from src.workflow.document_ingest import DocumentIngestWorkflow
+from src.workflow.graph_build import GraphBuildWorkflow
 
 
 def _build_runtime() -> Runtime | None:
@@ -85,9 +86,14 @@ async def _run() -> None:
         activities=MAIN_ACTIVITIES,
         max_concurrent_activities=settings.temporal.activity_concurrency,
     )
+    # GraphBuildWorkflow runs on the LLM queue alongside merge_and_resolve
+    # + build_property_graph activities so the GPU-cap (concurrency=1)
+    # serialises the heavy work — child workflow dispatch itself is
+    # lightweight, the activities inside are the real LLM load.
     llm_worker = Worker(
         client,
         task_queue=settings.temporal.llm_task_queue,
+        workflows=[GraphBuildWorkflow],
         activities=LLM_ACTIVITIES,
         max_concurrent_activities=settings.temporal.llm_activity_concurrency,
     )
