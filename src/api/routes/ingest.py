@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 from dishka.integrations.fastapi import FromDishka, inject
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel
 from temporalio.common import WorkflowIDReusePolicy
@@ -59,6 +59,7 @@ async def upload_document(
     pg: FromDishka[AsyncPostgres],
     file: UploadFile = File(...),
     department: str = Form(default=""),
+    x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
     if not file.filename:
         raise HTTPException(400, "filename required")
@@ -116,14 +117,30 @@ async def upload_document(
     # silently re-index, paying the LLM bill again).  Failed workflows
     # CAN be restarted under the same id — that's the explicit retry
     # path: re-upload to retry an ingest that died terminally.
+    # Analytics labels: explicit header wins, else AnalyticsSettings default.
+    # Model + env are always auto-captured from runtime config so a model
+    # swap (env LITELLM_LLM_MODEL=...) is reflected without operator effort.
+    version_tag = x_version_tag or settings.analytics.default_version_tag
+    model = settings.litellm.llm_model
+    env_name = settings.analytics.env_name
+    search_attrs = {
+        "VersionTag": [version_tag],
+        "Model": [model],
+        "Env": [env_name],
+    }
+
     client = await get_temporal_client()
     try:
         await client.start_workflow(
             DocumentIngestWorkflow.run,
-            IngestParams(doc_id=str(doc_id), path=s3_uri),
+            IngestParams(
+                doc_id=str(doc_id), path=s3_uri,
+                version_tag=version_tag, model=model, env=env_name,
+            ),
             id=f"ingest-{doc_id}",
             task_queue=settings.temporal.task_queue,
             id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+            search_attributes=search_attrs,
         )
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is
@@ -142,8 +159,10 @@ async def upload_document(
             },
         ) from exc
     logger.info(
-        "ingest enqueued  doc_id={d}  path={p}  dept={dept}",
+        "ingest enqueued  doc_id={d}  path={p}  dept={dept}  "
+        "version_tag={v}  model={m}  env={e}",
         d=doc_id, p=s3_uri, dept=department,
+        v=version_tag, m=model, e=env_name,
     )
     return IngestEnqueuedResponse(job_id=doc_id)
 

@@ -32,6 +32,14 @@ class WikibasePushed(_Frozen):
 class IngestParams(_Frozen):
     doc_id: str
     path: str
+    # Analytics tagging — propagated end-to-end so the finalize hook
+    # writes ingest_metrics rows tagged with the same labels that the
+    # /ingest endpoint set via Temporal Search Attributes.  Defaults
+    # match `AnalyticsSettings` so older callers without the header
+    # continue to work.
+    version_tag: str = "unspecified"
+    model: str = ""
+    env: str = ""
 
 
 class Ctx(_Frozen):
@@ -115,6 +123,11 @@ class FinalizeIn(_Frozen):
     entities: int = 0
     relations: int = 0
     wikibase: WikibasePushed | None = None
+    # Analytics tags propagated from IngestParams so the finalize-side
+    # metrics-extractor hook (Stage 5) labels every ingest_metrics row.
+    version_tag: str = "unspecified"
+    model: str = ""
+    env: str = ""
 
 
 class MarkFailedIn(_Frozen):

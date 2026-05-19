@@ -82,6 +82,64 @@ CREATE INDEX IF NOT EXISTS ingest_metrics_activity_idx
 """
 
 
+_ANALYTICS_SEARCH_ATTRS: dict[str, str] = {
+    "VersionTag": "KEYWORD",
+    "Model":      "KEYWORD",
+    "Env":        "KEYWORD",
+}
+
+
+def setup_temporal_search_attributes() -> None:
+    """Register the three custom Search Attributes used by the
+    analytics layer (Stage 4 of the Grafana plan) via the Temporal
+    SDK OperatorService.  Idempotent — AlreadyExists is logged as
+    a no-op; other failures are warnings (the workflow falls back
+    to no search-attribute filtering in Temporal UI, but the
+    Postgres ingest_metrics path is unaffected).
+    """
+    import asyncio
+    from temporalio.api.enums.v1 import IndexedValueType
+    from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
+    from temporalio.client import Client
+
+    name_to_enum = {
+        name: getattr(IndexedValueType, f"INDEXED_VALUE_TYPE_{kind}")
+        for name, kind in _ANALYTICS_SEARCH_ATTRS.items()
+    }
+
+    async def _register() -> None:
+        client = await Client.connect(
+            settings.temporal.target,
+            namespace=settings.temporal.namespace,
+        )
+        op = client.operator_service
+        req = AddSearchAttributesRequest(
+            namespace=settings.temporal.namespace,
+            search_attributes=name_to_enum,
+        )
+        try:
+            await op.add_search_attributes(req)
+            logger.info(
+                "search-attrs registered  names={n}",
+                n=list(_ANALYTICS_SEARCH_ATTRS.keys()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "already exists" in msg or "alreadyexist" in msg:
+                logger.info("search-attrs already registered (no-op)")
+            elif "advanced visibility" in msg or "not supported" in msg:
+                logger.warning(
+                    "Temporal visibility store does not support custom "
+                    "search attrs (Postgres visibility — needs ES for advanced).  "
+                    "Skipping — analytics still works via ingest_metrics. "
+                    "err={e}", e=exc,
+                )
+            else:
+                logger.warning("search-attr register failed  err={e}", e=exc)
+
+    asyncio.run(_register())
+
+
 def setup_postgres() -> None:
     pg = settings.postgres
     logger.info(
@@ -142,6 +200,7 @@ def main() -> None:
     setup_postgres()
     setup_milvus()
     setup_minio()
+    setup_temporal_search_attributes()
     logger.info("setup_db  all done")
 
 
