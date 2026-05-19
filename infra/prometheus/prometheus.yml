@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    service: kb-llamaindex
+
+scrape_configs:
+  - job_name: temporal-worker
+    static_configs:
+      - targets: ['host.docker.internal:9090']
+        labels:
+          component: ingest-worker
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: prometheus-self
+    static_configs:
+      - targets: ['localhost:9090']

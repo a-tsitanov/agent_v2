@@ -221,6 +221,53 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ── Metrics + dashboards ────────────────────────────────────────────
+  # Prometheus scrapes the Temporal Python worker (Stage 2) plus the
+  # Temporal Server's own /metrics endpoint.  Worker runs on the host
+  # (uv run python -m src.workflow.worker) — host.docker.internal +
+  # extra_hosts host-gateway covers both Docker Desktop and Linux.
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    ports:
+      - "${PROMETHEUS_PORT:-9092}:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: dark
+      GF_INSTALL_PLUGINS: ""
+      # Datasource provisioning reads ${POSTGRES_*} via shell expansion;
+      # pass through so /etc/grafana/provisioning/datasources/datasources.yaml
+      # resolves the Postgres connection string at container start.
+      POSTGRES_DB: ${POSTGRES_DB:-kb_llamaindex}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
 volumes:
   etcd_data:
   minio_data:
@@ -231,3 +278,5 @@ volumes:
   wikibase_mysql_data:
   wikibase_images:
   wikibase_wdqs_data:
+  prometheus_data:
+  grafana_data:
