@@ -31,6 +31,11 @@ async def lifespan(_: FastAPI):
         "kb-llamaindex API starting  env={env}  log_level={lvl}",
         env=settings.api.env, lvl=settings.api.log_level,
     )
+    # Probe LiteLLM /v1/models so a misconfigured per-role env
+    # surfaces here as a WARNING (or, with LITELLM_VALIDATE_MODELS_STRICT,
+    # blocks startup) — instead of an opaque 500 mid-ingest.
+    from src.observability.litellm_models import validate_litellm_models
+    validate_litellm_models(source="api")
     try:
         yield
     finally:

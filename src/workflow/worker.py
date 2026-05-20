@@ -62,6 +62,12 @@ def _build_runtime() -> Runtime | None:
 
 
 async def _run() -> None:
+    # Surface LiteLLM model-config mistakes at boot, not at the
+    # first activity that hits the proxy and gets a 500 (see
+    # src/observability/litellm_models.py for what it catches).
+    from src.observability.litellm_models import validate_litellm_models
+    validate_litellm_models(source="worker")
+
     runtime = _build_runtime()
     client = await Client.connect(
         settings.temporal.target,
