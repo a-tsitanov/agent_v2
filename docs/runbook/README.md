@@ -6,6 +6,7 @@ Operator-facing руководства по эксплуатации kb-llamaind
 
 | Runbook | Тема | Когда читать |
 |---|---|---|
+| [`search.md`](search.md) | Search-подсистема: `/search`, `/agent` (ReAct), `/selfrag` (reflective) + hybrid retriever + reranker + graph retriever + trace observability | Чтобы понять как отвечает API на user-query; tuning knobs для качества/latency; отладка когда `/selfrag` крутит лишние раунды или `/agent` зацикливается |
 | [`multimodel.md`](multimodel.md) | Per-role LLM + GraphBuildWorkflow child + per-activity model в `ingest_metrics` | Перед первым сабмитом с разными моделями по ролям; при отладке `graph_status="vector_only"` |
 | [`analytics.md`](analytics.md) | Grafana dashboards + Prometheus + Postgres `ingest_metrics` + version-tag механика | Чтобы понять что показывает каждый дашборд + retention правила |
 | [`wikibase.md`](wikibase.md) | Самохостящийся Wikibase: bootstrap, push_wikibase activity, SPARQL/wdqs | Включение wikibase-фичи + смена `WIKIBASE_*` env |
@@ -39,4 +40,5 @@ Operator-facing руководства по эксплуатации kb-llamaind
 |---|---|---|
 | `feature/wikibase-population` | Wikibase push activity, base classes, identifier folding | [`wikibase.md`](wikibase.md) |
 | `feature/analytics-grafana` | Prometheus + Grafana + `ingest_metrics` + version_tag | [`analytics.md`](analytics.md) |
-| `feature/multimodel-and-child` | Per-role LLM (extraction/judge/search) + `GraphBuildWorkflow` child + per-activity model | [`multimodel.md`](multimodel.md) |
+| `feature/multimodel-and-child` | Per-role LLM (extraction/judge/search) + `GraphBuildWorkflow` child + per-activity model + LiteLLM model validator | [`multimodel.md`](multimodel.md) |
+| (doc sprint) | Глубокий разбор search-подсистемы (три endpoint'а, hybrid retriever, reranker, ReAct/Self-RAG loops, tools, prompts, trace events, tuning matrix, troubleshooting) | [`search.md`](search.md) |

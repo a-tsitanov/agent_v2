@@ -95,7 +95,8 @@ export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
 
 | Where to start | What you'll find |
 |---|---|
-| [`docs/runbook/README.md`](docs/runbook/README.md) | Index of operator runbooks (analytics, wikibase, **multimodel + GraphBuildWorkflow**) |
+| [`docs/runbook/README.md`](docs/runbook/README.md) | Index of operator runbooks (**search**, multimodel, analytics, wikibase) |
+| [`docs/runbook/search.md`](docs/runbook/search.md) | Deep-dive into the search subsystem: `/search`, `/agent` (ReAct), `/selfrag` (reflective) + hybrid retriever + reranker + graph retriever + trace observability + tuning matrix. Self-contained with code excerpts. |
 | [`docs/runbook/multimodel.md`](docs/runbook/multimodel.md) | Per-role LLM (extraction/judge/search) + child workflow + per-activity model in `ingest_metrics`.  Detailed reading guide with code excerpts. |
 | [`docs/runbook/analytics.md`](docs/runbook/analytics.md) | Grafana / Prometheus / `ingest_metrics` schema + version_tag mechanics |
 | [`docs/runbook/wikibase.md`](docs/runbook/wikibase.md) | Wikibase population + SPARQL examples |
