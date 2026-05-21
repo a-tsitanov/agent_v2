@@ -300,6 +300,12 @@ class AgentSettings(BaseSettings):
     er_enabled: bool = True
     # Pairs per LLM-judge call when ER routes borderline candidates.
     er_judge_batch_size: int = Field(default=10, ge=1, le=50)
+    # Process-wide concurrency cap for LLM calls (search-side).
+    # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
+    # graph_search's LLMSynonymRetriever, judge) share this gate.
+    # Bump up when LLM proxy / OpenAI quotas allow; default 8 leaves
+    # headroom for ingest's serial llm_activity_concurrency.
+    llm_max_concurrent: int = Field(default=8, ge=1, le=64)
     # Reflective synthesis (R8): how many draft → critique → retrieve
     # → redraft rounds the synthesizer attempts.
     max_refinements: int = Field(default=3, ge=0, le=10)

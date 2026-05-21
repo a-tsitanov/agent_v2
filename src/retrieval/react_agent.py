@@ -102,214 +102,113 @@ def _build_tools(
     chunk_repository: ChunkRepository | None,
     accumulated_sources: list[NodeWithScore],
 ) -> list[FunctionTool]:
-    """Construct the 5+1 tools the agent can call.
+    """Construct the 7 tools the agent can call.
 
-    `accumulated_sources` is captured by closure — every successful
-    retrieval appends to it.  Final `submit_answer` uses the same
-    list for synthesis.
+    Each wrapper is a thin closure over ``accumulated_sources`` that
+    delegates to a pure function in ``src/retrieval/atomic_tools.py``.
+    The accumulation happens here (mutates the closure list); the
+    pure functions stay free of side effects so they can also be
+    used by:
+      * the Temporal ``tool_execution`` activity (Stage 1 of the
+        search-mcp plan), where sources are serialised across the
+        workflow boundary,
+      * the MCP-2 ``tools_server.py`` (Stage 4), where clients
+        consume the per-call ``observation`` and don't need an
+        in-process accumulator.
     """
+    from src.retrieval import atomic_tools
 
     async def vector_search(query: str, top_k: int = 10) -> str:
-        """Semantic search over text chunks.  Returns JSON list with
-        text + metadata."""
-        nodes = await retriever.aretrieve(query)
-        accumulated_sources.extend(nodes)
-        accumulated_sources[:] = deduplicate_nodes(accumulated_sources)
-        return json.dumps(
-            [
-                {
-                    "chunk_id": n.node.node_id,
-                    "text": n.node.get_content()[:500],
-                    "score": float(n.score or 0.0),
-                    "doc_id": (n.node.metadata or {}).get("doc_id", ""),
-                    "canonical_identifiers": (n.node.metadata or {}).get(
-                        "canonical_identifiers", []
-                    ),
-                }
-                for n in nodes[:top_k]
-            ],
-            ensure_ascii=False,
+        r = await atomic_tools.vector_search(
+            retriever, query=query, top_k=top_k,
         )
+        if r.sources:
+            accumulated_sources.extend(r.sources)
+            accumulated_sources[:] = deduplicate_nodes(accumulated_sources)
+        return r.observation
 
     async def graph_search(query: str, depth: int = 2) -> str:
-        """Knowledge-graph traversal.  Returns JSON with entities and
-        relations.  Empty when graph store is unavailable."""
-        if graph_retriever is None:
-            return json.dumps({"entities": [], "relations": []})
-        data = await graph_retriever.aretrieve(query)
-        entities = getattr(data, "entities", []) or []
-        relations = getattr(data, "relations", []) or []
-        chunks = getattr(data, "chunks", []) or []
-        if chunks:
-            accumulated_sources.extend(chunks)
-            accumulated_sources[:] = deduplicate_nodes(accumulated_sources)
-        return json.dumps(
-            {"entities": entities, "relations": relations},
-            ensure_ascii=False,
+        r = await atomic_tools.graph_search(
+            graph_retriever, query=query, depth=depth,
         )
+        if r.sources:
+            accumulated_sources.extend(r.sources)
+            accumulated_sources[:] = deduplicate_nodes(accumulated_sources)
+        return r.observation
 
     async def find_entity_by_id(
         name: str, entity_type: str | None = None,
     ) -> str:
-        """Exact lookup by canonical name (e.g. INN, phone in E.164)."""
-        if graph_retriever is None:
-            return json.dumps({"entities": []})
-        # Use graph retriever with the name as query — graph index
-        # already does fuzzy lookup; the type hint is for future
-        # filtering.
-        data = await graph_retriever.aretrieve(name)
-        entities = [
-            e for e in (getattr(data, "entities", []) or [])
-            if entity_type is None
-            or (e.get("entity_type", "").lower() == entity_type.lower())
-        ]
-        return json.dumps({"entities": entities}, ensure_ascii=False)
+        r = await atomic_tools.find_entity_by_id(
+            graph_retriever, name=name, entity_type=entity_type,
+        )
+        return r.observation
 
     async def find_neighbours(entity_name: str, hops: int = 1) -> str:
-        """Walk the graph around an entity (1-2 hops)."""
-        if graph_retriever is None:
-            return json.dumps({"entities": [], "relations": []})
-        # depth=hops+1 because the retriever counts itself as hop 0
-        data = await graph_retriever.aretrieve(entity_name)
-        return json.dumps(
-            {
-                "entities": getattr(data, "entities", []) or [],
-                "relations": getattr(data, "relations", []) or [],
-            },
-            ensure_ascii=False,
+        r = await atomic_tools.find_neighbours(
+            graph_retriever, entity_name=entity_name, hops=hops,
         )
+        return r.observation
 
     async def get_chunks_by_doc_id(
         doc_id: str, limit: int = 50, offset: int = 0,
     ) -> str:
-        """Fetch ALL chunks of a single document by `doc_id`,
-        ordered by their position in the source.  Use this when:
-        - vector_search returned one promising chunk and you need
-          the surrounding context within the same document;
-        - the user asks "everything from this thread / file";
-        - you need to scope reasoning to a single document the user
-          already cited.
-        Pages via `limit`/`offset` so a 1000-chunk doc doesn't
-        blow up the conversation.  Returns JSON list."""
-        if chunk_repository is None:
-            return json.dumps({"error": "chunk_repository unavailable"})
-        try:
-            chunks = await chunk_repository.aget_chunks_by_doc_id(
-                doc_id, limit=limit, offset=offset,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "get_chunks_by_doc_id failed doc={d} err={e}",
-                d=doc_id, e=exc,
-            )
-            return json.dumps({"error": str(exc), "chunks": []})
-        # Mark these as accumulated sources so submit_answer's
-        # synthesizer sees them.  Wrap each in a minimal NodeWithScore.
-        from llama_index.core.schema import NodeWithScore, TextNode
-
-        for c in chunks:
-            tn = TextNode(
-                id_=c["chunk_id"] or f"{doc_id}#{c['position']}",
-                text=c["text"],
-                metadata={
-                    "doc_id": c["doc_id"],
-                    "file_path": c["file_path"],
-                    "position": c["position"],
-                },
-            )
-            accumulated_sources.append(NodeWithScore(node=tn, score=0.0))
-        accumulated_sources[:] = deduplicate_nodes(accumulated_sources)
-        return json.dumps([
-            {
-                "chunk_id": c["chunk_id"],
-                "position": c["position"],
-                "text": c["text"][:400],
-                "doc_id": c["doc_id"],
-            }
-            for c in chunks
-        ], ensure_ascii=False)
+        r = await atomic_tools.get_chunks_by_doc_id(
+            chunk_repository, doc_id=doc_id, limit=limit, offset=offset,
+        )
+        if r.sources:
+            accumulated_sources.extend(r.sources)
+            accumulated_sources[:] = deduplicate_nodes(accumulated_sources)
+        return r.observation
 
     async def read_full_document(
         doc_id: str, max_chars: int = 20000,
     ) -> str:
-        """Read the original source file of one document (as
-        uploaded — pre-chunking, pre-translation).  Capped at
-        `max_chars` to protect the context.  Use SPARINGLY — vector
-        / chunk-level tools are cheaper and more focused.  Good for:
-        - short documents (< 20k chars) the user wants summarised
-          in full;
-        - verifying citation against original verbatim;
-        - documents whose structure (table, code) suffers in chunked
-          retrieval.  Returns the raw text or an error message."""
-        if chunk_repository is None:
-            return "Error: chunk_repository unavailable"
-        try:
-            text = await chunk_repository.aread_document_text(
-                doc_id, max_chars=max_chars,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "read_full_document failed doc={d} err={e}",
-                d=doc_id, e=exc,
-            )
-            return f"Error: {exc}"
-        if text is None:
-            return f"Error: document {doc_id} not found"
-        return text
+        r = await atomic_tools.read_full_document(
+            chunk_repository, doc_id=doc_id, max_chars=max_chars,
+        )
+        return r.observation
 
     async def filter_by_metadata(
         doc_id: str | None = None,
         department: str | None = None,
         doc_type: str | None = None,
     ) -> str:
-        """Filter retrieved sources by metadata.  Returns the
-        in-memory accumulated_sources filtered — useful to scope
-        downstream reasoning to a specific document/department."""
-        out = []
-        for n in accumulated_sources:
-            md = n.node.metadata or {}
-            if doc_id and md.get("doc_id") != doc_id:
-                continue
-            if department and md.get("department") != department:
-                continue
-            if doc_type and md.get("doc_type") != doc_type:
-                continue
-            out.append({
-                "chunk_id": n.node.node_id,
-                "doc_id": md.get("doc_id", ""),
-            })
-        return json.dumps(out, ensure_ascii=False)
+        r = atomic_tools.filter_by_metadata(
+            accumulated_sources, doc_id=doc_id,
+            department=department, doc_type=doc_type,
+        )
+        return r.observation
 
     return [
-        FunctionTool.from_defaults(fn=vector_search, name="vector_search",
-            description="Semantic search over text chunks. Use this for "
-                        "questions where you don't know an exact entity "
-                        "name yet."),
-        FunctionTool.from_defaults(fn=graph_search, name="graph_search",
-            description="Knowledge-graph traversal. Use when the question "
-                        "involves relations between people/organizations/"
-                        "topics/concepts."),
-        FunctionTool.from_defaults(fn=find_entity_by_id, name="find_entity_by_id",
-            description="Exact lookup by canonical name (phone in E.164, "
-                        "INN, email). Use when you already know the ID."),
-        FunctionTool.from_defaults(fn=find_neighbours, name="find_neighbours",
-            description="List entities connected to a known one in the "
-                        "graph (1-2 hops). Use for 'tell me everything "
-                        "about X' questions."),
-        FunctionTool.from_defaults(fn=filter_by_metadata, name="filter_by_metadata",
-            description="Filter accumulated sources by doc_id / "
-                        "department / doc_type. Use to scope reasoning "
-                        "after a wide retrieve."),
-        FunctionTool.from_defaults(fn=get_chunks_by_doc_id, name="get_chunks_by_doc_id",
-            description="Fetch ALL chunks of one document by doc_id, "
-                        "ordered by position. Use when a single chunk "
-                        "isn't enough and you need surrounding context "
-                        "from the same source."),
-        FunctionTool.from_defaults(fn=read_full_document, name="read_full_document",
-            description="Read the raw uploaded source file (pre-chunk, "
-                        "pre-translation) by doc_id, capped at max_chars. "
-                        "Use only when chunk-level retrieval can't surface "
-                        "what you need — table / code / short doc cases."),
+        FunctionTool.from_defaults(
+            fn=vector_search, name="vector_search",
+            description=atomic_tools.TOOL_DESCRIPTIONS["vector_search"],
+        ),
+        FunctionTool.from_defaults(
+            fn=graph_search, name="graph_search",
+            description=atomic_tools.TOOL_DESCRIPTIONS["graph_search"],
+        ),
+        FunctionTool.from_defaults(
+            fn=find_entity_by_id, name="find_entity_by_id",
+            description=atomic_tools.TOOL_DESCRIPTIONS["find_entity_by_id"],
+        ),
+        FunctionTool.from_defaults(
+            fn=find_neighbours, name="find_neighbours",
+            description=atomic_tools.TOOL_DESCRIPTIONS["find_neighbours"],
+        ),
+        FunctionTool.from_defaults(
+            fn=filter_by_metadata, name="filter_by_metadata",
+            description=atomic_tools.TOOL_DESCRIPTIONS["filter_by_metadata"],
+        ),
+        FunctionTool.from_defaults(
+            fn=get_chunks_by_doc_id, name="get_chunks_by_doc_id",
+            description=atomic_tools.TOOL_DESCRIPTIONS["get_chunks_by_doc_id"],
+        ),
+        FunctionTool.from_defaults(
+            fn=read_full_document, name="read_full_document",
+            description=atomic_tools.TOOL_DESCRIPTIONS["read_full_document"],
+        ),
     ]
 
 

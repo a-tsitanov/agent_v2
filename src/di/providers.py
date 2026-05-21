@@ -33,6 +33,7 @@ from src.retrieval.agent import (
 )
 from src.retrieval.judge import LLMJudge
 from src.retrieval.llm import build_search_llm
+from src.retrieval.llm_semaphore import BoundedLLM
 from src.retrieval.vector_index import build_vector_index, build_vector_store
 from src.storage.chunk_repository import ChunkRepository
 from src.storage.postgres import AsyncPostgres
@@ -50,11 +51,17 @@ class CommonProvider(Provider):
     @provide
     def llm(self) -> LLM:
         # DI-injected LLM goes to /agent, /selfrag, /legacy/agent —
-        # all user-facing answer paths.  Stage 2 of the multimodel
-        # plan: route them to the "search" role so the operator can
-        # set a latency-balanced model independent from the heavy
-        # extraction/judge workloads on the ingest path.
-        return build_search_llm()
+        # all user-facing answer paths.  Routes to the "search" role
+        # (multimodel plan) AND wraps in BoundedLLM so every async
+        # chat method passes through a process-wide semaphore.  This
+        # protects the GPU/proxy from unbounded concurrency when
+        # multiple ReAct sessions (or MCP-2 atomic tool calls hitting
+        # LLMSynonymRetriever) fire at once.
+        from src.config import settings
+        return BoundedLLM(
+            build_search_llm(),
+            max_concurrent=settings.agent.llm_max_concurrent,
+        )
 
     @provide
     def embed_model(self) -> BaseEmbedding:
