@@ -33,9 +33,12 @@ from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.worker import Worker
 
 from src.config import settings
-from src.workflow.activities import LLM_ACTIVITIES, MAIN_ACTIVITIES
+from src.workflow.activities import (
+    LLM_ACTIVITIES, MAIN_ACTIVITIES, SEARCH_ACTIVITIES,
+)
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
+from src.workflow.search_workflow import SearchWorkflow
 
 
 def _build_runtime() -> Runtime | None:
@@ -103,8 +106,26 @@ async def _run() -> None:
         activities=LLM_ACTIVITIES,
         max_concurrent_activities=settings.temporal.llm_activity_concurrency,
     )
+    # SearchWorkflow lives on its own queue so concurrent search
+    # sessions don't fight ingest for GPU budget.  Cap independently
+    # via TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY (default 4 — assumes
+    # LLM proxy can handle a small handful of parallel sessions).
+    search_worker = Worker(
+        client,
+        task_queue=settings.temporal.search_task_queue,
+        workflows=[SearchWorkflow],
+        activities=SEARCH_ACTIVITIES,
+        max_concurrent_activities=settings.temporal.search_activity_concurrency,
+    )
+    logger.info(
+        "temporal worker  search_queue={sq}  search_concurrency={sc}",
+        sq=settings.temporal.search_task_queue,
+        sc=settings.temporal.search_activity_concurrency,
+    )
 
-    await asyncio.gather(main_worker.run(), llm_worker.run())
+    await asyncio.gather(
+        main_worker.run(), llm_worker.run(), search_worker.run(),
+    )
 
 
 def main() -> None:

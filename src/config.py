@@ -165,6 +165,14 @@ class TemporalSettings(BaseSettings):
     llm_task_queue: str = "kb-ingest-llm"
     llm_activity_concurrency: int = 1
 
+    # Search-side activities (agent_reasoning_step, tool_execution,
+    # synthesize_answer) live on their own task queue so operators can
+    # control GPU split between ingest and search independently.  Cap
+    # ≥ 1; raise it when LLM proxy / OpenAI quotas allow several
+    # parallel search sessions.
+    search_task_queue: str = "kb-search-llm"
+    search_activity_concurrency: int = 4
+
     @property
     def target(self) -> str:
         return f"{self.host}:{self.port}"

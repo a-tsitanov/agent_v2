@@ -15,6 +15,7 @@ Activities are split into two pools by GPU/LLM pressure:
 a single worker pool.
 """
 
+from src.workflow.activities.agent_reasoning import agent_reasoning_step
 from src.workflow.activities.build_property_graph import build_property_graph
 from src.workflow.activities.extract_kg import extract_kg
 from src.workflow.activities.fetch_source import fetch_source
@@ -24,6 +25,8 @@ from src.workflow.activities.inject_canonical import inject_canonical
 from src.workflow.activities.merge_and_resolve import merge_and_resolve
 from src.workflow.activities.parse_and_chunk import parse_and_chunk
 from src.workflow.activities.push_wikibase import push_wikibase
+from src.workflow.activities.synthesize_answer import synthesize_answer
+from src.workflow.activities.tool_execution import tool_execution
 
 LLM_ACTIVITIES = [
     extract_kg,
@@ -47,12 +50,20 @@ MAIN_ACTIVITIES = [
     mark_failed,
 ]
 
-ALL_ACTIVITIES = MAIN_ACTIVITIES + LLM_ACTIVITIES
+SEARCH_ACTIVITIES = [
+    agent_reasoning_step,
+    tool_execution,
+    synthesize_answer,
+]
+
+ALL_ACTIVITIES = MAIN_ACTIVITIES + LLM_ACTIVITIES + SEARCH_ACTIVITIES
 
 __all__ = [
     "ALL_ACTIVITIES",
     "LLM_ACTIVITIES",
     "MAIN_ACTIVITIES",
+    "SEARCH_ACTIVITIES",
+    "agent_reasoning_step",
     "build_property_graph",
     "extract_kg",
     "fetch_source",
@@ -63,4 +74,6 @@ __all__ = [
     "merge_and_resolve",
     "parse_and_chunk",
     "push_wikibase",
+    "synthesize_answer",
+    "tool_execution",
 ]
