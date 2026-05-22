@@ -2,7 +2,9 @@
 
 Self-contained гид по трём search-endpoint'ам kb-llamaindex: **`/api/v1/search`**, **`/api/v1/agent`**, **`/api/v1/selfrag`**. Linear reading guide — каждый раздел опирается на предыдущий. Со ссылками на конкретные файлы/строки и code-выдержками.
 
-Связанные runbook'и: [`multimodel.md`](multimodel.md) (откуда берётся `search`-role модель), [`analytics.md`](analytics.md) (observability slot — но `ingest_metrics` к search'у НЕ относится; см. § 12). Если ищешь tuning knob — иди в [§ 10](#10-configuration-knobs) и [§ 13](#13-score-thresholds--tuning-matrix). Если что-то падает — [§ 15](#15-troubleshooting).
+> **⚠️ Обновлено (2026-05-22, `feature/search-mcp`):** Под капотом все три endpoint'а теперь стартуют **Temporal `SearchWorkflow`** на queue `kb-search-llm` и `await handle.result()` (durable + cancellable + queue-capped GPU защита). Атомарные tool-функции вытащены в [`src/retrieval/atomic_tools.py`](../../src/retrieval/atomic_tools.py) — реюзаются workflow-activity `tool_execution`, ReAct loop'ом (legacy `agentic_react_search`), и MCP-серверами. LLM теперь обёрнут в `BoundedLLM` semaphore (см. [§ 10](#10-configuration-knobs)). UI/контракты route handler'ов **не менялись** — `SearchResponse` тот же.  Подробности развёрнутые: [`mcp.md`](mcp.md).
+
+Связанные runbook'и: [`mcp.md`](mcp.md) (Temporal-backed search + два MCP сервера), [`multimodel.md`](multimodel.md) (откуда берётся `search`-role модель), [`analytics.md`](analytics.md) (observability slot — но `ingest_metrics` к search'у НЕ относится; см. § 12). Если ищешь tuning knob — иди в [§ 10](#10-configuration-knobs) и [§ 13](#13-score-thresholds--tuning-matrix). Если что-то падает — [§ 15](#15-troubleshooting).
 
 > **Что в скоупе:** `/search`, `/agent`, `/selfrag`. Legacy `/api/v1/legacy/agent` (judge-based loop) — упоминается one-line в § 11 для compare-context, не разворачивается.
 

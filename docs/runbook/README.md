@@ -6,6 +6,7 @@ Operator-facing руководства по эксплуатации kb-llamaind
 
 | Runbook | Тема | Когда читать |
 |---|---|---|
+| [`mcp.md`](mcp.md) | Два MCP-сервера: MCP-1 (`kb_search` через Temporal SearchWorkflow) и MCP-2 (6 atomic retrieval tools прямо в процессе). Stdio + HTTP/SSE транспорты, auth, tuning, troubleshooting | Подключаешь OpenWebUI / Claude Desktop / Cursor / Continue; настраиваешь concurrency cap'ы для GPU-защиты |
 | [`search.md`](search.md) | Search-подсистема: `/search`, `/agent` (ReAct), `/selfrag` (reflective) + hybrid retriever + reranker + graph retriever + trace observability | Чтобы понять как отвечает API на user-query; tuning knobs для качества/latency; отладка когда `/selfrag` крутит лишние раунды или `/agent` зацикливается |
 | [`multimodel.md`](multimodel.md) | Per-role LLM + GraphBuildWorkflow child + per-activity model в `ingest_metrics` | Перед первым сабмитом с разными моделями по ролям; при отладке `graph_status="vector_only"` |
 | [`analytics.md`](analytics.md) | Grafana dashboards + Prometheus + Postgres `ingest_metrics` + version-tag механика | Чтобы понять что показывает каждый дашборд + retention правила |
@@ -42,3 +43,4 @@ Operator-facing руководства по эксплуатации kb-llamaind
 | `feature/analytics-grafana` | Prometheus + Grafana + `ingest_metrics` + version_tag | [`analytics.md`](analytics.md) |
 | `feature/multimodel-and-child` | Per-role LLM (extraction/judge/search) + `GraphBuildWorkflow` child + per-activity model + LiteLLM model validator | [`multimodel.md`](multimodel.md) |
 | (doc sprint) | Глубокий разбор search-подсистемы (три endpoint'а, hybrid retriever, reranker, ReAct/Self-RAG loops, tools, prompts, trace events, tuning matrix, troubleshooting) | [`search.md`](search.md) |
+| `feature/search-mcp` | Search → Temporal `SearchWorkflow` (`kb-search-llm` queue, configurable cap). `atomic_tools.py` (7 pure functions) + `BoundedLLM` (process-wide GPU semaphore). Два MCP-сервера: MCP-1 `kb_search` через workflow + progress streaming, MCP-2 atomic tools прямо in-process | [`mcp.md`](mcp.md) |
