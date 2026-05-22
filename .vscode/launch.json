@@ -115,12 +115,76 @@
       "envFile": "${workspaceFolder}/.env",
       "console": "integratedTerminal",
       "justMyCode": false
+    },
+    {
+      "name": "MCP-1: search server (stdio)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.mcp.search_server",
+      "args": ["--transport", "stdio"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "KB_MCP_REQUIRE_AUTH": "false" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "MCP-1: search server (SSE :9001)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.mcp.search_server",
+      "args": [
+        "--transport", "sse",
+        "--host", "0.0.0.0",
+        "--port", "9001"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "MCP-2: tools server (stdio)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.mcp.tools_server",
+      "args": ["--transport", "stdio"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "KB_MCP_REQUIRE_AUTH": "false" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "MCP-2: tools server (SSE :9002)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.mcp.tools_server",
+      "args": [
+        "--transport", "sse",
+        "--host", "0.0.0.0",
+        "--port", "9002"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
     }
   ],
   "compounds": [
     {
       "name": "API + Worker",
       "configurations": ["API: uvicorn (reload)", "Worker: Temporal"],
+      "stopAll": true
+    },
+    {
+      "name": "API + Worker + MCP-1 + MCP-2 (SSE)",
+      "configurations": [
+        "API: uvicorn (reload)",
+        "Worker: Temporal",
+        "MCP-1: search server (SSE :9001)",
+        "MCP-2: tools server (SSE :9002)"
+      ],
       "stopAll": true
     }
   ]

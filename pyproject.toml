@@ -46,6 +46,17 @@ dependencies = [
     # cross-project portability with enterprise-kb's identifier layer.
     "phonenumbers>=9,<10",
     "dateparser>=1.2,<2",
+
+    # HTTP client — used by src/observability/litellm_models.py to
+    # probe the LiteLLM proxy /v1/models endpoint at worker / API boot.
+    # Previously only in [dev] which was a latent bug for prod installs.
+    "httpx>=0.27,<1",
+
+    # MCP servers (Model Context Protocol) for OpenWebUI / Claude
+    # Desktop / Cursor / Continue integration.  Two servers under
+    # src/mcp/: search_server (kb_search via Temporal SearchWorkflow)
+    # and tools_server (7 atomic retrieval primitives in-process).
+    "fastmcp>=3.0,<4",
 ]
 
 [project.optional-dependencies]

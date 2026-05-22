@@ -56,6 +56,48 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
+      "label": "mcp-1: search server (SSE :9001)",
+      "type": "shell",
+      "command": "uv run python -m src.mcp.search_server --transport sse --host 0.0.0.0 --port 9001",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "mcp-1: search server (stdio)",
+      "type": "shell",
+      "command": "uv run python -m src.mcp.search_server --transport stdio",
+      "problemMatcher": [],
+      "options": { "env": { "KB_MCP_REQUIRE_AUTH": "false" } },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "mcp-2: tools server (SSE :9002)",
+      "type": "shell",
+      "command": "uv run python -m src.mcp.tools_server --transport sse --host 0.0.0.0 --port 9002",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "mcp-2: tools server (stdio)",
+      "type": "shell",
+      "command": "uv run python -m src.mcp.tools_server --transport stdio",
+      "problemMatcher": [],
+      "options": { "env": { "KB_MCP_REQUIRE_AUTH": "false" } },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "mcp: tools/list smoke (mcp-1)",
+      "type": "shell",
+      "command": "echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}' | KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.search_server --transport stdio",
+      "problemMatcher": []
+    },
+    {
+      "label": "mcp: tools/list smoke (mcp-2)",
+      "type": "shell",
+      "command": "echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}' | KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.tools_server --transport stdio",
+      "problemMatcher": []
+    },
+    {
       "label": "cleanup: orphan staging blobs (dry-run)",
       "type": "shell",
       "command": "uv run python -m scripts.cleanup_staging --dry-run",
@@ -78,6 +120,12 @@
       "label": "pytest: agent + agent_graph",
       "type": "shell",
       "command": "uv run pytest tests/test_retrieval/test_agent.py tests/test_retrieval/test_agent_graph.py -v",
+      "problemMatcher": []
+    },
+    {
+      "label": "pytest: search-mcp suite (atomic + sem + workflow + mcp)",
+      "type": "shell",
+      "command": "uv run pytest tests/test_retrieval/test_atomic_tools.py tests/test_retrieval/test_llm_semaphore.py tests/test_workflow/test_search_workflow.py tests/test_mcp/ -v",
       "problemMatcher": []
     },
     {
