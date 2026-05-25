@@ -69,13 +69,17 @@ def _list_available_models(base_url: str, api_key: str, timeout_s: float) -> lis
 
 
 def _configured_models() -> dict[str, str]:
-    """Return non-empty ``{role: model_name}`` requested by env."""
+    """Return non-empty ``{label: model_name}`` requested by env.
+
+    Two-tier model: every role resolves to one of two physical models
+    (``model_small`` / ``model_large``), so validating those two covers
+    all roles.  The deprecated ``llm_model`` alias is included only when
+    an operator explicitly set it (legacy no-role ``build_llm()``)."""
     cfg = settings.litellm
     pairs = {
-        "extraction": cfg.extraction_model,
-        "judge":      cfg.judge_model,
-        "search":     cfg.search_model,
-        "default":    cfg.llm_model,
+        "small":   cfg.model_small,
+        "large":   cfg.model_large,
+        "default": cfg.llm_model,
     }
     return {k: v for k, v in pairs.items() if v}
 

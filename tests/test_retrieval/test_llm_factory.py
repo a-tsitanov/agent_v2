@@ -1,9 +1,10 @@
 """Role-keyed LLM factory tests.
 
-Confirms each wrapper pulls its configured model name from
-``LiteLLMSettings.model_for`` and that the legacy ``build_llm()``
-(no role) keeps reading ``llm_model`` so unmigrated callers are
-unaffected.
+Confirms each wrapper resolves its model name through the two-tier
+``LiteLLMSettings.model_for`` (role → tier → small/large physical
+model) and that the legacy ``build_llm()`` (no role) reads the
+``effective_base`` (small tier, or the deprecated ``llm_model`` alias
+when explicitly set) so unmigrated callers are unaffected.
 
 We patch ``OpenAILike`` so the tests don't try to open a network
 connection to LiteLLM — only the wiring is exercised.
@@ -14,14 +15,19 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 
-def _capture(monkeypatch, *, role_kwarg, env_model_var, env_model_value):
+def _capture(monkeypatch, *, role_kwarg, extra_env=None):
     """Patch OpenAILike, call ``build_llm(...)`` once, return the model
     name that the factory passed in."""
     captured: dict = {}
 
-    monkeypatch.setenv("LITELLM_LLM_MODEL", "default-model")
-    if env_model_var:
-        monkeypatch.setenv(env_model_var, env_model_value)
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "small-model")
+    monkeypatch.setenv("LITELLM_MODEL_LARGE", "large-model")
+    # Force-empty (not delenv): the tracked .env file may still carry a
+    # deprecated LITELLM_LLM_MODEL value that env_file would otherwise load.
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "")
+    monkeypatch.delenv("LITELLM_ROLE_TIERS", raising=False)
+    for k, v in (extra_env or {}).items():
+        monkeypatch.setenv(k, v)
 
     def _spy(*_a, **kw):
         captured.update(kw)
@@ -42,39 +48,30 @@ def _capture(monkeypatch, *, role_kwarg, env_model_var, env_model_value):
     return captured.get("model")
 
 
-def test_build_llm_no_role_uses_llm_model(monkeypatch):
-    """Legacy path: no role kwarg ⇒ LITELLM_LLM_MODEL."""
+def test_build_llm_no_role_uses_small_tier(monkeypatch):
+    """Legacy path: no role kwarg ⇒ small tier (effective_base)."""
+    model = _capture(monkeypatch, role_kwarg=None)
+    assert model == "small-model"
+
+
+def test_build_llm_no_role_honours_deprecated_alias(monkeypatch):
+    """Explicit LITELLM_LLM_MODEL still wins for the no-role path."""
     model = _capture(monkeypatch, role_kwarg=None,
-                     env_model_var=None, env_model_value=None)
-    assert model == "default-model"
+                     extra_env={"LITELLM_LLM_MODEL": "legacy-model"})
+    assert model == "legacy-model"
 
 
-def test_build_extraction_llm_uses_extraction_model(monkeypatch):
-    model = _capture(monkeypatch, role_kwarg="extraction",
-                     env_model_var="LITELLM_EXTRACTION_MODEL",
-                     env_model_value="ext-14b")
-    assert model == "ext-14b"
+def test_build_extraction_llm_uses_small_tier(monkeypatch):
+    assert _capture(monkeypatch, role_kwarg="extraction") == "small-model"
 
 
-def test_build_judge_llm_uses_judge_model(monkeypatch):
-    model = _capture(monkeypatch, role_kwarg="judge",
-                     env_model_var="LITELLM_JUDGE_MODEL",
-                     env_model_value="judge-3b")
-    assert model == "judge-3b"
+def test_build_judge_llm_uses_small_tier(monkeypatch):
+    assert _capture(monkeypatch, role_kwarg="judge") == "small-model"
 
 
-def test_build_search_llm_uses_search_model(monkeypatch):
-    model = _capture(monkeypatch, role_kwarg="search",
-                     env_model_var="LITELLM_SEARCH_MODEL",
-                     env_model_value="search-7b")
-    assert model == "search-7b"
+def test_build_search_llm_uses_small_tier(monkeypatch):
+    assert _capture(monkeypatch, role_kwarg="search") == "small-model"
 
 
-def test_role_factory_falls_back_to_llm_model(monkeypatch):
-    """Per-role wrapper falls back to LITELLM_LLM_MODEL when the
-    role-specific env var is empty — keeps single-model deployments
-    behaving identically after the refactor."""
-    # No LITELLM_EXTRACTION_MODEL set ⇒ should hit fallback.
-    model = _capture(monkeypatch, role_kwarg="extraction",
-                     env_model_var=None, env_model_value=None)
-    assert model == "default-model"
+def test_build_synthesis_llm_uses_large_tier(monkeypatch):
+    assert _capture(monkeypatch, role_kwarg="synthesis") == "large-model"

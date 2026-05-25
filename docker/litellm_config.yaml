@@ -9,22 +9,24 @@
 # the key here.
 
 model_list:
-  # Primary chat model.  gpt-4o-mini is the default — cheap, fast,
-  # 128k context, supports tool calling + structured outputs.
+  # LARGE tier (LITELLM_MODEL_LARGE).  gpt-4o-mini — cheap, fast,
+  # 128k context, supports tool calling + structured outputs.  Used
+  # only for the final answer synthesis role by default.
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
-  # Local Ollama model — proxied to the host ollama daemon.  Used for
-  # offline agent function-calling tests (set LITELLM_LLM_MODEL=gemma4:e4b).
+  # SMALL tier (LITELLM_MODEL_SMALL).  Local Ollama model proxied to
+  # the host ollama daemon — used for every high-volume role
+  # (extraction, judge, search, plan, …).
   - model_name: gemma4:e4b
     litellm_params:
       model: ollama_chat/gemma4:e4b
       api_base: http://host.docker.internal:11434
 
-  # Heavier fallback for harder multi-hop / reflective work.  Switch
-  # to it by changing LITELLM_LLM_MODEL=gpt-4o in the host `.env`.
+  # Heavier escalation target for harder multi-hop / reflective work.
+  # Point a tier at it via LITELLM_MODEL_LARGE=gpt-4o in the host `.env`.
   - model_name: gpt-4o
     litellm_params:
       model: openai/gpt-4o
@@ -65,5 +67,6 @@ litellm_settings:
 #
 # Either way, the fail-fast validator in src/observability/litellm_models.py
 # (called at API + worker startup) queries GET /v1/models and warns
-# loudly if any LITELLM_*_MODEL env points at a name not registered
-# in the proxy — catches the misconfig before the first ingest hits a 500.
+# loudly if LITELLM_MODEL_SMALL / LITELLM_MODEL_LARGE point at a name
+# not registered in the proxy — catches the misconfig before the first
+# ingest hits a 500.

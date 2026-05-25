@@ -8,6 +8,47 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R1] — 2026-05-25 — Two-tier model architecture
+
+### Added
+- `LiteLLMSettings.model_small` (default `gemma4:e4b`) and
+  `model_large` (default `gpt-4o-mini`) — the two physical model
+  tiers operators manage.
+- `LiteLLMSettings.role_tiers` (env `LITELLM_ROLE_TIERS`, JSON) —
+  declarative role→tier map, merged onto `_DEFAULT_ROLE_TIERS` so a
+  partial override (e.g. `{"plan":"large"}`) escalates one role
+  without re-declaring the rest.
+- `LiteLLMSettings.tier_for(role)` and `effective_base` property.
+- `LLMTier = Literal["small","large"]`; `LLMRole` extended with
+  `route`, `plan`, `retrieve`, `distill`, `coverage`, `synthesis`.
+- `src/retrieval/llm.py:build_synthesis_llm()` — final synthesis on
+  the large tier.
+
+### Changed
+- `LiteLLMSettings.model_for` now resolves `role → tier → one of the
+  two physical models` instead of reading per-role model fields.
+- **Behavior change**: default extraction/judge/search model is now
+  `gemma4:e4b` (small tier) instead of `qwen3:8b`.  Every role maps
+  to the small tier except `synthesis` → large (`gpt-4o-mini`).
+- `build_llm()` no-role path uses `effective_base` (small tier, or the
+  deprecated `llm_model` alias when explicitly set).
+- `src/observability/litellm_models.py` validates the two physical
+  models (small/large) rather than per-role names.
+- `src/api/routes/ingest.py` analytics `Model` snapshot now uses
+  `effective_base`.
+- `.env.example`, `docker/litellm_config.yaml`, `docs/MODELS.md`
+  rewritten for the two-tier model.
+
+### Removed
+- Per-role `extraction_model` / `judge_model` / `search_model` fields
+  on `LiteLLMSettings` and their `LITELLM_*_MODEL` env vars.
+
+### Notes
+- `LITELLM_LLM_MODEL` / `LiteLLMSettings.llm_model` kept as a
+  deprecated alias (defaults to `""`) so the legacy no-role
+  `build_llm()` path keeps working.  Remove once all callers pass a
+  role.
+
 ## [Search R0] — 2026-05-25 — Search package scaffold
 
 ### Added
