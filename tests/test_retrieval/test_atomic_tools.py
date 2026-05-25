@@ -45,13 +45,23 @@ class _StubGraphData:
 
 
 class _StubGraphRetriever:
-    def __init__(self, data):
+    def __init__(self, data, walk_data=None):
         self._data = data
+        self._walk_data = walk_data
         self.last_query = None
+        self.last_walk_kwargs = None
 
     async def aretrieve(self, query: str):
         self.last_query = query
         return self._data
+
+    async def awalk(self, start_entity, *, hops, rel_filter=None):
+        self.last_walk_kwargs = {
+            "start_entity": start_entity,
+            "hops": hops,
+            "rel_filter": rel_filter,
+        }
+        return self._walk_data
 
 
 class _StubChunkRepo:
@@ -180,6 +190,83 @@ async def test_find_neighbours_returns_entities_and_relations():
     assert len(parsed["relations"]) == 1
 
 
+# ── graph_walk ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_graph_walk_no_retriever_yields_empty():
+    r = await atomic_tools.graph_walk(None, start_entity="A")
+    assert r.sources == []
+    assert json.loads(r.observation) == {"entities": [], "relations": []}
+
+
+@pytest.mark.asyncio
+async def test_graph_walk_passes_hops_and_rel_filter_to_retriever():
+    walk = _StubGraphData(
+        entities=[{"entity_name": "A", "entity_type": "Person"},
+                  {"entity_name": "B", "entity_type": "Person"},
+                  {"entity_name": "C", "entity_type": "Person"}],
+        relations=[{"src_id": "A", "tgt_id": "B", "label": "KNOWS"},
+                   {"src_id": "B", "tgt_id": "C", "label": "KNOWS"}],
+        chunks=[],
+    )
+    stub = _StubGraphRetriever(None, walk_data=walk)
+    r = await atomic_tools.graph_walk(
+        stub, start_entity="A", hops=2, rel_filter=["KNOWS"],
+    )
+    # rel_filter + hops forwarded to the retriever's bounded walk.
+    assert stub.last_walk_kwargs["start_entity"] == "A"
+    assert stub.last_walk_kwargs["hops"] == 2
+    assert stub.last_walk_kwargs["rel_filter"] == ["KNOWS"]
+    parsed = json.loads(r.observation)
+    assert {e["entity_name"] for e in parsed["entities"]} == {"A", "B", "C"}
+
+
+@pytest.mark.asyncio
+async def test_graph_walk_clamps_hops_to_hard_max():
+    stub = _StubGraphRetriever(None, walk_data=_StubGraphData(chunks=[]))
+    await atomic_tools.graph_walk(stub, start_entity="A", hops=99)
+    assert stub.last_walk_kwargs["hops"] == atomic_tools.GRAPH_WALK_MAX_HOPS
+
+
+@pytest.mark.asyncio
+async def test_graph_walk_truncates_entities_to_node_cap():
+    cap = atomic_tools.GRAPH_WALK_MAX_NODES
+    big = _StubGraphData(
+        entities=[{"entity_name": f"E{i}", "entity_type": "Person"}
+                  for i in range(cap + 25)],
+        relations=[],
+        chunks=[],
+    )
+    stub = _StubGraphRetriever(None, walk_data=big)
+    r = await atomic_tools.graph_walk(stub, start_entity="A", hops=2)
+    parsed = json.loads(r.observation)
+    assert len(parsed["entities"]) == cap
+
+
+@pytest.mark.asyncio
+async def test_graph_walk_carries_chunks_as_sources():
+    chunk = _node("g1", "graph chunk", doc_id="d1")
+    walk = _StubGraphData(entities=[], relations=[], chunks=[chunk])
+    stub = _StubGraphRetriever(None, walk_data=walk)
+    r = await atomic_tools.graph_walk(stub, start_entity="A")
+    assert r.sources == [chunk]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_routes_to_graph_walk():
+    walk = _StubGraphData(
+        entities=[{"entity_name": "A", "entity_type": "Person"}],
+        relations=[], chunks=[],
+    )
+    stub = _StubGraphRetriever(None, walk_data=walk)
+    r = await atomic_tools.dispatch(
+        "graph_walk", {"start_entity": "A", "hops": 2},
+        graph_retriever=stub,
+    )
+    assert json.loads(r.observation)["entities"][0]["entity_name"] == "A"
+
+
 # ── get_chunks_by_doc_id ────────────────────────────────────────────
 
 
@@ -301,8 +388,8 @@ async def test_dispatch_vector_search_missing_retriever_raises():
 
 def test_tool_descriptions_cover_all_tools():
     expected = {
-        "vector_search", "graph_search", "find_entity_by_id",
-        "find_neighbours", "filter_by_metadata",
+        "vector_search", "graph_search", "graph_walk",
+        "find_entity_by_id", "find_neighbours", "filter_by_metadata",
         "get_chunks_by_doc_id", "read_full_document",
     }
     assert set(atomic_tools.TOOL_DESCRIPTIONS) == expected

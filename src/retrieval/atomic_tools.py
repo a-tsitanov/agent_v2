@@ -46,6 +46,14 @@ class RetrieverProtocol(Protocol):
 class GraphRetrieverProtocol(Protocol):
     async def aretrieve(self, query: str) -> Any: ...
 
+    async def awalk(
+        self,
+        start_entity: str,
+        *,
+        hops: int = 2,
+        rel_filter: list[str] | None = None,
+    ) -> Any: ...
+
 
 class ChunkRepositoryProtocol(Protocol):
     async def aget_chunks_by_doc_id(
@@ -75,6 +83,15 @@ class ToolResult:
 
     sources: list[NodeWithScore] = field(default_factory=list)
     observation: str = "{}"
+
+
+# ── bounded multi-hop walk caps (R3) ─────────────────────────────────
+# Tool-side mirror of the retriever caps. Clamp/truncation is applied
+# HERE too so the tool contract holds even against a stub/store that
+# ignores the Cypher LIMIT.
+GRAPH_WALK_MAX_HOPS = 3
+GRAPH_WALK_MAX_NODES = 50
+GRAPH_WALK_MAX_EDGES = 100
 
 
 # ── tools ────────────────────────────────────────────────────────────
@@ -121,6 +138,47 @@ async def graph_search(
     data = await graph_retriever.aretrieve(query)
     entities = getattr(data, "entities", []) or []
     relations = getattr(data, "relations", []) or []
+    chunks = list(getattr(data, "chunks", []) or [])
+    return ToolResult(
+        sources=chunks,
+        observation=json.dumps(
+            {"entities": entities, "relations": relations},
+            ensure_ascii=False,
+        ),
+    )
+
+
+async def graph_walk(
+    graph_retriever: GraphRetrieverProtocol | None,
+    *,
+    start_entity: str,
+    hops: int = 2,
+    rel_filter: list[str] | None = None,
+) -> ToolResult:
+    """Bounded multi-hop graph traversal from a known entity.
+
+    Unlike ``graph_search`` (similarity, path_depth=1), this follows the
+    actual relationships outward up to ``hops`` (clamped to
+    ``GRAPH_WALK_MAX_HOPS``). Use for connection / chain questions —
+    "who is connected to X (transitively)", "what links X and Y" —
+    where one hop isn't enough.
+
+    HARD CAPS (never returns unbounded results): at most
+    ``GRAPH_WALK_MAX_NODES`` entities and ``GRAPH_WALK_MAX_EDGES``
+    relations. Clamp + truncation are enforced here in addition to the
+    Cypher LIMIT so the contract holds regardless of the backing store.
+    """
+    if graph_retriever is None:
+        return ToolResult(
+            sources=[],
+            observation=json.dumps({"entities": [], "relations": []}),
+        )
+    safe_hops = max(1, min(int(hops), GRAPH_WALK_MAX_HOPS))
+    data = await graph_retriever.awalk(
+        start_entity, hops=safe_hops, rel_filter=rel_filter,
+    )
+    entities = (getattr(data, "entities", []) or [])[:GRAPH_WALK_MAX_NODES]
+    relations = (getattr(data, "relations", []) or [])[:GRAPH_WALK_MAX_EDGES]
     chunks = list(getattr(data, "chunks", []) or [])
     return ToolResult(
         sources=chunks,
@@ -318,6 +376,17 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "connected ('кто связан с', 'связь между X и Y', 'чьи', 'с "
         "кем'). This is the primary tool for entity/relation questions."
     ),
+    "graph_walk": (
+        "Bounded MULTI-HOP graph traversal from a known entity "
+        "(start_entity), following real relationships up to `hops` "
+        "(max 3). PREFER over graph_search when one hop isn't enough: "
+        "transitive connection / chain questions ('как связаны X и Y', "
+        "'кто стоит за X через цепочку', 'все, кто связан с X на "
+        "несколько шагов'). Optional rel_filter restricts to given "
+        "relation labels. Results are hard-capped (≤50 entities) so it "
+        "never blows up context — anchor on a real entity name first "
+        "(via find_entity_by_id / graph_search)."
+    ),
     "find_entity_by_id": (
         "Exact graph lookup by canonical identifier (phone in E.164, "
         "INN, email, exact name). Use FIRST whenever the question "
@@ -352,6 +421,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
 TOOL_FUNCTIONS = {
     "vector_search": vector_search,
     "graph_search": graph_search,
+    "graph_walk": graph_walk,
     "find_entity_by_id": find_entity_by_id,
     "find_neighbours": find_neighbours,
     "filter_by_metadata": filter_by_metadata,
@@ -415,6 +485,8 @@ async def dispatch(
         return await vector_search(retriever, **tool_kwargs)
     if tool_name == "graph_search":
         return await graph_search(graph_retriever, **tool_kwargs)
+    if tool_name == "graph_walk":
+        return await graph_walk(graph_retriever, **tool_kwargs)
     if tool_name == "find_entity_by_id":
         return await find_entity_by_id(graph_retriever, **tool_kwargs)
     if tool_name == "find_neighbours":

@@ -8,6 +8,36 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R3] — 2026-05-26 — Multi-hop graph_walk tool
+
+### Added
+- `graph_walk(start_entity, hops=2, rel_filter=None)` atomic tool
+  (`src/retrieval/atomic_tools.py`) — EXPLICIT, BOUNDED multi-hop graph
+  traversal. Registered in `TOOL_FUNCTIONS`, `TOOL_DESCRIPTIONS`, and
+  `dispatch()` exactly like the sibling graph tools; returns the same
+  serialized `{"entities", "relations"}` observation + chunk `sources`.
+- `GraphRetriever.awalk()` (`src/graph/retriever.py`) — N-hop backend:
+  one bounded Cypher query (`MATCH (e {name:$name})-[r*1..hops]-(m)` with
+  a `rel_filter` `WHERE` clause + `LIMIT $node_cap`) via the store's
+  `structured_query`, with an APOC-free fallback. `hops` clamped and
+  interpolated as a vetted int; row mapping re-applies the caps.
+- Hard caps `GRAPH_WALK_MAX_HOPS=3`, `GRAPH_WALK_MAX_NODES=50`,
+  `GRAPH_WALK_MAX_EDGES=100` (mirrored tool-side + retriever-side) so a
+  multi-hop walk can never blow up the agent's context window.
+- `ALLOWED_TOOLS` on the R2 retrieve path
+  (`src/workflow/search/activities/retrieve.py`) now lists `graph_walk`
+  as dispatchable via the same `graph_retriever` DI.
+- `graph_walk` section in `docs/SEARCH.md` (purpose, caps, when used).
+
+### Notes
+- Default `graph_search` (similarity, `path_depth=1`) behaviour and tests
+  are UNCHANGED; `awalk` is a separate method, not a change to
+  `aretrieve`.
+- `graph_walk` is NOT in the default deterministic `_PIPELINE` — it needs
+  an explicit `start_entity` (a real entity name), which belongs to a
+  future connection-aware planner / LLM tool-pick step. Dispatch wiring +
+  caps are in place; the tool description documents WHEN to pick it.
+
 ## [Search R2] — 2026-05-26 — Plan-execute orchestrator + /search/local
 
 ### Added

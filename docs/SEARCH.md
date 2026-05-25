@@ -58,6 +58,42 @@ The legacy ReAct `SearchWorkflow` + `/api/v1/search` stay UNTOUCHED and
 remain the default until cutover (parity window). Both flows share the
 `kb-search-small` task queue (see `docs/QUEUES.md`).
 
+### Multi-hop traversal: `graph_walk` (R3)
+
+`graph_walk` is an EXPLICIT, BOUNDED multi-hop graph tool, distinct from
+the default `graph_search` (which stays similarity-based, `path_depth=1`,
+UNCHANGED). Use it for connection / chain questions where one hop isn't
+enough — "who is connected to X transitively", "что/кто связывает X и Y
+через цепочку".
+
+- **Signature**: `graph_walk(start_entity, hops=2, rel_filter=None)`.
+  `start_entity` is a real entity name (anchor via `find_entity_by_id` /
+  `graph_search` first); `rel_filter` restricts to given relationship
+  labels at the QUERY level (empty ⇒ all types).
+- **Backend**: `GraphRetriever.awalk()` issues ONE bounded Cypher query
+  via the store's `structured_query` — `MATCH (e {name:$name})-[r*1..hops]-(m)`
+  with a `WHERE`-clause `rel_filter`, a server-side `LIMIT $node_cap`, and
+  an APOC-free fallback path. `hops` is clamped and interpolated as a
+  vetted int (Neo4j can't parametrise a var-length bound); everything else
+  is a proper param.
+- **Hard caps (never unbounded)**: `hops ≤ GRAPH_WALK_MAX_HOPS` (3),
+  `≤ GRAPH_WALK_MAX_NODES` (50) entities, `≤ GRAPH_WALK_MAX_EDGES` (100)
+  relations. Clamp + truncation are enforced BOTH in the Cypher and again
+  in the tool / retriever row-mapping, so the contract holds even against a
+  store that ignores the LIMIT. This is what keeps multi-hop from blowing
+  up the agent's context window.
+- **Returns** the same serialized shape as the other graph tools:
+  `{"entities": [...], "relations": [...]}` in the observation, related
+  chunks as `sources`.
+- **Wiring**: registered in `atomic_tools` (`TOOL_FUNCTIONS`,
+  `TOOL_DESCRIPTIONS`, `dispatch()`) and dispatchable on the R2 retrieve
+  path via the same `graph_retriever` DI (see `ALLOWED_TOOLS` in
+  `retrieve.py`). It is NOT in the default deterministic `_PIPELINE`
+  because it needs an explicit `start_entity` — that belongs to a future
+  connection-aware planner / LLM tool-pick step. The tool description
+  (`TOOL_DESCRIPTIONS["graph_walk"]`) documents WHEN an LLM should pick it
+  vs `graph_search`.
+
 ### Config knobs (R2)
 - `AGENT_MAX_SUBQUERIES` (`AgentSettings.max_subqueries`, default 5) —
   caps the parallel sub-query fan-out.

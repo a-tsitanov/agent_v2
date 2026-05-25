@@ -26,7 +26,21 @@ from src.workflow.contracts import RetrieveParams, RetrieveResult
 # Deterministic tool pipeline for one sub-question.  Vector first
 # (always available), then graph (skipped gracefully if Neo4j is down —
 # atomic_tools.graph_search returns empty for a None retriever).
+#
+# graph_walk (bounded multi-hop, R3) is registered in atomic_tools and
+# dispatchable on this path via the same graph_retriever DI — it is NOT
+# in the default deterministic pipeline because it needs an explicit
+# `start_entity` (a real entity name), which only an LLM tool-pick step
+# can supply. When R3's connection-aware planner lands, add "graph_walk"
+# to a per-sub-question pipeline keyed on questions classified as
+# multi-hop/connection ('как связаны', 'через цепочку'); the dispatch
+# wiring + caps are already in place here.
 _PIPELINE = ("vector_search", "graph_search")
+
+# Tools this deterministic activity is ALLOWED to dispatch (default
+# pipeline + the explicitly-bounded multi-hop walk available for the
+# connection-aware path). Kept as the contract surface for R3 wiring.
+ALLOWED_TOOLS = ("vector_search", "graph_search", "graph_walk")
 
 
 @activity.defn
