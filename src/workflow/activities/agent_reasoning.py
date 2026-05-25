@@ -18,11 +18,17 @@ from __future__ import annotations
 import time
 
 from llama_index.core.tools import FunctionTool
+from pydantic import BaseModel
 from temporalio import activity
 
+from src.retrieval.atomic_tools import build_tool_schema
 from src.workflow._search_deps import get_search_llm
 from src.workflow._search_serde import serialized_to_message
 from src.workflow.contracts import AgentDecision, ReasoningParams
+
+
+class _NoArgs(BaseModel):
+    """Empty arg schema for no-parameter tools (submit_answer)."""
 
 
 def _stub_tool(name: str, description: str) -> FunctionTool:
@@ -31,8 +37,17 @@ def _stub_tool(name: str, description: str) -> FunctionTool:
             f"stub tool {name!r} must not be executed in-process — "
             "workflow dispatches via tool_execution activity",
         )
+    # Without an explicit schema the stub advertises only **kwargs, so
+    # the LLM emits empty/garbage args and dispatch() blows up.
+    # build_tool_schema derives the real param schema from the
+    # atomic-tool signatures; None ⇒ no-arg terminator (submit_answer),
+    # for which we still need an *empty* schema (not the **kwargs
+    # fallback, which would make a bogus ``kw`` arg required).
     return FunctionTool.from_defaults(
-        fn=_never_called, name=name, description=description,
+        fn=_never_called,
+        name=name,
+        description=description,
+        fn_schema=build_tool_schema(name) or _NoArgs,
     )
 
 

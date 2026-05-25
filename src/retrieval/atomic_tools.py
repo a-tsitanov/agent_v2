@@ -24,12 +24,14 @@ serialise on the GPU automatically.
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from llama_index.core.schema import NodeWithScore, TextNode
 from loguru import logger
+from pydantic import BaseModel
 
 from src.retrieval._common import deduplicate_nodes
 
@@ -333,6 +335,53 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "doc cases."
     ),
 }
+
+
+# ── tool functions + parameter schemas (single source of truth) ────
+
+
+TOOL_FUNCTIONS = {
+    "vector_search": vector_search,
+    "graph_search": graph_search,
+    "find_entity_by_id": find_entity_by_id,
+    "find_neighbours": find_neighbours,
+    "filter_by_metadata": filter_by_metadata,
+    "get_chunks_by_doc_id": get_chunks_by_doc_id,
+    "read_full_document": read_full_document,
+}
+
+
+def _injected_params(fn: Any) -> list[str]:
+    """Names of the DI-injected dependency args.
+
+    Every tool function takes its dependency (retriever / graph_retriever
+    / chunk_repository / accumulated_sources) as a *positional* parameter
+    before the ``*`` separator; the LLM-facing args are keyword-only.
+    So the positional params are exactly what the LLM must NOT see.
+    """
+    return [
+        p.name
+        for p in inspect.signature(fn).parameters.values()
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+
+
+def build_tool_schema(name: str) -> type[BaseModel] | None:
+    """Pydantic schema of the LLM-facing kwargs for ``name``.
+
+    Derived from the real function signature (keyword-only params), so
+    the function-calling prompt advertises ``query`` / ``top_k`` / …
+    instead of an empty ``**kwargs`` blob.  Returns ``None`` for tools
+    with no registered function (e.g. the ``submit_answer`` terminator).
+    """
+    from llama_index.core.tools.utils import create_schema_from_function
+
+    fn = TOOL_FUNCTIONS.get(name)
+    if fn is None:
+        return None
+    return create_schema_from_function(
+        name, fn, ignore_fields=_injected_params(fn),
+    )
 
 
 # ── dispatcher (used by Stage 1's tool_execution activity) ──────────
