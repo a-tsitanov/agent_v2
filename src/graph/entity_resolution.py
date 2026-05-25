@@ -525,11 +525,17 @@ async def _llm_judge_pairs(
     pairs: list[tuple[_Item, _Item]], llm: Any, cfg: ERConfig,
 ) -> list[bool]:
     """For each input pair, return True when LLM judges SAME, else
-    False (DIFFERENT, UNSURE, or any failure)."""
+    False (DIFFERENT, UNSURE, or any failure).
+
+    Batches are dispatched concurrently; the process-wide BoundedLLM
+    semaphore (src/retrieval/llm_semaphore.py) caps real parallelism.
+    """
     if not pairs:
         return []
     verdicts: list[bool] = [False] * len(pairs)
-    for batch_start in range(0, len(pairs), cfg.judge_batch):
+    batch_offsets = list(range(0, len(pairs), cfg.judge_batch))
+
+    async def _judge_one(batch_start: int) -> tuple[int, list[bool]]:
         batch = pairs[batch_start: batch_start + cfg.judge_batch]
         body = _format_pair_prompt(batch)
         messages = [
@@ -544,8 +550,12 @@ async def _llm_judge_pairs(
                 "ER judge batch failed at offset={o}: {err}",
                 o=batch_start, err=exc,
             )
-            continue
-        for verdict_pos, ok in enumerate(_parse_judge_response(text, len(batch))):
+            return batch_start, [False] * len(batch)
+        return batch_start, list(_parse_judge_response(text, len(batch)))
+
+    results = await asyncio.gather(*[_judge_one(o) for o in batch_offsets])
+    for batch_start, oks in results:
+        for verdict_pos, ok in enumerate(oks):
             if ok:
                 verdicts[batch_start + verdict_pos] = True
     return verdicts
