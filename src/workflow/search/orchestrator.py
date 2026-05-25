@@ -23,7 +23,6 @@ import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
@@ -38,15 +37,9 @@ with workflow.unsafe.imports_passed_through():
         SynthesizeResult,
     )
     from src.workflow.search._merge import merge_subquery_sources
+    from src.workflow.search._retry import FAST_RETRY
 
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
-
-_FAST_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=1),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(seconds=30),
-    maximum_attempts=3,
-)
 
 
 @workflow.defn
@@ -82,7 +75,7 @@ class SearchOrchestratorWorkflow:
             result_type=PlanResult,
             start_to_close_timeout=timedelta(minutes=2),
             schedule_to_close_timeout=timedelta(minutes=10),
-            retry_policy=_FAST_RETRY,
+            retry_policy=FAST_RETRY,
         )
         subquestions = plan.subquestions or [params.query]
         self._state["n_subqueries"] = len(subquestions)
@@ -96,8 +89,6 @@ class SearchOrchestratorWorkflow:
                 SubQueryParams(
                     subquestion=sub,
                     top_k=params.top_k,
-                    distill_enabled=params.distill_enabled,
-                    distill_min_chars=params.distill_min_chars,
                 ),
                 id=f"{workflow.info().workflow_id}-sub-{i}",
                 result_type=SubQueryResult,
@@ -132,6 +123,9 @@ class SearchOrchestratorWorkflow:
             "synthesize_answer",
             SynthesizeParams(
                 query=params.query,
+                # Synthesizer-tier selector: "simple" picks the plain
+                # ResponseSynthesizer branch in synthesize_answer (the
+                # user-facing label is "local", set on SearchOutcome below).
                 mode="simple",
                 accumulated=merged,
                 max_refinements=params.max_refinements,
@@ -140,14 +134,14 @@ class SearchOrchestratorWorkflow:
             result_type=SynthesizeResult,
             start_to_close_timeout=timedelta(minutes=5),
             schedule_to_close_timeout=timedelta(minutes=15),
-            retry_policy=_FAST_RETRY,
+            retry_policy=FAST_RETRY,
         )
 
         self._state["phase"] = "done"
         latency_ms = int((workflow.now() - t_start).total_seconds() * 1000)
         return SearchOutcome(
             query=params.query,
-            mode="simple",
+            mode="local",
             answer=synth.text,
             sources=merged,
             step_stats=step_stats,

@@ -15,7 +15,6 @@ from __future__ import annotations
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
@@ -25,14 +24,7 @@ with workflow.unsafe.imports_passed_through():
         SubQueryResult,
     )
     from src.workflow.search._merge import dedup_by_chunk_id
-
-
-_FAST_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=1),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(seconds=30),
-    maximum_attempts=3,
-)
+    from src.workflow.search._retry import FAST_RETRY
 
 
 @workflow.defn
@@ -49,13 +41,11 @@ class SubQueryRetrievalWorkflow:
             RetrieveParams(
                 subquestion=params.subquestion,
                 top_k=params.top_k,
-                distill_enabled=params.distill_enabled,
-                distill_min_chars=params.distill_min_chars,
             ),
             result_type=RetrieveResult,
             start_to_close_timeout=timedelta(minutes=3),
             schedule_to_close_timeout=timedelta(minutes=10),
-            retry_policy=_FAST_RETRY,
+            retry_policy=FAST_RETRY,
         )
 
         # Dedup by chunk_id — vector + graph can return the same chunk.

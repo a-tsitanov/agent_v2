@@ -21,7 +21,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 GraphStatus = Literal["completed", "vector_only"]
 WikibaseStatus = Literal["ok", "skipped", "failed"]
-SearchMode = Literal["simple", "agent", "selfrag"]
+# "local" is the R2 plan-execute path (SearchOrchestratorWorkflow);
+# "simple"/"agent"/"selfrag" are the legacy ReAct SearchWorkflow modes.
+SearchMode = Literal["simple", "agent", "selfrag", "local"]
 
 
 class _Frozen(BaseModel):
@@ -424,10 +426,6 @@ class RetrieveParams(_Frozen):
 
     subquestion: str
     top_k: int = 10
-    # Distillation knobs propagated from AgentSettings at submit time so
-    # the activity never reads env at runtime (mirrors SearchParams).
-    distill_enabled: bool = False
-    distill_min_chars: int = 1500
 
 
 class RetrieveResult(_Frozen):
@@ -445,8 +443,6 @@ class SubQueryParams(_Frozen):
 
     subquestion: str
     top_k: int = 10
-    distill_enabled: bool = False
-    distill_min_chars: int = 1500
 
 
 class SubQueryResult(_Frozen):
@@ -464,12 +460,6 @@ class OrchestratorParams(_Frozen):
     max_subqueries: int = 5
     top_k: int = 10
     max_refinements: int = 3
-    request_id: str = ""
-    distill_enabled: bool = False
-    distill_min_chars: int = 1500
-    # Analytics (same shape as SearchParams so Search Attributes flow).
-    version_tag: str = "unspecified"
-    env: str = ""
 
 
 class SearchOutcome(_Frozen):
