@@ -8,6 +8,18 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R0] — 2026-05-25 — Search package scaffold
+
+### Added
+- `src/workflow/search/` package (+ `activities/` subpackage) — skeleton
+  for decomposing the monolithic `search_workflow.py` into an
+  orchestrator + per-mode child workflows (Plan #2, agentic-search).
+- `docs/SEARCH.md` — search subsystem overview + target workflows/endpoints.
+
+### Notes
+- No behavior change: the legacy `SearchWorkflow` and its endpoints are
+  untouched. New workflows land behind flags/new endpoints in later phases.
+
 ## [R1] — 2026-05-11 — Model migration to qwen3:8b
 
 ### Changed
