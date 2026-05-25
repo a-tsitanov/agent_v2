@@ -309,23 +309,16 @@ def _extract_kpp(text: str) -> list[NormalizedIdentifier]:
 # the same text — a bare 20-digit shape is far too ambiguous (collides
 # with IBAN-inner digit runs, order numbers, etc.).
 #
-# We must distinguish a customer *расчётный счёт* (balance section
-# ``407…``, ``408…``, etc.) from a *корреспондентский счёт* (корсчёт,
-# balance section ``301…``).  Both are 20 digits, but only the former is
-# the entity we want to canonicalize as a BankAccount.  The RU control
-# key (last 3 of BIC + account, weights (7,1,3) mod 10 == 0) is the
-# authoritative validator — when an account passes it against any BIC in
-# the text we accept it outright.  When it does NOT pass (common with
-# redacted/synthetic account bodies), we fall back to the balance-section
-# rule: accept customer sections, but never the ``301`` correspondent
-# section.  Either path rejects the корсчёт.
+# A 20-digit run is emitted as a BankAccount ONLY when it satisfies the
+# RU control key against a BIC present in the same text: weighted sum of
+# (BIC last-3 + 20-digit account) by repeating (7,1,3) coefficients must
+# be 0 mod 10.  This checksum is the whole point of the type — it rejects
+# random 20-digit runs, IBAN-inner digit spans, and корреспондентские
+# счета (корсчёт), whose control is computed against a different BIC tail
+# and therefore fails this settlement-account validation.
 
 _ACCOUNT_RE = re.compile(r"(?<!\d)(\d{20})(?!\d)")
 _ACCOUNT_WEIGHTS = (7, 1, 3) * 8  # 24 weights — first 23 are used
-# Balance-account first-3-digit sections that are NOT customer accounts:
-# 301 = correspondent accounts (корсчета).  Extend if other non-customer
-# sections surface as false positives in the corpus.
-_NON_CUSTOMER_SECTIONS: frozenset[str] = frozenset({"301"})
 
 
 def _account_control_ok(account: str, bic_tail: str) -> bool:
@@ -339,20 +332,12 @@ def _extract_bank_accounts(text: str) -> list[NormalizedIdentifier]:
     out: list[NormalizedIdentifier] = []
     bic_tails = [m.group(0)[-3:] for m in _BIC_RE.finditer(text)]
     if not bic_tails:
-        # No BIC to anchor on — bare 20-digit shape is too ambiguous.
+        # No BIC to anchor on — a bare 20-digit shape is too ambiguous,
+        # and without a BIC there is nothing to validate the control key.
         return out
     for m in _ACCOUNT_RE.finditer(text):
         account = m.group(1)
-        control_ok = any(
-            _account_control_ok(account, tail) for tail in bic_tails
-        )
-        # The RU control key (BIC last-3 + account, weights (7,1,3)) is
-        # the authoritative validator: a control-valid account is always
-        # accepted.  When the control fails (frequent with redacted or
-        # synthetic account bodies in real corpora), fall back to the
-        # balance-section rule — accept any customer section but never a
-        # correspondent account (корсчёт, balance section ``301``).
-        if not control_ok and account[:3] in _NON_CUSTOMER_SECTIONS:
+        if not any(_account_control_ok(account, tail) for tail in bic_tails):
             continue
         out.append(
             NormalizedIdentifier(
