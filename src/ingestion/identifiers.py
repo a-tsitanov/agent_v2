@@ -285,7 +285,10 @@ def _extract_bic(text: str) -> list[NormalizedIdentifier]:
 
 # ── KPP (РФ: 9 chars — 4 digits, 2 alnum reason code, 3 digits) ──────
 
-_KPP_RE = re.compile(r"(?<!\d)(\d{4}[0-9A-Z]{2}\d{3})(?!\d)")
+# Lookarounds exclude adjacent letters too (not just digits) so the
+# 9-char shape can't be sliced out of a longer mixed alphanumeric token
+# (e.g. a serial like ``1234XY567`` embedded in ``AB1234XY567CD``).
+_KPP_RE = re.compile(r"(?<![0-9A-Za-z])(\d{4}[0-9A-Z]{2}\d{3})(?![0-9A-Za-z])")
 
 
 def _extract_kpp(text: str) -> list[NormalizedIdentifier]:
