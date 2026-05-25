@@ -184,3 +184,170 @@ async def test_orchestrator_atomic_single_child(monkeypatch):
     assert out.answer == "ATOMIC ANSWER"
     assert len(out.step_stats) == 1
     assert [n.chunk_id for n in out.sources] == ["only"]
+
+
+# ── coverage gate (R4) ─────────────────────────────────────────────
+
+
+def _orch_activities_with_coverage(cov_results, retrieve_calls, synth_calls):
+    """Build plan/retrieve/coverage/synth stubs sharing call-trackers."""
+
+    @activity.defn(name="plan_subquestions")
+    async def _plan(params: PlanParams) -> PlanResult:
+        return PlanResult(subquestions=[params.query])
+
+    @activity.defn(name="retrieve_subquestion")
+    async def _retrieve(params: RetrieveParams) -> RetrieveResult:
+        retrieve_calls.append(params.subquestion)
+        # gap question retrieves a fresh chunk; base question another.
+        cid = "gap" if params.subquestion == "MISSING TOPIC" else "base"
+        return RetrieveResult(subquestion=params.subquestion,
+                              sources=[_node(cid)])
+
+    @activity.defn(name="coverage_check")
+    async def _coverage(params) -> "CoverageResult":
+        from src.workflow.contracts import CoverageResult
+        return cov_results.pop(0)
+
+    @activity.defn(name="synthesize_answer")
+    async def _synth(params: SynthesizeParams) -> SynthesizeResult:
+        synth_calls.append([n.chunk_id for n in params.accumulated])
+        return SynthesizeResult(text="ANSWER")
+
+    return [_plan, _retrieve, _coverage, _synth]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_coverage_gap_runs_one_extra_subquery():
+    """coverage returns complete=False+missing → exactly ONE extra
+    sub-question runs, its sources merge in, then synthesize once."""
+    from src.workflow.contracts import CoverageResult
+
+    retrieve_calls: list[str] = []
+    synth_calls: list[list[str]] = []
+    acts = _orch_activities_with_coverage(
+        cov_results=[CoverageResult(complete=False, missing="MISSING TOPIC")],
+        retrieve_calls=retrieve_calls, synth_calls=synth_calls,
+    )
+
+    client = await _connect()
+    queue = f"orch-cov-{uuid.uuid4()}"
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+        activities=acts,
+    ):
+        out = await client.execute_workflow(
+            SearchOrchestratorWorkflow.run,
+            OrchestratorParams(query="base q", max_coverage_rounds=1),
+            id=f"orch-{uuid.uuid4()}", task_queue=queue,
+        )
+    # base sub-question + exactly one coverage sub-question ("MISSING TOPIC").
+    assert retrieve_calls == ["base q", "MISSING TOPIC"]
+    # merged pool has both chunks; synthesize called exactly once over them.
+    assert synth_calls == [["base", "gap"]]
+    assert sorted(n.chunk_id for n in out.sources) == ["base", "gap"]
+    # step-stats: one base child + one coverage child.
+    assert len(out.step_stats) == 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_coverage_complete_no_extra_round():
+    """coverage complete=True → NO extra sub-question, synth once."""
+    from src.workflow.contracts import CoverageResult
+
+    retrieve_calls: list[str] = []
+    synth_calls: list[list[str]] = []
+    acts = _orch_activities_with_coverage(
+        cov_results=[CoverageResult(complete=True, missing="")],
+        retrieve_calls=retrieve_calls, synth_calls=synth_calls,
+    )
+
+    client = await _connect()
+    queue = f"orch-cov-{uuid.uuid4()}"
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+        activities=acts,
+    ):
+        out = await client.execute_workflow(
+            SearchOrchestratorWorkflow.run,
+            OrchestratorParams(query="base q", max_coverage_rounds=1),
+            id=f"orch-{uuid.uuid4()}", task_queue=queue,
+        )
+    assert retrieve_calls == ["base q"]  # no extra round
+    assert synth_calls == [["base"]]
+    assert len(out.step_stats) == 1
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_coverage_fail_open_on_activity_error():
+    """coverage_check raises → NO extra round, synth proceeds (no raise)."""
+
+    @activity.defn(name="plan_subquestions")
+    async def _plan(params: PlanParams) -> PlanResult:
+        return PlanResult(subquestions=[params.query])
+
+    @activity.defn(name="retrieve_subquestion")
+    async def _retrieve(params: RetrieveParams) -> RetrieveResult:
+        return RetrieveResult(subquestion=params.subquestion,
+                              sources=[_node("base")])
+
+    @activity.defn(name="coverage_check")
+    async def _coverage(params):
+        raise RuntimeError("boom")
+
+    synth_calls: list[int] = []
+
+    @activity.defn(name="synthesize_answer")
+    async def _synth(params: SynthesizeParams) -> SynthesizeResult:
+        synth_calls.append(len(params.accumulated))
+        return SynthesizeResult(text="ANSWER")
+
+    client = await _connect()
+    queue = f"orch-cov-{uuid.uuid4()}"
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+        activities=[_plan, _retrieve, _coverage, _synth],
+    ):
+        out = await client.execute_workflow(
+            SearchOrchestratorWorkflow.run,
+            OrchestratorParams(query="base q", max_coverage_rounds=1),
+            id=f"orch-{uuid.uuid4()}", task_queue=queue,
+        )
+    assert out.answer == "ANSWER"
+    assert synth_calls == [1]  # synthesized over the base source, no extra
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_coverage_bounded_to_max_rounds():
+    """Gap persists but max_coverage_rounds=1 → at most ONE extra round."""
+    from src.workflow.contracts import CoverageResult
+
+    retrieve_calls: list[str] = []
+    synth_calls: list[list[str]] = []
+    # Two consecutive gaps offered; the bound must stop after the first.
+    acts = _orch_activities_with_coverage(
+        cov_results=[
+            CoverageResult(complete=False, missing="MISSING TOPIC"),
+            CoverageResult(complete=False, missing="MISSING TOPIC"),
+        ],
+        retrieve_calls=retrieve_calls, synth_calls=synth_calls,
+    )
+
+    client = await _connect()
+    queue = f"orch-cov-{uuid.uuid4()}"
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+        activities=acts,
+    ):
+        await client.execute_workflow(
+            SearchOrchestratorWorkflow.run,
+            OrchestratorParams(query="base q", max_coverage_rounds=1),
+            id=f"orch-{uuid.uuid4()}", task_queue=queue,
+        )
+    # base + exactly ONE coverage round (second gap never acted upon).
+    assert retrieve_calls == ["base q", "MISSING TOPIC"]
+    assert len(synth_calls) == 1

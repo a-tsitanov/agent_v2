@@ -46,6 +46,8 @@ async def search_local(req: SearchRequest) -> SearchResponse:
                     query=req.query,
                     max_subqueries=settings.agent.max_subqueries,
                     top_k=req.top_k,
+                    coverage_check_enabled=settings.agent.coverage_check_enabled,
+                    max_coverage_rounds=settings.agent.max_coverage_rounds,
                 ),
                 id=f"search-local-{request_id}",
                 task_queue=settings.temporal.search_task_queue,

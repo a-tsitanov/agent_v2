@@ -411,6 +411,14 @@ class AgentSettings(BaseSettings):
     # submit_answer is accepted unconditionally (caps extra LLM calls +
     # guarantees termination alongside max_iterations).
     max_coverage_checks: int = Field(default=1, ge=0, le=5)
+    # Plan-execute flow (R4): after the orchestrator merges all
+    # sub-question sources, it runs ONE coverage_check (reusing
+    # ``coverage_check_enabled`` above).  On a named gap it issues the
+    # gap as ONE extra SubQueryRetrievalWorkflow, re-merges, then
+    # synthesizes.  Bounds the number of such extra rounds (and the
+    # extra LLM + retrieval cost) — distinct from the ReAct loop's
+    # ``max_coverage_checks`` so the two paths tune independently.
+    max_coverage_rounds: int = Field(default=1, ge=0, le=3)
     # R10: legacy judge-based agentic_search remains in the codebase
     # as a comparative baseline for R9 eval.  Routed under
     # `/api/v1/legacy/agent` only when this flag is true.  Default

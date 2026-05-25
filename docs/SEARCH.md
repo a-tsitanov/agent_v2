@@ -94,9 +94,55 @@ enough — "who is connected to X transitively", "что/кто связывае
   (`TOOL_DESCRIPTIONS["graph_walk"]`) documents WHEN an LLM should pick it
   vs `graph_search`.
 
+### Coverage gate (R4)
+
+After the orchestrator merges all sub-question sources (and before the
+single `synthesize_answer`), it runs ONE small-tier `coverage_check`
+(the SAME activity the legacy ReAct `SearchWorkflow` uses — reused, not
+re-implemented) asking whether the gathered evidence FULLY covers the
+question. On a verdict of `complete=False` with a non-empty `missing`
+gap, the orchestrator issues that gap as ONE extra
+`SubQueryRetrievalWorkflow` (deterministic child id `…-cov-1`), merges
+its sources back into the pool (dedup by chunk_id), records an extra
+step-stat, then synthesizes. This adds the gap-detection the plain
+fan-out otherwise lacks for multi-part questions.
+
+```
+          merge + dedup by chunk_id
+                    │
+                    ▼  coverage_check  (small "coverage" model)
+            complete? ──yes──▶ synthesize
+                    │ no + named gap (and round budget left)
+                    ▼
+            SubQueryRetrievalWorkflow(gap)  (child, id …-cov-N)
+                    │
+            re-merge + dedup  ─▶ (re-check, bounded) ─▶ synthesize
+```
+
+- **Bounded**: at most `AgentSettings.max_coverage_rounds` (default 1)
+  extra sub-questions — no infinite loop even if a gap persists.
+- **FAIL-OPEN**: ANY error in the coverage check OR the extra retrieval
+  round → proceed straight to synthesis. A flaky completeness call can
+  never block the answer. (The `coverage_check` activity is itself
+  fail-open, returning `complete=True` on its own internal errors.)
+- **Decision logic** lives in pure, Temporal-free helpers
+  (`src/workflow/search/_coverage.py`: `should_run_coverage_round`,
+  `build_evidence`) so the gap/complete/bound branching is unit-tested
+  without a live Temporal env.
+- **Legacy path unchanged**: the ReAct `SearchWorkflow` keeps its own
+  coverage gate (gap fed back into the reasoning history, bounded by
+  `max_coverage_checks`) — a SEPARATE mechanism from the orchestrator's
+  "gap → extra sub-question".
+
 ### Config knobs (R2)
 - `AGENT_MAX_SUBQUERIES` (`AgentSettings.max_subqueries`, default 5) —
   caps the parallel sub-query fan-out.
+- `AGENT_COVERAGE_CHECK_ENABLED` (`AgentSettings.coverage_check_enabled`,
+  default true) — gates the orchestrator coverage check (R4); REUSED
+  from the legacy ReAct knob.
+- `AGENT_MAX_COVERAGE_ROUNDS` (`AgentSettings.max_coverage_rounds`,
+  default 1) — caps the orchestrator's extra coverage sub-question
+  rounds (R4); distinct from the ReAct `max_coverage_checks`.
 - `TEMPORAL_SEARCH_TASK_QUEUE` (default `kb-search-small`) — queue
   hosting both the legacy ReAct workflow and the new orchestrator +
   sub-query child.

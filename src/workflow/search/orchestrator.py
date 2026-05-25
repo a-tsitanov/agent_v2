@@ -27,6 +27,8 @@ from temporalio import workflow
 with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
         AgenticStepStatDict,
+        CoverageParams,
+        CoverageResult,
         OrchestratorParams,
         PlanParams,
         PlanResult,
@@ -35,6 +37,10 @@ with workflow.unsafe.imports_passed_through():
         SubQueryResult,
         SynthesizeParams,
         SynthesizeResult,
+    )
+    from src.workflow.search._coverage import (
+        build_evidence,
+        should_run_coverage_round,
     )
     from src.workflow.search._merge import merge_subquery_sources
     from src.workflow.search._retry import FAST_RETRY
@@ -116,6 +122,79 @@ class SearchOrchestratorWorkflow:
             )
             for i, r in enumerate(child_results)
         ]
+
+        # ── 3b. coverage gate (R4) ──────────────────────────────────
+        # After merging all sub-question sources, ask the small-tier
+        # coverage_check whether the evidence FULLY covers the question.
+        # On a named gap (and round budget left) issue the gap as ONE
+        # extra SubQueryRetrievalWorkflow, re-merge its sources into the
+        # pool (dedup by chunk_id), and decrement the budget.  Bounded by
+        # ``max_coverage_rounds``.  FAIL-OPEN: any error in the check or
+        # the extra round → proceed straight to synthesis (never block
+        # the answer).
+        rounds_left = params.max_coverage_rounds
+        cov_round = 0
+        while params.coverage_check_enabled and rounds_left > 0:
+            self._state["phase"] = f"coverage_check_{cov_round + 1}"
+            try:
+                cov: CoverageResult = await workflow.execute_activity(
+                    "coverage_check",
+                    CoverageParams(
+                        query=params.query,
+                        evidence=build_evidence(merged),
+                    ),
+                    result_type=CoverageResult,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    schedule_to_close_timeout=timedelta(minutes=10),
+                    retry_policy=FAST_RETRY,
+                )
+                gap = should_run_coverage_round(cov, rounds_left)
+            except Exception as exc:
+                # Fail-open: a flaky coverage call must never block the
+                # answer — drop straight through to synthesis.
+                log.warning(
+                    "orchestrator  coverage_check err=%s — fail-open", exc,
+                )
+                break
+
+            if gap is None:
+                log.info("orchestrator  coverage complete — synthesize")
+                break
+
+            # Named gap → one extra sub-question round.
+            cov_round += 1
+            rounds_left -= 1
+            self._state["phase"] = "retrieve_coverage"
+            log.info(
+                "orchestrator  coverage gap (round %d) → %s",
+                cov_round, gap[:120],
+            )
+            try:
+                extra: SubQueryResult = await workflow.execute_child_workflow(
+                    SubQueryRetrievalWorkflow.run,
+                    SubQueryParams(subquestion=gap, top_k=params.top_k),
+                    id=f"{workflow.info().workflow_id}-cov-{cov_round}",
+                    result_type=SubQueryResult,
+                )
+            except Exception as exc:
+                # Fail-open: extra retrieval failed → keep what we have.
+                log.warning(
+                    "orchestrator  coverage round err=%s — fail-open", exc,
+                )
+                break
+
+            merged = merge_subquery_sources([merged, extra.sources])
+            self._state["n_sources"] = len(merged)
+            step_stats.append(AgenticStepStatDict(
+                step=len(step_stats) + 1,
+                tool_name="subquery_retrieval",
+                tool_args={"subquestion": gap, "coverage_round": cov_round},
+                observation_summary=f"{len(extra.sources)} sources (coverage)",
+            ))
+            log.info(
+                "orchestrator  re-merged %d sources after coverage round %d",
+                len(merged), cov_round,
+            )
 
         # ── 4. synthesize once (large model) ────────────────────────
         self._state["phase"] = "synthesize"

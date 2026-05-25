@@ -460,6 +460,11 @@ class OrchestratorParams(_Frozen):
     max_subqueries: int = 5
     top_k: int = 10
     max_refinements: int = 3
+    # Pre-synthesis coverage gate (R4) — resolved from AgentSettings at
+    # submit time and propagated here so the workflow never reads env at
+    # runtime (replay-safe).  Defaults mirror AgentSettings.
+    coverage_check_enabled: bool = True
+    max_coverage_rounds: int = 1
 
 
 class SearchOutcome(_Frozen):

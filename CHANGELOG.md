@@ -8,6 +8,39 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R4] — 2026-05-26 — Coverage gate on orchestrator
+
+### Added
+- Bounded coverage round on `SearchOrchestratorWorkflow`
+  (`src/workflow/search/orchestrator.py`): after merging all
+  sub-question sources (and before the single `synthesize_answer`), the
+  orchestrator runs ONE `coverage_check` — REUSING the existing
+  small-tier activity (`src/workflow/activities/coverage_check.py`,
+  already registered via `SEARCH_ACTIVITIES` on the search worker), not
+  a re-implementation. On `complete=False` with a named `missing` gap it
+  issues that gap as ONE extra `SubQueryRetrievalWorkflow` (child id
+  `…-cov-N`), re-merges its sources (dedup by chunk_id), records an
+  extra step-stat, then synthesizes.
+- Pure, Temporal-free gate helpers (`src/workflow/search/_coverage.py`):
+  `should_run_coverage_round(result, rounds_left) -> str | None` and
+  `build_evidence(sources, max_chars)` — unit-tested for the gap /
+  complete / empty-gap / bound branches without a live Temporal env.
+- `AgentSettings.max_coverage_rounds` (`AGENT_MAX_COVERAGE_ROUNDS`,
+  default 1) capping the orchestrator's extra rounds; the existing
+  `coverage_check_enabled` knob is REUSED to gate the check.
+  `OrchestratorParams` carries both (resolved at submit time in
+  `search_v2.py` → replay-safe).
+- Coverage-gate section in `docs/SEARCH.md`.
+
+### Notes
+- FAIL-OPEN: any error in the coverage check OR the extra retrieval
+  round → proceed straight to synthesis (never blocks the answer).
+- Bounded by `max_coverage_rounds` (default 1) — at most one extra
+  sub-question even if a gap persists, so the loop always terminates.
+- The legacy ReAct `SearchWorkflow` coverage path (gap fed back into the
+  reasoning history, bounded by `max_coverage_checks`) is UNCHANGED — a
+  separate mechanism from the orchestrator's "gap → extra sub-question".
+
 ## [Search R3] — 2026-05-26 — Multi-hop graph_walk tool
 
 ### Added
