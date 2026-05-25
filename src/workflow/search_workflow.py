@@ -34,6 +34,8 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
         AgentDecision,
         AgenticStepStatDict,
+        CoverageParams,
+        CoverageResult,
         DistillParams,
         DistillResult,
         ReasoningParams,
@@ -58,6 +60,10 @@ _FAST_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=3,
 )
+
+# Cap on evidence (joined distilled observations) sent to the
+# coverage check, so a long session can't overflow that LLM call.
+_COVERAGE_EVIDENCE_MAX_CHARS = 12000
 
 
 _SYSTEM_PROMPT = """\
@@ -183,6 +189,7 @@ class SearchWorkflow:
             ]
             last_sig: str = ""
             repeat_count = 0
+            coverage_checks_used = 0
 
             for step_i in range(1, params.max_iterations + 1):
                 self._state["phase"] = f"reasoning_step_{step_i}"
@@ -200,6 +207,44 @@ class SearchWorkflow:
                              step_i)
                     break
                 if decision.tool_name == "submit_answer":
+                    # Pre-submit coverage gate: before finishing, check the
+                    # gathered evidence actually covers the whole question.
+                    # If a gap is named (and we have retries + iterations
+                    # left), feed it back and run one more round instead of
+                    # answering early.  Bounded so it always terminates.
+                    if (
+                        params.coverage_check_enabled
+                        and coverage_checks_used < params.max_coverage_checks
+                        and step_i < params.max_iterations
+                    ):
+                        coverage_checks_used += 1
+                        self._state["phase"] = f"coverage_check_{step_i}"
+                        evidence = "\n\n".join(
+                            f"[{m.name}] {m.content}"
+                            for m in messages if m.role == "tool"
+                        )[:_COVERAGE_EVIDENCE_MAX_CHARS]
+                        cov: CoverageResult = await workflow.execute_activity(
+                            "coverage_check",
+                            CoverageParams(query=params.query, evidence=evidence),
+                            result_type=CoverageResult,
+                            start_to_close_timeout=timedelta(minutes=2),
+                            schedule_to_close_timeout=timedelta(minutes=10),
+                            retry_policy=_FAST_RETRY,
+                        )
+                        if not cov.complete and cov.missing:
+                            log.info(
+                                "search_workflow  step=%d coverage gap → %s",
+                                step_i, cov.missing[:120],
+                            )
+                            messages.append(SerializedMessage(
+                                role="user",
+                                content=(
+                                    "Before finishing: the answer is still "
+                                    f"missing — {cov.missing}. Retrieve that "
+                                    "with a tool, then call submit_answer."
+                                ),
+                            ))
+                            continue
                     log.info("search_workflow  step=%d submit_answer", step_i)
                     break
 

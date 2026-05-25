@@ -247,6 +247,9 @@ class SearchParams(_Frozen):
     distill_enabled: bool = True
     distill_min_chars: int = 1500
     observation_max_chars: int = 6000
+    # Pre-submit coverage check knobs (mirror AgentSettings).
+    coverage_check_enabled: bool = True
+    max_coverage_checks: int = 1
     # Analytics: same shape as IngestParams so the same Search
     # Attributes (VersionTag, Model, Env, …) propagate to Temporal.
     version_tag: str = "unspecified"
@@ -322,6 +325,31 @@ class DistillResult(_Frozen):
 
     distilled: str
     relevance: Relevance = "partial"
+
+
+class CoverageParams(_Frozen):
+    """Input to the ``coverage_check`` activity.
+
+    Asks whether the evidence gathered so far is enough to FULLY answer
+    the query (all its parts) before the agent is allowed to finish.
+    """
+
+    query: str
+    evidence: str
+
+
+class CoverageResult(_Frozen):
+    """Output of ``coverage_check``.
+
+    ``complete`` — is the gathered evidence sufficient to fully answer?
+    ``missing`` — when not complete, a short description of what still
+    needs to be retrieved (drives one more loop iteration).  Fail-open:
+    on any doubt/parse failure the activity returns ``complete=True`` so
+    a flaky check can never trap the agent.
+    """
+
+    complete: bool = True
+    missing: str = ""
 
 
 class SynthesizeParams(_Frozen):

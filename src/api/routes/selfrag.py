@@ -52,6 +52,8 @@ async def search_selfrag(req: SelfRAGSearchRequest) -> SearchResponse:
                     distill_enabled=settings.agent.distill_enabled,
                     distill_min_chars=settings.agent.distill_min_chars,
                     observation_max_chars=settings.agent.observation_max_chars,
+                    coverage_check_enabled=settings.agent.coverage_check_enabled,
+                    max_coverage_checks=settings.agent.max_coverage_checks,
                 ),
                 id=f"search-{request_id}",
                 task_queue=settings.temporal.search_task_queue,

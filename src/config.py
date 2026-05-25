@@ -331,6 +331,15 @@ class AgentSettings(BaseSettings):
     # reasoning history — backstop even when distillation is off or the
     # distilled text is still long.
     observation_max_chars: int = Field(default=6000, ge=500)
+    # Pre-submit coverage check: when the agent picks submit_answer, an
+    # LLM first judges whether the gathered evidence fully covers the
+    # question; if not, the named gap is fed back and one more retrieval
+    # round runs.  Adds the gap-detection plain `agent` mode lacks.
+    coverage_check_enabled: bool = True
+    # How many times the coverage check may bounce the agent back before
+    # submit_answer is accepted unconditionally (caps extra LLM calls +
+    # guarantees termination alongside max_iterations).
+    max_coverage_checks: int = Field(default=1, ge=0, le=5)
     # R10: legacy judge-based agentic_search remains in the codebase
     # as a comparative baseline for R9 eval.  Routed under
     # `/api/v1/legacy/agent` only when this flag is true.  Default
