@@ -203,3 +203,63 @@ schedules synthesis on a dedicated large-tier queue.
   the heavyweight synthesis model isn't dogpiled by parallel sessions.
 - `TEMPORAL_RERANK_TOP_N` (`TemporalSettings.rerank_top_n`, default 5) —
   bge cross-encoder top-N for the unified graph+vector rerank pass.
+
+### Offline community build (R6)
+
+**Fully decoupled / offline** — community detection + summarisation runs
+on its own `kb-graph-build` queue, NEVER on the query hot path. It exists
+to pre-compute the building blocks for a future **global search** mode
+(answers over the whole corpus, not just retrieved chunks).
+
+Pipeline (`CommunityBuildWorkflow`, `src/workflow/search/community_wf.py`):
+
+1. **detect** (`detect_communities_activity` → `src/graph/communities.py`)
+   — projects the `__Entity__` sub-graph into an in-memory GDS graph
+   (Cypher projection, handles the KG extractor's arbitrary relationship
+   types), runs **GDS Leiden** (`gds.leiden.stream`), groups members by
+   `communityId`, drops communities below `min_size`, and idempotently
+   MERGEs `:Community {id, level, member_count}` nodes with
+   `(:__Entity__)-[:IN_COMMUNITY]->(:Community)` links. Drops the
+   transient projection on the way out. **Fail-safe**: any GDS/Cypher
+   error (or no store) → `[]`, never raised through the activity.
+2. **summarize** (`summarize_community_activity`) — for each community,
+   reads its members' descriptions + inter-member relations and produces a
+   short Russian summary via the **small-tier** LLM (`build_llm("retrieve")`
+   — never the large synthesis model), persisted on `:Community.summary`
+   (idempotent MERGE). Fan-out is bounded by
+   `community_summary_parallelism`.
+
+**`:Community` schema** (additive — no existing label/property touched):
+- Label `:Community`; props `id` (Leiden communityId), `level` (0 for the
+  single-level R6 pass), `member_count`, `summary`, `updated`,
+  `summarized_at`.
+- Relationship `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`.
+- Unique constraint `community_key` on `(id, level)` backs the MERGE.
+
+**Trigger**: admin endpoint `POST /api/v1/admin/communities/rebuild`
+(requires `X-API-Key`) starts the workflow and returns its id. A Temporal
+Schedule/cron can call the same workflow — the repo has no Schedule wired
+yet (see `docs/QUEUES.md`). The query path (orchestrator / local search)
+is **unchanged**; nothing in the query path reads `:Community` yet.
+
+> **GDS note**: the exact `gds.graph.project` / `gds.leiden.stream` /
+> `gds.graph.drop` Cypher is written per the Neo4j GDS 2.x API but is
+> **unverified against a live GDS install** — there is no Neo4j/GDS in the
+> dev sandbox, so all tests mock the store + GDS rows. Validate the Cypher
+> against the live GDS version before relying on it in production. All
+> GDS/Cypher strings are isolated as constants at the top of
+> `src/graph/communities.py` to make that fix a one-file change.
+
+### Config knobs (R6)
+- `TEMPORAL_GRAPH_BUILD_TASK_QUEUE`
+  (`TemporalSettings.graph_build_task_queue`, default `kb-graph-build`) —
+  dedicated offline queue for the community build.
+- `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY`
+  (`TemporalSettings.graph_build_activity_concurrency`, default 2) — low
+  cap so a rebuild's summary burst doesn't flood the small-tier proxy.
+- `TEMPORAL_COMMUNITY_SUMMARY_PARALLELISM`
+  (`TemporalSettings.community_summary_parallelism`, default 4) — bounded
+  per-community summarize fan-out inside the workflow.
+- `TEMPORAL_COMMUNITY_MIN_SIZE`
+  (`TemporalSettings.community_min_size`, default 3) — communities smaller
+  than this are ignored (noise / disconnected pairs).

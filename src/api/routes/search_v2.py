@@ -23,7 +23,8 @@ from src.config import settings
 from src.models.search import SearchRequest, SearchResponse, SourceCitation
 from src.observability.trace import trace_request
 from src.workflow.client import get_temporal_client
-from src.workflow.contracts import OrchestratorParams
+from src.workflow.contracts import DetectCommunitiesParams, OrchestratorParams
+from src.workflow.search.community_wf import CommunityBuildWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 
 router = APIRouter(tags=["search"])
@@ -77,4 +78,41 @@ async def search_local(req: SearchRequest) -> SearchResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/admin/communities/rebuild",
+    dependencies=[Depends(require_api_key)],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Trigger offline graph-community build (GDS Leiden + summaries)",
+)
+async def rebuild_communities() -> dict[str, str]:
+    """Start the OFFLINE ``CommunityBuildWorkflow`` on ``kb-graph-build``.
+
+    Fully decoupled from the query path: detects graph communities (GDS
+    Leiden) and generates a small-tier batch summary per community.  Fire-
+    and-forget — returns the workflow id immediately (the build runs for
+    minutes).  Idempotent: re-running refreshes summaries / membership on
+    the existing ``:Community`` nodes rather than duplicating them.
+    """
+    request_id = uuid.uuid4().hex
+    try:
+        client = await get_temporal_client()
+        handle = await client.start_workflow(
+            CommunityBuildWorkflow.run,
+            DetectCommunitiesParams(
+                min_size=settings.temporal.community_min_size,
+                level=0,
+            ),
+            id=f"community-build-{request_id}",
+            task_queue=settings.temporal.graph_build_task_queue,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        )
+        return {"workflow_id": handle.id, "status": "started"}
+    except Exception as exc:
+        logger.exception("rebuild_communities failed to start")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Community build failed to start: {exc}",
         ) from exc

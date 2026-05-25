@@ -41,7 +41,11 @@ from src.workflow.activities import (
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
-from src.workflow.search.activities import SEARCH_V2_ACTIVITIES
+from src.workflow.search.activities import (
+    GRAPH_BUILD_ACTIVITIES,
+    SEARCH_V2_ACTIVITIES,
+)
+from src.workflow.search.community_wf import CommunityBuildWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 from src.workflow.search_workflow import SearchWorkflow
@@ -156,10 +160,29 @@ async def _run() -> None:
         lgq=settings.temporal.large_task_queue,
         lgc=settings.temporal.large_activity_concurrency,
     )
+    # Offline graph-community build (Search R6) lives on its OWN dedicated
+    # queue so the heavy GDS Leiden projection + per-community batch
+    # summaries are fully DECOUPLED from the query hot path.  Hosts the
+    # CommunityBuildWorkflow + its detect/summarize activities; concurrency
+    # is kept low (TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY) so a rebuild
+    # doesn't flood the small-tier LLM proxy.  Triggered by the admin
+    # endpoint (and an optional Temporal Schedule) — never by a search.
+    graph_build_worker = Worker(
+        client,
+        task_queue=settings.temporal.graph_build_task_queue,
+        workflows=[CommunityBuildWorkflow],
+        activities=GRAPH_BUILD_ACTIVITIES,
+        max_concurrent_activities=settings.temporal.graph_build_activity_concurrency,
+    )
+    logger.info(
+        "temporal worker  graph_build_queue={gbq}  graph_build_concurrency={gbc}",
+        gbq=settings.temporal.graph_build_task_queue,
+        gbc=settings.temporal.graph_build_activity_concurrency,
+    )
 
     await asyncio.gather(
         main_worker.run(), llm_worker.run(), search_worker.run(),
-        large_worker.run(),
+        large_worker.run(), graph_build_worker.run(),
     )
 
 

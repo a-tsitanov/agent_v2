@@ -8,6 +8,48 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R6] — 2026-05-26 — Offline community build (GDS Leiden + summaries)
+
+### Added
+- `src/graph/communities.py` — `detect_communities(store, *, min_size, level)`
+  runs Neo4j **GDS Leiden** over the `__Entity__` sub-graph (Cypher
+  projection → `gds.leiden.stream` → group by `communityId`), drops
+  communities below `min_size`, and idempotently MERGEs
+  `:Community {id, level, member_count}` nodes linked to members via
+  `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`. All GDS/Cypher isolated as
+  module constants for easy fix-against-live. Fail-safe: any GDS/store
+  error → `[]` (logged, never raised).
+- `src/workflow/search/activities/community.py` —
+  `detect_communities_activity` (wraps detection) and
+  `summarize_community_activity` (small-tier `build_llm("retrieve")`
+  summary per community, persisted on `:Community.summary` via idempotent
+  MERGE; fail-safe per community).
+- `src/workflow/search/community_wf.py` — `CommunityBuildWorkflow`:
+  detect → bounded-parallel summarize fan-out → done. Pure
+  `build_summarize_specs` helper for Temporal-free unit testing.
+- Dedicated **`kb-graph-build`** task queue + a separate `Worker` pool in
+  `src/workflow/worker.py` hosting the workflow + its activities — fully
+  DECOUPLED from the query hot path.
+- Admin endpoint `POST /api/v1/admin/communities/rebuild`
+  (`src/api/routes/search_v2.py`) — starts `CommunityBuildWorkflow` on
+  `kb-graph-build`, returns the workflow id. Optional Temporal
+  Schedule/cron documented in `docs/QUEUES.md` (none wired yet).
+- `TemporalSettings`: `graph_build_task_queue` (default `kb-graph-build`),
+  `graph_build_activity_concurrency` (2), `community_summary_parallelism`
+  (4), `community_min_size` (3). New contracts: `CommunityRef`,
+  `DetectCommunitiesParams/Result`, `SummarizeCommunityParams/Result`,
+  `CommunityBuildResult`.
+
+### Notes
+- Additive / offline only — the query path (orchestrator + local search)
+  is UNCHANGED; nothing on the query path reads `:Community` yet. Summaries
+  are written for a future global-search phase.
+- The GDS Cypher (`gds.graph.project` / `gds.leiden.stream` /
+  `gds.graph.drop`) is written per the Neo4j GDS 2.x API but is
+  **UNVERIFIED against a live GDS install** — no Neo4j/GDS in the dev
+  sandbox, so all tests mock the store + GDS rows. Validate against the
+  live GDS version before production use.
+
 ## [Search R5] — 2026-05-26 — Large-tier synthesis queue + unified rerank
 
 ### Added

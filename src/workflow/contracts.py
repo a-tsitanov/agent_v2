@@ -498,3 +498,67 @@ class SearchOutcome(_Frozen):
     uncertainties: list[ReflectiveUncertaintyDict] = Field(default_factory=list)
     refinement_rounds: int = 0
     latency_ms: int = 0
+
+
+# ── offline community build (Search R6) ─────────────────────────────
+
+
+class CommunityRef(_Frozen):
+    """One detected community — the cross-activity handle the workflow
+    fans out over for summarisation.  ``members`` are entity NAMES (the
+    ``__Entity__.name`` primary key used everywhere else in the graph).
+    """
+
+    community_id: int
+    level: int = 0
+    members: list[str] = Field(default_factory=list)
+
+    @property
+    def member_count(self) -> int:
+        return len(self.members)
+
+
+class DetectCommunitiesParams(_Frozen):
+    """Input to ``detect_communities_activity`` — GDS Leiden detection.
+
+    ``min_size`` drops communities below the threshold (noise); ``level``
+    tags the written ``:Community`` nodes (single-level for R6, kept for a
+    future hierarchical pass).
+    """
+
+    min_size: int = 3
+    level: int = 0
+
+
+class DetectCommunitiesResult(_Frozen):
+    """Output of ``detect_communities_activity`` — the communities to
+    summarise.  Empty on any GDS / store error (fail-safe)."""
+
+    communities: list[CommunityRef] = Field(default_factory=list)
+
+
+class SummarizeCommunityParams(_Frozen):
+    """Input to ``summarize_community_activity`` — summarise ONE
+    community's members (+ their inter-member relations) via the small
+    tier and persist on ``:Community.summary``."""
+
+    community_id: int
+    level: int = 0
+    members: list[str] = Field(default_factory=list)
+
+
+class SummarizeCommunityResult(_Frozen):
+    """Output of ``summarize_community_activity`` — the summary text and
+    whether it was persisted.  ``summary`` is empty on any error."""
+
+    community_id: int
+    summary: str = ""
+    persisted: bool = False
+
+
+class CommunityBuildResult(_Frozen):
+    """Final ``CommunityBuildWorkflow`` output — counts only (the data
+    lives on the ``:Community`` nodes in Neo4j)."""
+
+    detected: int = 0
+    summarized: int = 0

@@ -242,6 +242,22 @@ class TemporalSettings(BaseSettings):
     # before the (expensive) large-tier synthesis.
     rerank_top_n: int = 5
 
+    # Offline graph-community build (Search R6) — GDS Leiden detection +
+    # per-community batch summarisation.  Runs on its OWN dedicated queue
+    # so the heavy GDS projection + batch summary work NEVER touches the
+    # query hot path; an admin endpoint (and an optional Temporal Schedule)
+    # is the only trigger.  Concurrency is intentionally LOW: summaries use
+    # the small tier but there can be many communities, and we don't want
+    # to flood the LLM proxy with a burst from a single rebuild.
+    graph_build_task_queue: str = "kb-graph-build"
+    graph_build_activity_concurrency: int = 2
+    # Bounded parallelism for the per-community summarize fan-out inside
+    # CommunityBuildWorkflow (independent of the worker-side activity cap).
+    community_summary_parallelism: int = 4
+    # Communities smaller than this are ignored (too small to summarise
+    # meaningfully — likely noise / disconnected pairs).
+    community_min_size: int = 3
+
     @property
     def target(self) -> str:
         return f"{self.host}:{self.port}"

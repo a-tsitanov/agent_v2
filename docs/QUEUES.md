@@ -10,6 +10,46 @@ own task queue so GPU / LLM pressure can be capped independently.
 | `llm_task_queue` | `kb-ingest-llm` | `GraphBuildWorkflow` + `extract_kg` / `merge_and_resolve` / `build_property_graph` | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (1) |
 | `search_task_queue` | `kb-search-small` | `SearchWorkflow` (legacy ReAct) **and** `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` (R2 plan-execute) + their activities (plan / retrieve / coverage_check / **rerank_sources**) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
 | `large_task_queue` | `kb-search-large` | `synthesize_answer` ONLY (final large-tier synthesis, Search R5) — activities-only Worker, no workflows | `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) |
+| `graph_build_task_queue` | `kb-graph-build` | `CommunityBuildWorkflow` + `detect_communities_activity` / `summarize_community_activity` (OFFLINE GDS-Leiden community build, Search R6) | `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY` (2) |
+
+## Offline graph-community build queue: `kb-graph-build` (Search R6)
+
+Fully **decoupled / offline** — this queue is NEVER touched on the query
+hot path. The worker process hosts a dedicated `Worker` pool on
+`kb-graph-build` (same process, same Temporal client) running
+`CommunityBuildWorkflow` and its two activities:
+
+- `detect_communities_activity` — runs Neo4j **GDS Leiden** over the
+  `__Entity__` sub-graph (Cypher projection → `gds.leiden.stream`),
+  groups members by `communityId`, drops communities below
+  `TEMPORAL_COMMUNITY_MIN_SIZE` (3), and idempotently MERGEs
+  `:Community {id, level, member_count}` nodes linked to their members via
+  `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`.
+- `summarize_community_activity` — for one community, summarises its
+  members (+ inter-member relations) via the **small-tier** LLM
+  (`build_llm("retrieve")`) and persists the result on
+  `:Community.summary` (idempotent MERGE). Batchable; the workflow fans
+  out one call per community with bounded parallelism
+  (`TEMPORAL_COMMUNITY_SUMMARY_PARALLELISM`, default 4).
+
+**Triggers** (no query path):
+- Admin endpoint `POST /api/v1/admin/communities/rebuild` (primary) —
+  starts the workflow on `kb-graph-build`, returns the workflow id.
+- Optional **Temporal Schedule** — the repo does not yet configure any
+  Temporal Schedule, so this is currently a manual/admin-triggered build.
+  To run it on a cron, create a Schedule (e.g. via `tctl schedule create`
+  or `client.create_schedule`) that starts `CommunityBuildWorkflow` on
+  `kb-graph-build` with a `DetectCommunitiesParams(min_size=…)` input.
+
+**Idempotent / incremental**: re-running refreshes summaries and
+membership on the existing `:Community` nodes (MERGE keyed on
+`(id, level)`) — it never duplicates communities. The query path is
+unchanged; these summaries are written for a future global-search phase.
+
+**Concurrency**: kept low (`TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY`,
+default 2) so a rebuild's summary burst doesn't flood the small-tier LLM
+proxy. **Operator action on upgrade**: restart the worker so it polls the
+new `kb-graph-build` queue.
 
 ## Model tier ↔ queue mapping
 
