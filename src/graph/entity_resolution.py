@@ -726,7 +726,9 @@ def _verdict_key(a, b) -> str:
     left = (a.norm, a.label)
     right = (b.norm, b.label)
     lo, hi = sorted([left, right])
-    return f"{lo[1]}:{lo[0]}|{hi[1]}:{hi[0]}"
+    # JSON join (not an f-string with ':'/'|' separators) so a norm/label
+    # containing a delimiter char cannot collide with a different pair.
+    return json.dumps([lo, hi], ensure_ascii=False, sort_keys=True)
 
 
 def _partition_cached(pairs, cache):
@@ -776,6 +778,12 @@ def _store_verdicts(store, entries: dict[str, bool]) -> None:
     if store is None or not entries:
         return
     try:
+        # Idempotent: backs the MERGE and prevents duplicate :ERVerdict
+        # nodes under concurrent writes; also indexes the IN-list load.
+        store.structured_query(
+            "CREATE CONSTRAINT er_verdict_key IF NOT EXISTS "
+            "FOR (v:ERVerdict) REQUIRE v.key IS UNIQUE"
+        )
         store.structured_query(
             "UNWIND $rows AS row MERGE (v:ERVerdict {key: row.key}) "
             "SET v.same = row.same, v.updated = datetime()",
