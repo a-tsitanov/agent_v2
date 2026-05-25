@@ -315,7 +315,9 @@ class DistillResult(_Frozen):
 
     ``distilled`` is the compact, query-focused text that goes into the
     agent's reasoning history (bounding context growth).  ``relevance``
-    gates whether this step's sources are kept in the accumulator.
+    is advisory only — recorded in step stats and reflected in the
+    history note; it does NOT drop sources from the accumulator (full
+    sources always reach the synthesizer to avoid fact loss).
     """
 
     distilled: str

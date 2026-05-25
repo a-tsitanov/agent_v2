@@ -320,8 +320,9 @@ class AgentSettings(BaseSettings):
     # Observation distillation (R11): between tool_execution and the
     # next reasoning step, large tool observations are passed through a
     # one-shot LLM that extracts only query-relevant facts and grades
-    # relevance.  Bounds reasoning-context growth on big corpora and
-    # gates the accumulator (CRAG-lite).  Full nodes still feed synth.
+    # relevance.  Bounds reasoning-context growth on big corpora.  The
+    # relevance verdict is advisory (history note + stats); full nodes
+    # ALWAYS reach the synthesizer, so distillation never loses facts.
     distill_enabled: bool = True
     # Only distil observations larger than this (chars) — small ones
     # aren't worth the extra LLM call.

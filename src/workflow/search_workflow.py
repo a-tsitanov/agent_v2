@@ -266,9 +266,12 @@ class SearchWorkflow:
                     : params.observation_max_chars
                 ]
 
-                # Gate the accumulator on relevance (CRAG-lite): clearly
-                # irrelevant results don't pollute the synthesizer context.
-                if tool_result.sources_added and relevance != "irrelevant":
+                # Relevance gates only the agent's working memory (the
+                # distilled history note above), NOT the accumulator: full
+                # sources are ALWAYS kept so a mis-graded "irrelevant" can
+                # never drop a fact from the synthesizer's context.  Worst
+                # case the synth sees an extra chunk it can ignore.
+                if tool_result.sources_added:
                     accumulated.extend(tool_result.sources_added)
                     # Dedup by chunk_id — same chunk may surface from
                     # multiple tools (vector + graph_search returning

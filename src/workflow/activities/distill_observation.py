@@ -6,13 +6,15 @@ returns:
 
 * ``distilled`` — only the query-relevant facts, compact, so the
   agent's reasoning history stops growing unbounded on big corpora.
-* ``relevance`` — relevant / partial / irrelevant, used by the
-  workflow to gate the accumulator (CRAG-lite): clearly irrelevant
-  results don't pollute the synthesizer's context.
+* ``relevance`` — relevant / partial / irrelevant.  Advisory only:
+  recorded in step stats and reflected in the agent's history note so
+  it knows a path was a dead end.  It does NOT drop sources from the
+  accumulator.
 
 The full ``NodeWithScore`` sources are kept separately in the
-workflow accumulator, so distillation never costs the final answer
-detail — it only trims the agent's working memory.
+workflow accumulator (always, regardless of relevance), so
+distillation never costs the final answer detail — it only trims the
+agent's working memory.
 
 Output is parsed from a delimited text format (not strict JSON) — a
 small local model holds a ``RELEVANCE: ...`` first line + bullets far
