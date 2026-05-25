@@ -317,6 +317,19 @@ class AgentSettings(BaseSettings):
     # Reflective synthesis (R8): how many draft → critique → retrieve
     # → redraft rounds the synthesizer attempts.
     max_refinements: int = Field(default=3, ge=0, le=10)
+    # Observation distillation (R11): between tool_execution and the
+    # next reasoning step, large tool observations are passed through a
+    # one-shot LLM that extracts only query-relevant facts and grades
+    # relevance.  Bounds reasoning-context growth on big corpora and
+    # gates the accumulator (CRAG-lite).  Full nodes still feed synth.
+    distill_enabled: bool = True
+    # Only distil observations larger than this (chars) — small ones
+    # aren't worth the extra LLM call.
+    distill_min_chars: int = Field(default=1500, ge=0)
+    # Hard cap (chars) on any single observation written into the
+    # reasoning history — backstop even when distillation is off or the
+    # distilled text is still long.
+    observation_max_chars: int = Field(default=6000, ge=500)
     # R10: legacy judge-based agentic_search remains in the codebase
     # as a comparative baseline for R9 eval.  Routed under
     # `/api/v1/legacy/agent` only when this flag is true.  Default

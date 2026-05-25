@@ -241,6 +241,12 @@ class SearchParams(_Frozen):
     max_iterations: int = 8
     max_refinements: int = 3
     request_id: str = ""
+    # Observation distillation knobs, resolved from AgentSettings at
+    # submit time and propagated here so the workflow never reads env
+    # at runtime (replay-safe).  Defaults mirror AgentSettings.
+    distill_enabled: bool = True
+    distill_min_chars: int = 1500
+    observation_max_chars: int = 6000
     # Analytics: same shape as IngestParams so the same Search
     # Attributes (VersionTag, Model, Env, …) propagate to Temporal.
     version_tag: str = "unspecified"
@@ -289,6 +295,33 @@ class ToolCallResult(_Frozen):
     error: str = ""  # non-empty if the tool failed, empty on success
 
 
+Relevance = Literal["relevant", "partial", "irrelevant"]
+
+
+class DistillParams(_Frozen):
+    """Input to the ``distill_observation`` activity.
+
+    Carries the raw (large) tool observation plus the user query so the
+    distiller can extract only query-relevant facts and grade relevance.
+    """
+
+    query: str
+    tool_name: str
+    observation: str
+
+
+class DistillResult(_Frozen):
+    """Output of ``distill_observation``.
+
+    ``distilled`` is the compact, query-focused text that goes into the
+    agent's reasoning history (bounding context growth).  ``relevance``
+    gates whether this step's sources are kept in the accumulator.
+    """
+
+    distilled: str
+    relevance: Relevance = "partial"
+
+
 class SynthesizeParams(_Frozen):
     """Input to the ``synthesize_answer`` activity."""
 
@@ -322,6 +355,7 @@ class AgenticStepStatDict(_Frozen):
     tool_name: str
     tool_args: dict[str, Any] = Field(default_factory=dict)
     observation_summary: str = ""
+    relevance: str = ""  # distiller verdict: relevant/partial/irrelevant
 
 
 class SearchOutcome(_Frozen):

@@ -17,6 +17,7 @@ a single worker pool.
 
 from src.workflow.activities.agent_reasoning import agent_reasoning_step
 from src.workflow.activities.build_property_graph import build_property_graph
+from src.workflow.activities.distill_observation import distill_observation
 from src.workflow.activities.extract_kg import extract_kg
 from src.workflow.activities.fetch_source import fetch_source
 from src.workflow.activities.finalize import finalize, mark_failed
@@ -53,6 +54,7 @@ MAIN_ACTIVITIES = [
 SEARCH_ACTIVITIES = [
     agent_reasoning_step,
     tool_execution,
+    distill_observation,
     synthesize_answer,
 ]
 
@@ -65,6 +67,7 @@ __all__ = [
     "SEARCH_ACTIVITIES",
     "agent_reasoning_step",
     "build_property_graph",
+    "distill_observation",
     "extract_kg",
     "fetch_source",
     "finalize",

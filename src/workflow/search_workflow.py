@@ -30,11 +30,12 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from src.config import settings
     from src.retrieval.atomic_tools import TOOL_DESCRIPTIONS
     from src.workflow.contracts import (
         AgentDecision,
         AgenticStepStatDict,
+        DistillParams,
+        DistillResult,
         ReasoningParams,
         SearchOutcome,
         SearchParams,
@@ -233,7 +234,41 @@ class SearchWorkflow:
                     schedule_to_close_timeout=timedelta(minutes=10),
                     retry_policy=_FAST_RETRY,
                 )
-                if tool_result.sources_added:
+                # Distil large observations: compress to query-relevant
+                # facts + grade relevance.  Keeps reasoning context bounded
+                # on big corpora; full sources still feed synthesis.
+                relevance = "relevant"
+                hist_observation = tool_result.observation
+                if (
+                    params.distill_enabled
+                    and not tool_result.error
+                    and len(tool_result.observation)
+                    > params.distill_min_chars
+                ):
+                    self._state["phase"] = f"distill_{step_i}"
+                    distilled: DistillResult = await workflow.execute_activity(
+                        "distill_observation",
+                        DistillParams(
+                            query=params.query,
+                            tool_name=decision.tool_name,
+                            observation=tool_result.observation,
+                        ),
+                        result_type=DistillResult,
+                        start_to_close_timeout=timedelta(minutes=2),
+                        schedule_to_close_timeout=timedelta(minutes=10),
+                        retry_policy=_FAST_RETRY,
+                    )
+                    relevance = distilled.relevance
+                    hist_observation = distilled.distilled
+                # Hard cap — backstop even when distillation is off or the
+                # distilled text is still long.
+                hist_observation = hist_observation[
+                    : params.observation_max_chars
+                ]
+
+                # Gate the accumulator on relevance (CRAG-lite): clearly
+                # irrelevant results don't pollute the synthesizer context.
+                if tool_result.sources_added and relevance != "irrelevant":
                     accumulated.extend(tool_result.sources_added)
                     # Dedup by chunk_id — same chunk may surface from
                     # multiple tools (vector + graph_search returning
@@ -254,7 +289,8 @@ class SearchWorkflow:
                     step=step_i,
                     tool_name=decision.tool_name,
                     tool_args=decision.tool_kwargs,
-                    observation_summary=tool_result.observation[:200],
+                    observation_summary=hist_observation[:200],
+                    relevance=relevance,
                 ))
 
                 # Repeat-call guard: after recording the third identical
@@ -284,7 +320,7 @@ class SearchWorkflow:
                 ))
                 messages.append(SerializedMessage(
                     role="tool",
-                    content=tool_result.observation,
+                    content=hist_observation,
                     tool_call_id=call_id,
                     name=decision.tool_name,
                 ))
