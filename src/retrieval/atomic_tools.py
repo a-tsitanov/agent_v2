@@ -86,12 +86,15 @@ class ToolResult:
 
 
 # ── bounded multi-hop walk caps (R3) ─────────────────────────────────
-# Tool-side mirror of the retriever caps. Clamp/truncation is applied
-# HERE too so the tool contract holds even against a stub/store that
-# ignores the Cypher LIMIT.
-GRAPH_WALK_MAX_HOPS = 3
-GRAPH_WALK_MAX_NODES = 50
-GRAPH_WALK_MAX_EDGES = 100
+# Single source of truth lives in the retriever (backend). The tool layer
+# re-applies the same clamp/truncation so the contract holds even against
+# a stub/store that ignores the Cypher LIMIT — but the VALUES are imported
+# so the two layers can never silently diverge.
+from src.graph.retriever import (  # noqa: E402
+    GRAPH_WALK_EDGE_CAP as GRAPH_WALK_MAX_EDGES,
+    GRAPH_WALK_MAX_HOPS,
+    GRAPH_WALK_NODE_CAP as GRAPH_WALK_MAX_NODES,
+)
 
 
 # ── tools ────────────────────────────────────────────────────────────

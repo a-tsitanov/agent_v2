@@ -240,9 +240,7 @@ class GraphRetriever:
         for row in rows or []:
             start = row.get("start_name")
             if start:
-                labels = [
-                    lab for lab in (row.get("start_labels") or [])
-                ]
+                labels = list(row.get("start_labels") or [])
                 out.entities.append({
                     "entity_name": start,
                     "entity_type": labels[0] if labels else "",
@@ -250,7 +248,7 @@ class GraphRetriever:
                 })
             m_name = row.get("m_name")
             if m_name:
-                m_labels = [lab for lab in (row.get("m_labels") or [])]
+                m_labels = list(row.get("m_labels") or [])
                 out.entities.append({
                     "entity_name": m_name,
                     "entity_type": m_labels[0] if m_labels else "",
