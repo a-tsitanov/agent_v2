@@ -357,6 +357,13 @@ class AgentSettings(BaseSettings):
     # `/api/v1/legacy/agent` only when this flag is true.  Default
     # off — production traffic should go through /agent or /selfrag.
     enable_legacy_agent: bool = False
+    # Canonical entity linking (Task 6): when enabled, ingest resolves
+    # each mention to an existing Wikibase QID via exact-alias →
+    # embedding-kNN → optional LLM verify before deciding to mint a new
+    # item (see `src/graph/canonical_linker.py`).  Default OFF — the
+    # linker + alias storage ship as building blocks and are NOT yet
+    # wired into the ingest activity.
+    canonical_linker_enabled: bool = False
 
 
 class MetricsSettings(BaseSettings):

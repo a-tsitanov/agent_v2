@@ -172,6 +172,21 @@ class AsyncWikibase:
             self._create_property_sync, label, datatype, description,
         )
 
+    async def set_aliases(self, qid: str, aliases: list[str]) -> None:
+        """Record observed surface forms as aliases on an existing Item.
+
+        The :class:`CanonicalLinker` (``src/graph/canonical_linker.py``)
+        keys its exact-alias lookup on these — every surface form we
+        observe for an entity becomes a future linking anchor.
+        """
+        await asyncio.to_thread(self._set_aliases_sync, qid, aliases)
+
+    def _set_aliases_sync(self, qid: str, aliases: list[str]) -> None:
+        item = self._wbi.item.get(entity_id=qid)
+        for alias in aliases:
+            item.aliases.set(language=self._language, values=alias)
+        item.write()
+
     # -- sync internals --------------------------------------------------
 
     def _create_item_sync(
@@ -450,6 +465,24 @@ async def push_entities(
                 counts["created_items"] += 1
                 qid_by_entity_id[owner.id] = qid
                 _persist_qid_for_entity(neo4j_store, owner, qid)
+
+            # Record observed surface forms as aliases on the owner Item
+            # (foundation for canonical entity linking — see
+            # ``src/graph/canonical_linker.py``).  Guarded so that
+            # entities without ``surface_forms`` behave exactly as before
+            # (no extra Wikibase round-trip).
+            observed = (owner.properties or {}).get("surface_forms", [])
+            extra_aliases = [a for a in observed if a and a != owner.name]
+            if extra_aliases:
+                try:
+                    await wb_client.set_aliases(
+                        qid_by_entity_id[owner.id], extra_aliases,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "wikibase alias set failed  name={n}  err={e}",
+                        n=owner.name, e=exc,
+                    )
 
             counts["external_id_statements"] += len(ident_claims)
         except Exception as exc:  # noqa: BLE001 — best-effort per owner
