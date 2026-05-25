@@ -263,3 +263,104 @@ is **unchanged**; nothing in the query path reads `:Community` yet.
 - `TEMPORAL_COMMUNITY_MIN_SIZE`
   (`TemporalSettings.community_min_size`, default 3) — communities smaller
   than this are ignored (noise / disconnected pairs).
+
+## Query routing + GraphRAG global search (R7a, shipped — additive)
+
+R7a adds query **routing** and a GraphRAG **global** search that
+map-reduces over the R6 community summaries, plus per-type endpoints. All
+additive: defaults unchanged, the local R2–R5 flow is untouched, and the
+legacy `SearchWorkflow` + `/search`,`/agent`,`/selfrag` routes are RETAINED
+(cutover is a separate phase pending live-parity verification).
+
+### Routing (`route_query`)
+
+`route_query` (`src/workflow/search/activities/route.py`, small `route`
+model) classifies a question into one of three modes:
+
+- **local** — specific / factual ("who is X", "where does Y work") →
+  the R2–R5 plan-execute flow (`SearchOrchestratorWorkflow`).
+- **global** — corpus-level / thematic / aggregate ("what are the main
+  themes", "overall trends") → `GlobalSearchWorkflow`.
+- **drift** — complex / mixed (needs both specific facts AND a broad
+  overview) → `DriftSearchWorkflow`.
+
+**Fail-safe**: any LLM error or unparseable reply → `"local"` (the
+cheapest, safest mode). The parse/classify mapping is the pure
+`classify_route` helper (unit-tested without Temporal/LLM).
+
+### Global search (`GlobalSearchWorkflow`)
+
+GraphRAG **map-reduce** over the stored `:Community.summary` texts —
+answers corpus-level questions without retrieving individual chunks:
+
+```
+question
+  │
+  ▼  map_communities      (read :Community.summary for level, ranked
+  │                         by query overlap, capped at max_communities)
+  ├─ community 1  ─▶ map_community_partial (small tier)  ─┐
+  ├─ community 2  ─▶ map_community_partial (small tier)  ─┤  asyncio.gather
+  └─ …(≤ AGENT_GLOBAL_MAX_COMMUNITIES)                   ─┘  (bounded by
+                                                              map_parallelism)
+        off-topic communities self-drop ('НЕТ' → score 0)
+                                                          │
+        partials → synthesis context (one node per       │
+        surviving community, chunk_id = "community:<id>") │
+                                                          ▼
+        REDUCE: synthesize_answer  ── pinned to kb-search-large,
+                                       use_synthesis_llm=True (R5 pattern)
+```
+
+- **MAP** runs on `kb-search-small` (small `retrieve`-tier model, bounded
+  parallelism). **REDUCE** is the existing `synthesize_answer` pinned to
+  `large_task_queue` with `use_synthesis_llm=True` — exactly the local
+  orchestrator's large-tier synthesis path.
+- Map-spec / reduce-context / reduce-call assembly are pure helpers
+  (`build_map_specs`, `partials_to_sources`, `build_reduce_call`) so the
+  map-reduce wiring is unit-tested without a live Temporal env.
+- Fail-safe: store/LLM errors yield empty results (no-evidence answer)
+  rather than raising.
+
+### Drift search (`DriftSearchWorkflow`)
+
+A **bounded** local-then-global mechanism (no open-ended loop): run the
+local plan-execute orchestrator FIRST (one pass — concrete chunk
+evidence), then run `GlobalSearchWorkflow` with `drift_mode=True` SEEDED
+with the local sources. In drift mode the global REDUCE merges the local
+sources AHEAD of the community partials (dedup by chunk_id) so local
+evidence leads and the community context broadens it; the outcome is
+labelled `"drift"`. Exactly one local pass + one global pass.
+
+### Auto search (`AutoSearchWorkflow`)
+
+`route_query` classifies the question, then dispatches to the matching
+flow as a child workflow (`dispatch_for_route` — pure, fallback `local`).
+
+### Endpoints
+
+| Endpoint | Workflow | Orchestration queue | Synthesis |
+| --- | --- | --- | --- |
+| `POST /api/v1/search/local` | `SearchOrchestratorWorkflow` | `kb-search-small` | `kb-search-large` |
+| `POST /api/v1/search/global` | `GlobalSearchWorkflow` | `kb-search-small` | `kb-search-large` (REDUCE) |
+| `POST /api/v1/search/drift` | `DriftSearchWorkflow` | `kb-search-small` | `kb-search-large` (global REDUCE) |
+| `POST /api/v1/search/auto` | `AutoSearchWorkflow` | `kb-search-small` | per chosen flow |
+| `POST /api/v1/admin/communities/rebuild` | `CommunityBuildWorkflow` | `kb-graph-build` | n/a (offline build) |
+
+All require `X-API-Key` and reuse the legacy `SearchRequest` /
+`SearchResponse` shapes (`SearchResponse.mode` now also carries
+`global`/`drift`).
+
+### Config knobs (R7a)
+- `AGENT_GLOBAL_MAX_COMMUNITIES` (`AgentSettings.global_max_communities`,
+  default 20) — caps how many community summaries enter the global MAP
+  step (bounds fan-out + LLM load on a large corpus).
+- `AGENT_GLOBAL_MAP_PARALLELISM` (`AgentSettings.global_map_parallelism`,
+  default 4) — bounded per-community MAP concurrency inside
+  `GlobalSearchWorkflow`.
+- The `route` role tier is configurable via `LITELLM_ROLE_TIERS`
+  (defaults to `small`, per `_DEFAULT_ROLE_TIERS`).
+
+> **Legacy still present**: this phase is purely additive. The legacy
+> `SearchWorkflow` and the `/search`,`/agent`,`/selfrag` routes are
+> intentionally RETAINED until a later cutover phase verifies parity
+> against a live environment.

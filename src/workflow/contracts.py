@@ -22,8 +22,9 @@ from pydantic import BaseModel, ConfigDict, Field
 GraphStatus = Literal["completed", "vector_only"]
 WikibaseStatus = Literal["ok", "skipped", "failed"]
 # "local" is the R2 plan-execute path (SearchOrchestratorWorkflow);
+# "global"/"drift" are the R7a GraphRAG routing modes (GlobalSearchWorkflow);
 # "simple"/"agent"/"selfrag" are the legacy ReAct SearchWorkflow modes.
-SearchMode = Literal["simple", "agent", "selfrag", "local"]
+SearchMode = Literal["simple", "agent", "selfrag", "local", "global", "drift"]
 
 
 class _Frozen(BaseModel):
@@ -562,3 +563,98 @@ class CommunityBuildResult(_Frozen):
 
     detected: int = 0
     summarized: int = 0
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Query routing + GraphRAG global search (Search R7a)
+# ══════════════════════════════════════════════════════════════════
+
+
+# "local"  — a specific / factual question best answered from concrete
+#            chunks (the R2–R5 plan-execute flow).
+# "global" — a corpus-level / thematic / aggregate question best answered
+#            by map-reducing over community summaries (GraphRAG global).
+# "drift"  — a complex / mixed question: run local first, then append the
+#            top community summaries as extra synthesis context.
+RouteLabel = Literal["local", "global", "drift"]
+
+
+class RouteParams(_Frozen):
+    """Input to the ``route_query`` activity — the raw user question."""
+
+    query: str
+
+
+class RouteResult(_Frozen):
+    """Output of ``route_query`` — the chosen search mode.
+
+    Fail-safe: any classifier/LLM error or unparseable reply yields
+    ``route="local"`` (the safe default) so a flaky router can never
+    break search.  ``reason`` is advisory (telemetry only)."""
+
+    route: RouteLabel = "local"
+    reason: str = ""
+
+
+class CommunitySummaryRef(_Frozen):
+    """One community's stored summary — the unit the global MAP step
+    produces a partial answer over.  Read from ``:Community.summary``."""
+
+    community_id: int
+    level: int = 0
+    summary: str = ""
+
+
+class MapCommunitiesParams(_Frozen):
+    """Input to the ``map_communities`` activity — fetch community
+    summaries to map over for a global question.
+
+    ``level`` selects the community level to read; ``limit`` bounds how
+    many summaries enter the (parallel) MAP step so a huge corpus doesn't
+    fan out unbounded."""
+
+    query: str
+    level: int = 0
+    limit: int = 20
+
+
+class MapCommunitiesResult(_Frozen):
+    """Output of ``map_communities`` — the community summaries to map
+    over.  Empty on any store error (fail-safe → global yields a
+    no-evidence answer rather than raising)."""
+
+    communities: list[CommunitySummaryRef] = Field(default_factory=list)
+
+
+class MapPartialParams(_Frozen):
+    """Input to ``map_community_partial`` — produce a partial answer for
+    ONE community summary against the user query (small tier)."""
+
+    query: str
+    community_id: int
+    summary: str = ""
+
+
+class MapPartialResult(_Frozen):
+    """Output of ``map_community_partial`` — the per-community partial
+    answer + a self-rated relevance score (0..1) used to drop irrelevant
+    communities before REDUCE.  Fail-safe: empty partial on any error."""
+
+    community_id: int
+    partial: str = ""
+    score: float = 0.0
+
+
+class GlobalSearchParams(_Frozen):
+    """Workflow input for ``GlobalSearchWorkflow`` — what the
+    ``/search/global`` route (and the drift path) submit."""
+
+    query: str
+    level: int = 0
+    max_communities: int = 20
+    map_parallelism: int = 4
+    max_refinements: int = 3
+    # Drift mode (R7a): when True, the workflow's REDUCE label is "drift"
+    # and the partials are MERGED with caller-supplied local sources
+    # rather than standing alone.  Plain global leaves this False.
+    drift_mode: bool = False

@@ -449,6 +449,15 @@ class AgentSettings(BaseSettings):
     # extra LLM + retrieval cost) — distinct from the ReAct loop's
     # ``max_coverage_checks`` so the two paths tune independently.
     max_coverage_rounds: int = Field(default=1, ge=0, le=3)
+    # GraphRAG global search (R7a, decision C): the routing modes
+    # local|global|drift map-reduce over the community summaries built in
+    # R6.  ``global_max_communities`` caps how many summaries enter the
+    # (parallel) MAP step so a huge corpus doesn't fan out unbounded;
+    # ``global_map_parallelism`` bounds the per-community MAP concurrency
+    # inside GlobalSearchWorkflow so a single query doesn't flood the
+    # small-tier LLM proxy.
+    global_max_communities: int = Field(default=20, ge=1, le=200)
+    global_map_parallelism: int = Field(default=4, ge=1, le=32)
     # R10: legacy judge-based agentic_search remains in the codebase
     # as a comparative baseline for R9 eval.  Routed under
     # `/api/v1/legacy/agent` only when this flag is true.  Default

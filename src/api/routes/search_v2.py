@@ -23,11 +23,61 @@ from src.config import settings
 from src.models.search import SearchRequest, SearchResponse, SourceCitation
 from src.observability.trace import trace_request
 from src.workflow.client import get_temporal_client
-from src.workflow.contracts import DetectCommunitiesParams, OrchestratorParams
+from src.workflow.contracts import (
+    DetectCommunitiesParams,
+    GlobalSearchParams,
+    OrchestratorParams,
+    SearchOutcome,
+)
 from src.workflow.search.community_wf import CommunityBuildWorkflow
+from src.workflow.search.global_wf import GlobalSearchWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
+from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
 
 router = APIRouter(tags=["search"])
+
+
+def _local_params(req: SearchRequest) -> OrchestratorParams:
+    """Build the local plan-execute workflow input from the request."""
+    return OrchestratorParams(
+        query=req.query,
+        max_subqueries=settings.agent.max_subqueries,
+        top_k=req.top_k,
+        coverage_check_enabled=settings.agent.coverage_check_enabled,
+        max_coverage_rounds=settings.agent.max_coverage_rounds,
+    )
+
+
+def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSearchParams:
+    """Build the GraphRAG global map-reduce workflow input."""
+    return GlobalSearchParams(
+        query=req.query,
+        level=0,
+        max_communities=settings.agent.global_max_communities,
+        map_parallelism=settings.agent.global_map_parallelism,
+        drift_mode=drift_mode,
+    )
+
+
+def _outcome_to_response(outcome: SearchOutcome) -> SearchResponse:
+    """Map the workflow's ``SearchOutcome`` onto the shared response shape
+    (identical projection across local/global/drift/auto)."""
+    return SearchResponse(
+        query=outcome.query,
+        answer=outcome.answer,
+        mode=outcome.mode,
+        sources=[
+            SourceCitation(
+                doc_id=str(n.metadata.get("doc_id")
+                           or n.metadata.get("file_path") or ""),
+                chunk_id=n.chunk_id,
+                content=n.text,
+                score=n.score,
+            )
+            for n in outcome.sources
+        ],
+        latency_ms=outcome.latency_ms,
+    )
 
 
 @router.post(
@@ -43,34 +93,13 @@ async def search_local(req: SearchRequest) -> SearchResponse:
             client = await get_temporal_client()
             handle = await client.start_workflow(
                 SearchOrchestratorWorkflow.run,
-                OrchestratorParams(
-                    query=req.query,
-                    max_subqueries=settings.agent.max_subqueries,
-                    top_k=req.top_k,
-                    coverage_check_enabled=settings.agent.coverage_check_enabled,
-                    max_coverage_rounds=settings.agent.max_coverage_rounds,
-                ),
+                _local_params(req),
                 id=f"search-local-{request_id}",
                 task_queue=settings.temporal.search_task_queue,
                 id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
             )
             outcome = await handle.result()
-        return SearchResponse(
-            query=outcome.query,
-            answer=outcome.answer,
-            mode="local",
-            sources=[
-                SourceCitation(
-                    doc_id=str(n.metadata.get("doc_id")
-                               or n.metadata.get("file_path") or ""),
-                    chunk_id=n.chunk_id,
-                    content=n.text,
-                    score=n.score,
-                )
-                for n in outcome.sources
-            ],
-            latency_ms=outcome.latency_ms,
-        )
+        return _outcome_to_response(outcome)
     except HTTPException:
         raise
     except Exception as exc:
@@ -78,6 +107,108 @@ async def search_local(req: SearchRequest) -> SearchResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/search/global",
+    response_model=SearchResponse,
+    dependencies=[Depends(require_api_key)],
+    summary="GraphRAG global search (map-reduce over community summaries)",
+)
+async def search_global(req: SearchRequest) -> SearchResponse:
+    """Run ``GlobalSearchWorkflow`` — map-reduce over the R6 community
+    summaries for corpus-level / thematic questions.  Orchestration runs
+    on ``kb-search-small``; the REDUCE synthesis is pinned to the large
+    queue inside the workflow."""
+    request_id = uuid.uuid4().hex
+    try:
+        with trace_request("search_global", req.query):
+            client = await get_temporal_client()
+            handle = await client.start_workflow(
+                GlobalSearchWorkflow.run,
+                _global_params(req),
+                id=f"search-global-{request_id}",
+                task_queue=settings.temporal.search_task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            )
+            outcome = await handle.result()
+        return _outcome_to_response(outcome)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("search_global failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Global search failed: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/search/drift",
+    response_model=SearchResponse,
+    dependencies=[Depends(require_api_key)],
+    summary="Drift search (local plan-execute, then global community expansion)",
+)
+async def search_drift(req: SearchRequest) -> SearchResponse:
+    """Run ``DriftSearchWorkflow`` — local plan-execute pass first, then
+    expand with community context via a drift-mode global map-reduce
+    (local sources seed the REDUCE).  Both passes orchestrate on
+    ``kb-search-small``; synthesis is pinned large inside the global pass."""
+    request_id = uuid.uuid4().hex
+    try:
+        with trace_request("search_drift", req.query):
+            client = await get_temporal_client()
+            handle = await client.start_workflow(
+                DriftSearchWorkflow.run,
+                args=[_local_params(req), _global_params(req, drift_mode=True)],
+                id=f"search-drift-{request_id}",
+                task_queue=settings.temporal.search_task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            )
+            outcome = await handle.result()
+        return _outcome_to_response(outcome)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("search_drift failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Drift search failed: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/search/auto",
+    response_model=SearchResponse,
+    dependencies=[Depends(require_api_key)],
+    summary="Auto search (route_query → dispatch local/global/drift)",
+)
+async def search_auto(req: SearchRequest) -> SearchResponse:
+    """Run ``AutoSearchWorkflow`` — ``route_query`` (small tier) classifies
+    the question, then dispatches to the local / global / drift flow.
+    Fail-safe: a flaky router defaults to the local flow.  Orchestration
+    on ``kb-search-small``; synthesis pinned large in the chosen flow."""
+    request_id = uuid.uuid4().hex
+    try:
+        with trace_request("search_auto", req.query):
+            client = await get_temporal_client()
+            handle = await client.start_workflow(
+                AutoSearchWorkflow.run,
+                args=[_local_params(req), _global_params(req)],
+                id=f"search-auto-{request_id}",
+                task_queue=settings.temporal.search_task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            )
+            outcome = await handle.result()
+        return _outcome_to_response(outcome)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("search_auto failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Auto search failed: {exc}",
         ) from exc
 
 

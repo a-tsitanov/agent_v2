@@ -8,6 +8,53 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R7a] — 2026-05-26 — Query routing + GraphRAG global search (additive)
+
+### Added
+- `src/workflow/search/activities/route.py` — `route_query` activity
+  (small `route` model) classifies a question into `local` (specific /
+  factual), `global` (corpus-level / thematic / aggregate) or `drift`
+  (complex / mixed). Fail-safe → `local` on any LLM/parse error. Pure
+  `classify_route` helper for Temporal-free unit testing.
+- `src/workflow/search/global_wf.py` — `GlobalSearchWorkflow`: GraphRAG
+  **map-reduce** over the R6 `:Community.summary` texts. `map_communities`
+  reads + ranks summaries (capped by `global_max_communities`); MAP fans
+  out one per-community partial (small tier, bounded by
+  `global_map_parallelism`, off-topic communities self-drop); REDUCE reuses
+  `synthesize_answer` pinned to `large_task_queue` with
+  `use_synthesis_llm=True` (the R5 large-tier pattern). Pure helpers
+  `build_map_specs` / `partials_to_sources` / `build_reduce_call`.
+- `src/workflow/search/activities/global_search.py` — `map_communities`
+  + `map_community_partial` activities (fail-safe; pure `rank_summaries` /
+  `is_relevant_partial` helpers).
+- `src/workflow/search/router_wf.py` — `DriftSearchWorkflow` (local pass
+  → global community expansion seeded with the local sources, `drift_mode`)
+  and `AutoSearchWorkflow` (`route_query` → dispatch to local/global/drift
+  as a child workflow). Pure `dispatch_for_route` helper.
+- Endpoints in `src/api/routes/search_v2.py`: `POST /api/v1/search/global`
+  (→ `GlobalSearchWorkflow`), `/search/drift` (→ `DriftSearchWorkflow`),
+  `/search/auto` (→ `AutoSearchWorkflow`). All on `kb-search-small`
+  orchestration; synthesis pinned large in the chosen flow. Reuse the
+  legacy `SearchRequest`/`SearchResponse` shapes.
+- `AgentSettings`: `global_max_communities` (20), `global_map_parallelism`
+  (4). New contracts: `RouteParams/Result`, `CommunitySummaryRef`,
+  `MapCommunitiesParams/Result`, `MapPartialParams/Result`,
+  `GlobalSearchParams`. `SearchMode` extended with `global`/`drift`.
+- Worker (`src/workflow/worker.py`): registers `GlobalSearchWorkflow`,
+  `DriftSearchWorkflow`, `AutoSearchWorkflow` + `route_query` /
+  `map_communities` / `map_community_partial` on the `kb-search-small`
+  queue (REDUCE still pins synthesize to `kb-search-large`).
+
+### Notes
+- **Additive only — legacy intentionally RETAINED.** The legacy
+  `SearchWorkflow` (`src/workflow/search_workflow.py`) and the
+  `/search`,`/agent`,`/selfrag` routes are NOT modified; the local R2–R5
+  flow is unchanged. Defaults are unchanged. The legacy cutover/deletion is
+  a SEPARATE phase pending live-environment parity verification.
+- GraphRAG global search reads the `:Community.summary` nodes built offline
+  in R6; run `POST /api/v1/admin/communities/rebuild` first or global/drift
+  answers have no community evidence to map over.
+
 ## [Search R6] — 2026-05-26 — Offline community build (GDS Leiden + summaries)
 
 ### Added

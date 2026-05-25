@@ -46,7 +46,9 @@ from src.workflow.search.activities import (
     SEARCH_V2_ACTIVITIES,
 )
 from src.workflow.search.community_wf import CommunityBuildWorkflow
+from src.workflow.search.global_wf import GlobalSearchWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
+from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 from src.workflow.search_workflow import SearchWorkflow
 
@@ -125,6 +127,10 @@ async def _run() -> None:
     # SearchOrchestratorWorkflow + SubQueryRetrievalWorkflow child.  The
     # orchestrator reuses synthesize_answer (in SEARCH_ACTIVITIES) and
     # adds plan_subquestions + retrieve_subquestion (SEARCH_V2_ACTIVITIES).
+    # R7a adds the GraphRAG GlobalSearchWorkflow (orchestration on this
+    # small queue; its MAP partials are small-tier and its REDUCE pins
+    # synthesize_answer to the large queue, same as the local orchestrator)
+    # plus route_query + map_communities/map_community_partial activities.
     search_worker = Worker(
         client,
         task_queue=settings.temporal.search_task_queue,
@@ -132,6 +138,9 @@ async def _run() -> None:
             SearchWorkflow,
             SearchOrchestratorWorkflow,
             SubQueryRetrievalWorkflow,
+            GlobalSearchWorkflow,
+            DriftSearchWorkflow,
+            AutoSearchWorkflow,
         ],
         activities=SEARCH_ACTIVITIES + SEARCH_V2_ACTIVITIES,
         max_concurrent_activities=settings.temporal.search_activity_concurrency,
