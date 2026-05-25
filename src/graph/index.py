@@ -152,9 +152,16 @@ def build_kg_extractor(
         # this aliases plain "gliner" (span detection only) so the pipeline
         # can A/B GLiNER without a code switch; compose with LightRAG in the
         # ingest activity until a relations-only LightRAG mode lands.
+        from loguru import logger
+
         from src.config import settings
         from src.graph.gliner_extract import GLiNERExtractor
 
+        logger.warning(
+            "build_kg_extractor mode='gliner+llm' currently aliases plain "
+            "'gliner' (span detection only); no LLM relation/description "
+            "enrichment yet — relations will be empty."
+        )
         return GLiNERExtractor(model_name=settings.ingestion.gliner_model)
     if mode == "schema":
         return SchemaLLMPathExtractor(

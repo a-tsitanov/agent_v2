@@ -87,6 +87,9 @@ _DETERMINISTIC_LABELS: frozenset[str] = frozenset({
     "OGRN",
     "BIC",
     "BankAccount",
+    "KPP",
+    "IBAN",
+    "CreditCard",
 })
 
 
