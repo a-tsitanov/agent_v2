@@ -1,0 +1,580 @@
+diff --git a/src/api/routes/agent.py b/src/api/routes/agent.py
+index c8e7c8f..373a4bb 100644
+--- a/src/api/routes/agent.py
++++ b/src/api/routes/agent.py
+@@ -48,6 +48,11 @@ async def search_agent(req: AgentSearchRequest) -> SearchResponse:
+                     request_id=request_id,
+                     version_tag=settings.analytics.default_version_tag,
+                     env=settings.analytics.env_name,
++                    distill_enabled=settings.agent.distill_enabled,
++                    distill_min_chars=settings.agent.distill_min_chars,
++                    observation_max_chars=settings.agent.observation_max_chars,
++                    coverage_check_enabled=settings.agent.coverage_check_enabled,
++                    max_coverage_checks=settings.agent.max_coverage_checks,
+                 ),
+                 id=f"search-{request_id}",
+                 task_queue=settings.temporal.search_task_queue,
+diff --git a/src/api/routes/selfrag.py b/src/api/routes/selfrag.py
+index 96adedd..8e3ccd8 100644
+--- a/src/api/routes/selfrag.py
++++ b/src/api/routes/selfrag.py
+@@ -49,6 +49,11 @@ async def search_selfrag(req: SelfRAGSearchRequest) -> SearchResponse:
+                     request_id=request_id,
+                     version_tag=settings.analytics.default_version_tag,
+                     env=settings.analytics.env_name,
++                    distill_enabled=settings.agent.distill_enabled,
++                    distill_min_chars=settings.agent.distill_min_chars,
++                    observation_max_chars=settings.agent.observation_max_chars,
++                    coverage_check_enabled=settings.agent.coverage_check_enabled,
++                    max_coverage_checks=settings.agent.max_coverage_checks,
+                 ),
+                 id=f"search-{request_id}",
+                 task_queue=settings.temporal.search_task_queue,
+diff --git a/src/config.py b/src/config.py
+index 0ca14a3..ca8b967 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -317,6 +317,29 @@ class AgentSettings(BaseSettings):
+     # Reflective synthesis (R8): how many draft → critique → retrieve
+     # → redraft rounds the synthesizer attempts.
+     max_refinements: int = Field(default=3, ge=0, le=10)
++    # Observation distillation (R11): between tool_execution and the
++    # next reasoning step, large tool observations are passed through a
++    # one-shot LLM that extracts only query-relevant facts and grades
++    # relevance.  Bounds reasoning-context growth on big corpora.  The
++    # relevance verdict is advisory (history note + stats); full nodes
++    # ALWAYS reach the synthesizer, so distillation never loses facts.
++    distill_enabled: bool = True
++    # Only distil observations larger than this (chars) — small ones
++    # aren't worth the extra LLM call.
++    distill_min_chars: int = Field(default=1500, ge=0)
++    # Hard cap (chars) on any single observation written into the
++    # reasoning history — backstop even when distillation is off or the
++    # distilled text is still long.
++    observation_max_chars: int = Field(default=6000, ge=500)
++    # Pre-submit coverage check: when the agent picks submit_answer, an
++    # LLM first judges whether the gathered evidence fully covers the
++    # question; if not, the named gap is fed back and one more retrieval
++    # round runs.  Adds the gap-detection plain `agent` mode lacks.
++    coverage_check_enabled: bool = True
++    # How many times the coverage check may bounce the agent back before
++    # submit_answer is accepted unconditionally (caps extra LLM calls +
++    # guarantees termination alongside max_iterations).
++    max_coverage_checks: int = Field(default=1, ge=0, le=5)
+     # R10: legacy judge-based agentic_search remains in the codebase
+     # as a comparative baseline for R9 eval.  Routed under
+     # `/api/v1/legacy/agent` only when this flag is true.  Default
+diff --git a/src/mcp/search_server.py b/src/mcp/search_server.py
+index 9d46c0c..0ea4770 100644
+--- a/src/mcp/search_server.py
++++ b/src/mcp/search_server.py
+@@ -90,6 +90,11 @@ async def kb_search(
+             request_id=request_id,
+             version_tag=settings.analytics.default_version_tag,
+             env=settings.analytics.env_name,
++            distill_enabled=settings.agent.distill_enabled,
++            distill_min_chars=settings.agent.distill_min_chars,
++            observation_max_chars=settings.agent.observation_max_chars,
++            coverage_check_enabled=settings.agent.coverage_check_enabled,
++            max_coverage_checks=settings.agent.max_coverage_checks,
+         ),
+         id=workflow_id,
+         task_queue=settings.temporal.search_task_queue,
+diff --git a/src/workflow/activities/__init__.py b/src/workflow/activities/__init__.py
+index 4b13a22..372192f 100644
+--- a/src/workflow/activities/__init__.py
++++ b/src/workflow/activities/__init__.py
+@@ -17,6 +17,8 @@ a single worker pool.
+ 
+ from src.workflow.activities.agent_reasoning import agent_reasoning_step
+ from src.workflow.activities.build_property_graph import build_property_graph
++from src.workflow.activities.coverage_check import coverage_check
++from src.workflow.activities.distill_observation import distill_observation
+ from src.workflow.activities.extract_kg import extract_kg
+ from src.workflow.activities.fetch_source import fetch_source
+ from src.workflow.activities.finalize import finalize, mark_failed
+@@ -53,6 +55,8 @@ MAIN_ACTIVITIES = [
+ SEARCH_ACTIVITIES = [
+     agent_reasoning_step,
+     tool_execution,
++    distill_observation,
++    coverage_check,
+     synthesize_answer,
+ ]
+ 
+@@ -65,6 +69,8 @@ __all__ = [
+     "SEARCH_ACTIVITIES",
+     "agent_reasoning_step",
+     "build_property_graph",
++    "coverage_check",
++    "distill_observation",
+     "extract_kg",
+     "fetch_source",
+     "finalize",
+diff --git a/src/workflow/activities/coverage_check.py b/src/workflow/activities/coverage_check.py
+new file mode 100644
+index 0000000..5c0940d
+--- /dev/null
++++ b/src/workflow/activities/coverage_check.py
+@@ -0,0 +1,92 @@
++"""``coverage_check`` activity — pre-submit completeness gate.
++
++When the agent decides to finish (``submit_answer``), the workflow
++first asks this activity whether the evidence gathered so far actually
++covers the *whole* question — including every part of a multi-part
++query.  If not, the workflow injects the named gap back into the
++reasoning history and runs one more retrieval round instead of
++finishing early.
++
++This adds the gap-detection that plain ``agent`` mode otherwise lacks
++(``selfrag`` gets it from reflective synthesis).  Bounded by
++``max_coverage_checks`` in the workflow so it can't loop forever.
++
++Fail-open: any error or unparseable output → ``complete=True`` so a
++flaky check never traps the agent short of an answer.
++"""
++
++from __future__ import annotations
++
++import time
++
++from llama_index.core.base.llms.types import ChatMessage, MessageRole
++from temporalio import activity
++
++from src.workflow._search_deps import get_search_llm
++from src.workflow.contracts import CoverageParams, CoverageResult
++
++_SYSTEM = (
++    "You are a completeness checker for a research agent.  Given the "
++    "user QUESTION and the EVIDENCE gathered so far, decide whether the "
++    "evidence is enough to fully answer the question — including every "
++    "distinct part of a multi-part question.\n"
++    "Be strict about parts the question explicitly asks for, but do NOT "
++    "demand information the question doesn't request, and do NOT require "
++    "perfection — partial corroboration of a sub-claim counts.\n"
++    "Output format:\n"
++    "  First line exactly 'COMPLETE: yes' or 'COMPLETE: no'.\n"
++    "  If 'no', a second line 'MISSING: <one concise phrase naming what "
++    "still needs to be retrieved>'.\n"
++    "If the evidence is empty, answer 'COMPLETE: no' and name what to "
++    "look up first."
++)
++
++
++def _parse(text: str) -> CoverageResult:
++    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
++    complete = True
++    missing = ""
++    for ln in lines:
++        up = ln.upper()
++        if up.startswith("COMPLETE:"):
++            verdict = ln.split(":", 1)[1].strip().lower()
++            complete = not verdict.startswith("no")
++        elif up.startswith("MISSING:"):
++            missing = ln.split(":", 1)[1].strip()
++    # Incomplete but no gap named ⇒ nothing actionable, treat as done.
++    if not complete and not missing:
++        complete = True
++    return CoverageResult(complete=complete, missing=missing)
++
++
++@activity.defn
++async def coverage_check(params: CoverageParams) -> CoverageResult:
++    """Judge whether gathered evidence fully covers the query."""
++    t0 = time.monotonic()
++    activity.heartbeat({"stage": "init", "ev_len": len(params.evidence)})
++    llm = await get_search_llm()
++
++    user = (
++        f"QUESTION:\n{params.query}\n\n"
++        f"EVIDENCE:\n{params.evidence or '(none gathered yet)'}"
++    )
++    messages = [
++        ChatMessage(role=MessageRole.SYSTEM, content=_SYSTEM),
++        ChatMessage(role=MessageRole.USER, content=user),
++    ]
++    try:
++        resp = await llm.achat(messages)
++        result = _parse(resp.message.content or "")
++    except Exception as exc:  # noqa: BLE001
++        # Fail-open: never block the answer on a flaky completeness call.
++        activity.logger.warning(
++            "coverage_check  err=%s — treating as complete", exc,
++        )
++        return CoverageResult(complete=True, missing="")
++
++    activity.logger.info(
++        "coverage_check  complete=%s  missing=%r  ms=%d",
++        result.complete, result.missing[:80],
++        int((time.monotonic() - t0) * 1000),
++    )
++    return result
+diff --git a/src/workflow/activities/distill_observation.py b/src/workflow/activities/distill_observation.py
+new file mode 100644
+index 0000000..6083810
+--- /dev/null
++++ b/src/workflow/activities/distill_observation.py
+@@ -0,0 +1,127 @@
++"""``distill_observation`` activity — compress one tool result.
++
++Sits between ``tool_execution`` and the next ``agent_reasoning_step``.
++Given the user query and a (large) raw tool observation, one LLM call
++returns:
++
++* ``distilled`` — only the query-relevant facts, compact, so the
++  agent's reasoning history stops growing unbounded on big corpora.
++* ``relevance`` — relevant / partial / irrelevant.  Advisory only:
++  recorded in step stats and reflected in the agent's history note so
++  it knows a path was a dead end.  It does NOT drop sources from the
++  accumulator.
++
++The full ``NodeWithScore`` sources are kept separately in the
++workflow accumulator (always, regardless of relevance), so
++distillation never costs the final answer detail — it only trims the
++agent's working memory.
++
++Output is parsed from a delimited text format (not strict JSON) — a
++small local model holds a ``RELEVANCE: ...`` first line + bullets far
++more reliably than a JSON schema.  Parsing degrades gracefully:
++unparseable output is treated as ``partial`` with the raw text kept.
++"""
++
++from __future__ import annotations
++
++import time
++
++from llama_index.core.base.llms.types import ChatMessage, MessageRole
++from temporalio import activity
++
++from src.workflow._search_deps import get_search_llm
++from src.workflow.contracts import DistillParams, DistillResult, Relevance
++
++# Defensive cap on what we feed the distiller itself, so a pathological
++# observation can't overflow the distiller's own context window.
++_MAX_INPUT_CHARS = 30000
++
++_SYSTEM = (
++    "You compress one tool result for a research agent.  You are given "
++    "the user QUERY and the raw TOOL OUTPUT.  Extract ONLY the facts "
++    "from the tool output that help answer the query.\n"
++    "Rules:\n"
++    "- Be concise: short bullet lines, no preamble, no repetition.\n"
++    "- Preserve names, identifiers, numbers verbatim in their original "
++    "language.\n"
++    "- Do NOT invent anything not present in the tool output.\n"
++    "Output format — the FIRST line must be exactly one of:\n"
++    "  RELEVANCE: relevant\n"
++    "  RELEVANCE: partial\n"
++    "  RELEVANCE: irrelevant\n"
++    "judging how useful this tool output is for the query.  Then the "
++    "relevant facts as bullet lines.  If nothing is relevant, output "
++    "just 'RELEVANCE: irrelevant' and nothing else."
++)
++
++_VALID: set[str] = {"relevant", "partial", "irrelevant"}
++
++
++def _parse(text: str) -> tuple[str, Relevance]:
++    """Split the model output into (distilled facts, relevance verdict).
++
++    Tolerant: a missing/garbled RELEVANCE line falls back to 'partial'
++    and keeps the whole text as the distilled body.
++    """
++    lines = (text or "").strip().splitlines()
++    relevance: Relevance = "partial"
++    body_start = 0
++    for i, ln in enumerate(lines):
++        stripped = ln.strip()
++        if not stripped:
++            continue
++        if stripped.upper().startswith("RELEVANCE:"):
++            verdict = stripped.split(":", 1)[1].strip().lower()
++            if verdict in _VALID:
++                relevance = verdict  # type: ignore[assignment]
++            body_start = i + 1
++        break
++    body = "\n".join(lines[body_start:]).strip()
++    return body, relevance
++
++
++@activity.defn
++async def distill_observation(params: DistillParams) -> DistillResult:
++    """Compress + relevance-grade one tool observation."""
++    t0 = time.monotonic()
++    activity.heartbeat({"stage": "init", "tool": params.tool_name,
++                        "obs_len": len(params.observation)})
++    llm = await get_search_llm()
++
++    obs = params.observation[:_MAX_INPUT_CHARS]
++    user = (
++        f"QUERY:\n{params.query}\n\n"
++        f"TOOL ({params.tool_name}) OUTPUT:\n{obs}"
++    )
++    messages = [
++        ChatMessage(role=MessageRole.SYSTEM, content=_SYSTEM),
++        ChatMessage(role=MessageRole.USER, content=user),
++    ]
++    try:
++        resp = await llm.achat(messages)
++        raw = resp.message.content or ""
++    except Exception as exc:  # noqa: BLE001
++        # On distiller failure, fall back to the raw observation so the
++        # agent still sees *something* — the loop's hard char cap will
++        # truncate it.  Never fail the whole search over compaction.
++        activity.logger.warning(
++            "distill_observation  tool=%s  err=%s — passing raw through",
++            params.tool_name, exc,
++        )
++        return DistillResult(distilled=params.observation, relevance="partial")
++
++    distilled, relevance = _parse(raw)
++    if relevance == "irrelevant":
++        # Clear, short marker beats a stray bullet/empty body — tells the
++        # agent this path was a dead end so it tries a different query.
++        distilled = "(no information relevant to the query)"
++    elif len(distilled.strip(" *-•\t")) < 3:
++        # Model gave a verdict but effectively no facts — keep the raw so
++        # we don't silently drop content the agent might need.
++        distilled = params.observation
++    activity.logger.info(
++        "distill_observation  tool=%s  %d→%d chars  rel=%s  ms=%d",
++        params.tool_name, len(params.observation), len(distilled),
++        relevance, int((time.monotonic() - t0) * 1000),
++    )
++    return DistillResult(distilled=distilled, relevance=relevance)
+diff --git a/src/workflow/contracts.py b/src/workflow/contracts.py
+index c12d7c2..fd62232 100644
+--- a/src/workflow/contracts.py
++++ b/src/workflow/contracts.py
+@@ -241,6 +241,15 @@ class SearchParams(_Frozen):
+     max_iterations: int = 8
+     max_refinements: int = 3
+     request_id: str = ""
++    # Observation distillation knobs, resolved from AgentSettings at
++    # submit time and propagated here so the workflow never reads env
++    # at runtime (replay-safe).  Defaults mirror AgentSettings.
++    distill_enabled: bool = True
++    distill_min_chars: int = 1500
++    observation_max_chars: int = 6000
++    # Pre-submit coverage check knobs (mirror AgentSettings).
++    coverage_check_enabled: bool = True
++    max_coverage_checks: int = 1
+     # Analytics: same shape as IngestParams so the same Search
+     # Attributes (VersionTag, Model, Env, …) propagate to Temporal.
+     version_tag: str = "unspecified"
+@@ -289,6 +298,60 @@ class ToolCallResult(_Frozen):
+     error: str = ""  # non-empty if the tool failed, empty on success
+ 
+ 
++Relevance = Literal["relevant", "partial", "irrelevant"]
++
++
++class DistillParams(_Frozen):
++    """Input to the ``distill_observation`` activity.
++
++    Carries the raw (large) tool observation plus the user query so the
++    distiller can extract only query-relevant facts and grade relevance.
++    """
++
++    query: str
++    tool_name: str
++    observation: str
++
++
++class DistillResult(_Frozen):
++    """Output of ``distill_observation``.
++
++    ``distilled`` is the compact, query-focused text that goes into the
++    agent's reasoning history (bounding context growth).  ``relevance``
++    is advisory only — recorded in step stats and reflected in the
++    history note; it does NOT drop sources from the accumulator (full
++    sources always reach the synthesizer to avoid fact loss).
++    """
++
++    distilled: str
++    relevance: Relevance = "partial"
++
++
++class CoverageParams(_Frozen):
++    """Input to the ``coverage_check`` activity.
++
++    Asks whether the evidence gathered so far is enough to FULLY answer
++    the query (all its parts) before the agent is allowed to finish.
++    """
++
++    query: str
++    evidence: str
++
++
++class CoverageResult(_Frozen):
++    """Output of ``coverage_check``.
++
++    ``complete`` — is the gathered evidence sufficient to fully answer?
++    ``missing`` — when not complete, a short description of what still
++    needs to be retrieved (drives one more loop iteration).  Fail-open:
++    on any doubt/parse failure the activity returns ``complete=True`` so
++    a flaky check can never trap the agent.
++    """
++
++    complete: bool = True
++    missing: str = ""
++
++
+ class SynthesizeParams(_Frozen):
+     """Input to the ``synthesize_answer`` activity."""
+ 
+@@ -322,6 +385,7 @@ class AgenticStepStatDict(_Frozen):
+     tool_name: str
+     tool_args: dict[str, Any] = Field(default_factory=dict)
+     observation_summary: str = ""
++    relevance: str = ""  # distiller verdict: relevant/partial/irrelevant
+ 
+ 
+ class SearchOutcome(_Frozen):
+diff --git a/src/workflow/search_workflow.py b/src/workflow/search_workflow.py
+index 3fb8c07..71445ae 100644
+--- a/src/workflow/search_workflow.py
++++ b/src/workflow/search_workflow.py
+@@ -30,11 +30,14 @@ from temporalio import workflow
+ from temporalio.common import RetryPolicy
+ 
+ with workflow.unsafe.imports_passed_through():
+-    from src.config import settings
+     from src.retrieval.atomic_tools import TOOL_DESCRIPTIONS
+     from src.workflow.contracts import (
+         AgentDecision,
+         AgenticStepStatDict,
++        CoverageParams,
++        CoverageResult,
++        DistillParams,
++        DistillResult,
+         ReasoningParams,
+         SearchOutcome,
+         SearchParams,
+@@ -58,6 +61,10 @@ _FAST_RETRY = RetryPolicy(
+     maximum_attempts=3,
+ )
+ 
++# Cap on evidence (joined distilled observations) sent to the
++# coverage check, so a long session can't overflow that LLM call.
++_COVERAGE_EVIDENCE_MAX_CHARS = 12000
++
+ 
+ _SYSTEM_PROMPT = """\
+ You are a research agent answering questions over a corpus that
+@@ -182,6 +189,7 @@ class SearchWorkflow:
+             ]
+             last_sig: str = ""
+             repeat_count = 0
++            coverage_checks_used = 0
+ 
+             for step_i in range(1, params.max_iterations + 1):
+                 self._state["phase"] = f"reasoning_step_{step_i}"
+@@ -199,6 +207,44 @@ class SearchWorkflow:
+                              step_i)
+                     break
+                 if decision.tool_name == "submit_answer":
++                    # Pre-submit coverage gate: before finishing, check the
++                    # gathered evidence actually covers the whole question.
++                    # If a gap is named (and we have retries + iterations
++                    # left), feed it back and run one more round instead of
++                    # answering early.  Bounded so it always terminates.
++                    if (
++                        params.coverage_check_enabled
++                        and coverage_checks_used < params.max_coverage_checks
++                        and step_i < params.max_iterations
++                    ):
++                        coverage_checks_used += 1
++                        self._state["phase"] = f"coverage_check_{step_i}"
++                        evidence = "\n\n".join(
++                            f"[{m.name}] {m.content}"
++                            for m in messages if m.role == "tool"
++                        )[:_COVERAGE_EVIDENCE_MAX_CHARS]
++                        cov: CoverageResult = await workflow.execute_activity(
++                            "coverage_check",
++                            CoverageParams(query=params.query, evidence=evidence),
++                            result_type=CoverageResult,
++                            start_to_close_timeout=timedelta(minutes=2),
++                            schedule_to_close_timeout=timedelta(minutes=10),
++                            retry_policy=_FAST_RETRY,
++                        )
++                        if not cov.complete and cov.missing:
++                            log.info(
++                                "search_workflow  step=%d coverage gap → %s",
++                                step_i, cov.missing[:120],
++                            )
++                            messages.append(SerializedMessage(
++                                role="user",
++                                content=(
++                                    "Before finishing: the answer is still "
++                                    f"missing — {cov.missing}. Retrieve that "
++                                    "with a tool, then call submit_answer."
++                                ),
++                            ))
++                            continue
+                     log.info("search_workflow  step=%d submit_answer", step_i)
+                     break
+ 
+@@ -233,6 +279,43 @@ class SearchWorkflow:
+                     schedule_to_close_timeout=timedelta(minutes=10),
+                     retry_policy=_FAST_RETRY,
+                 )
++                # Distil large observations: compress to query-relevant
++                # facts + grade relevance.  Keeps reasoning context bounded
++                # on big corpora; full sources still feed synthesis.
++                relevance = "relevant"
++                hist_observation = tool_result.observation
++                if (
++                    params.distill_enabled
++                    and not tool_result.error
++                    and len(tool_result.observation)
++                    > params.distill_min_chars
++                ):
++                    self._state["phase"] = f"distill_{step_i}"
++                    distilled: DistillResult = await workflow.execute_activity(
++                        "distill_observation",
++                        DistillParams(
++                            query=params.query,
++                            tool_name=decision.tool_name,
++                            observation=tool_result.observation,
++                        ),
++                        result_type=DistillResult,
++                        start_to_close_timeout=timedelta(minutes=2),
++                        schedule_to_close_timeout=timedelta(minutes=10),
++                        retry_policy=_FAST_RETRY,
++                    )
++                    relevance = distilled.relevance
++                    hist_observation = distilled.distilled
++                # Hard cap — backstop even when distillation is off or the
++                # distilled text is still long.
++                hist_observation = hist_observation[
++                    : params.observation_max_chars
++                ]
++
++                # Relevance gates only the agent's working memory (the
++                # distilled history note above), NOT the accumulator: full
++                # sources are ALWAYS kept so a mis-graded "irrelevant" can
++                # never drop a fact from the synthesizer's context.  Worst
++                # case the synth sees an extra chunk it can ignore.
+                 if tool_result.sources_added:
+                     accumulated.extend(tool_result.sources_added)
+                     # Dedup by chunk_id — same chunk may surface from
+@@ -254,7 +337,8 @@ class SearchWorkflow:
+                     step=step_i,
+                     tool_name=decision.tool_name,
+                     tool_args=decision.tool_kwargs,
+-                    observation_summary=tool_result.observation[:200],
++                    observation_summary=hist_observation[:200],
++                    relevance=relevance,
+                 ))
+ 
+                 # Repeat-call guard: after recording the third identical
+@@ -284,7 +368,7 @@ class SearchWorkflow:
+                 ))
+                 messages.append(SerializedMessage(
+                     role="tool",
+-                    content=tool_result.observation,
++                    content=hist_observation,
+                     tool_call_id=call_id,
+                     name=decision.tool_name,
+                 ))

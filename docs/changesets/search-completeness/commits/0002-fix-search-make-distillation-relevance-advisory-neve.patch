@@ -1,0 +1,104 @@
+From 6ff51b35d64a863d5766244a2d4f95c9080fad22 Mon Sep 17 00:00:00 2001
+From: "a.tzitanov" <alexypoloz@gmail.com>
+Date: Mon, 25 May 2026 15:54:51 +0300
+Subject: [PATCH 2/3] fix(search): make distillation relevance advisory, never
+ drop sources
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The relevance verdict no longer gates the accumulator. Full
+NodeWithScore sources are always kept for the synthesizer, so a
+mis-graded "irrelevant" from a weak local model can never lose a fact
+from the final answer. Relevance stays useful as the agent's
+history dead-end note + step-stat, and distillation still bounds
+reasoning-context growth — we keep the context win without the
+fact-loss risk.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ src/config.py                                  |  5 +++--
+ src/workflow/activities/distill_observation.py | 12 +++++++-----
+ src/workflow/contracts.py                      |  4 +++-
+ src/workflow/search_workflow.py                |  9 ++++++---
+ 4 files changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/src/config.py b/src/config.py
+index c60ed03..7186f28 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -320,8 +320,9 @@ class AgentSettings(BaseSettings):
+     # Observation distillation (R11): between tool_execution and the
+     # next reasoning step, large tool observations are passed through a
+     # one-shot LLM that extracts only query-relevant facts and grades
+-    # relevance.  Bounds reasoning-context growth on big corpora and
+-    # gates the accumulator (CRAG-lite).  Full nodes still feed synth.
++    # relevance.  Bounds reasoning-context growth on big corpora.  The
++    # relevance verdict is advisory (history note + stats); full nodes
++    # ALWAYS reach the synthesizer, so distillation never loses facts.
+     distill_enabled: bool = True
+     # Only distil observations larger than this (chars) — small ones
+     # aren't worth the extra LLM call.
+diff --git a/src/workflow/activities/distill_observation.py b/src/workflow/activities/distill_observation.py
+index b32548e..6083810 100644
+--- a/src/workflow/activities/distill_observation.py
++++ b/src/workflow/activities/distill_observation.py
+@@ -6,13 +6,15 @@ returns:
+ 
+ * ``distilled`` — only the query-relevant facts, compact, so the
+   agent's reasoning history stops growing unbounded on big corpora.
+-* ``relevance`` — relevant / partial / irrelevant, used by the
+-  workflow to gate the accumulator (CRAG-lite): clearly irrelevant
+-  results don't pollute the synthesizer's context.
++* ``relevance`` — relevant / partial / irrelevant.  Advisory only:
++  recorded in step stats and reflected in the agent's history note so
++  it knows a path was a dead end.  It does NOT drop sources from the
++  accumulator.
+ 
+ The full ``NodeWithScore`` sources are kept separately in the
+-workflow accumulator, so distillation never costs the final answer
+-detail — it only trims the agent's working memory.
++workflow accumulator (always, regardless of relevance), so
++distillation never costs the final answer detail — it only trims the
++agent's working memory.
+ 
+ Output is parsed from a delimited text format (not strict JSON) — a
+ small local model holds a ``RELEVANCE: ...`` first line + bullets far
+diff --git a/src/workflow/contracts.py b/src/workflow/contracts.py
+index a7abdeb..c5a7f42 100644
+--- a/src/workflow/contracts.py
++++ b/src/workflow/contracts.py
+@@ -315,7 +315,9 @@ class DistillResult(_Frozen):
+ 
+     ``distilled`` is the compact, query-focused text that goes into the
+     agent's reasoning history (bounding context growth).  ``relevance``
+-    gates whether this step's sources are kept in the accumulator.
++    is advisory only — recorded in step stats and reflected in the
++    history note; it does NOT drop sources from the accumulator (full
++    sources always reach the synthesizer to avoid fact loss).
+     """
+ 
+     distilled: str
+diff --git a/src/workflow/search_workflow.py b/src/workflow/search_workflow.py
+index bc15d56..ed438fe 100644
+--- a/src/workflow/search_workflow.py
++++ b/src/workflow/search_workflow.py
+@@ -266,9 +266,12 @@ class SearchWorkflow:
+                     : params.observation_max_chars
+                 ]
+ 
+-                # Gate the accumulator on relevance (CRAG-lite): clearly
+-                # irrelevant results don't pollute the synthesizer context.
+-                if tool_result.sources_added and relevance != "irrelevant":
++                # Relevance gates only the agent's working memory (the
++                # distilled history note above), NOT the accumulator: full
++                # sources are ALWAYS kept so a mis-graded "irrelevant" can
++                # never drop a fact from the synthesizer's context.  Worst
++                # case the synth sees an extra chunk it can ignore.
++                if tool_result.sources_added:
+                     accumulated.extend(tool_result.sources_added)
+                     # Dedup by chunk_id — same chunk may surface from
+                     # multiple tools (vector + graph_search returning
+-- 
+2.53.0
+
