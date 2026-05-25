@@ -1,0 +1,128 @@
+From 15c63bceb49594118b668ef21ef342996f1db757 Mon Sep 17 00:00:00 2001
+From: "a.tzitanov" <alexypoloz@gmail.com>
+Date: Mon, 25 May 2026 11:16:20 +0300
+Subject: [PATCH 1/2] fix:
+
+---
+ src/retrieval/atomic_tools.py              | 49 ++++++++++++++++++++++
+ src/workflow/activities/agent_reasoning.py | 17 +++++++-
+ 2 files changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/src/retrieval/atomic_tools.py b/src/retrieval/atomic_tools.py
+index 1e40006..1ea5edb 100644
+--- a/src/retrieval/atomic_tools.py
++++ b/src/retrieval/atomic_tools.py
+@@ -24,12 +24,14 @@ serialise on the GPU automatically.
+ 
+ from __future__ import annotations
+ 
++import inspect
+ import json
+ from dataclasses import dataclass, field
+ from typing import Any, Protocol
+ 
+ from llama_index.core.schema import NodeWithScore, TextNode
+ from loguru import logger
++from pydantic import BaseModel
+ 
+ from src.retrieval._common import deduplicate_nodes
+ 
+@@ -335,6 +337,53 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
+ }
+ 
+ 
++# ── tool functions + parameter schemas (single source of truth) ────
++
++
++TOOL_FUNCTIONS = {
++    "vector_search": vector_search,
++    "graph_search": graph_search,
++    "find_entity_by_id": find_entity_by_id,
++    "find_neighbours": find_neighbours,
++    "filter_by_metadata": filter_by_metadata,
++    "get_chunks_by_doc_id": get_chunks_by_doc_id,
++    "read_full_document": read_full_document,
++}
++
++
++def _injected_params(fn: Any) -> list[str]:
++    """Names of the DI-injected dependency args.
++
++    Every tool function takes its dependency (retriever / graph_retriever
++    / chunk_repository / accumulated_sources) as a *positional* parameter
++    before the ``*`` separator; the LLM-facing args are keyword-only.
++    So the positional params are exactly what the LLM must NOT see.
++    """
++    return [
++        p.name
++        for p in inspect.signature(fn).parameters.values()
++        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
++    ]
++
++
++def build_tool_schema(name: str) -> type[BaseModel] | None:
++    """Pydantic schema of the LLM-facing kwargs for ``name``.
++
++    Derived from the real function signature (keyword-only params), so
++    the function-calling prompt advertises ``query`` / ``top_k`` / …
++    instead of an empty ``**kwargs`` blob.  Returns ``None`` for tools
++    with no registered function (e.g. the ``submit_answer`` terminator).
++    """
++    from llama_index.core.tools.utils import create_schema_from_function
++
++    fn = TOOL_FUNCTIONS.get(name)
++    if fn is None:
++        return None
++    return create_schema_from_function(
++        name, fn, ignore_fields=_injected_params(fn),
++    )
++
++
+ # ── dispatcher (used by Stage 1's tool_execution activity) ──────────
+ 
+ 
+diff --git a/src/workflow/activities/agent_reasoning.py b/src/workflow/activities/agent_reasoning.py
+index 12bdc30..e081538 100644
+--- a/src/workflow/activities/agent_reasoning.py
++++ b/src/workflow/activities/agent_reasoning.py
+@@ -18,21 +18,36 @@ from __future__ import annotations
+ import time
+ 
+ from llama_index.core.tools import FunctionTool
++from pydantic import BaseModel
+ from temporalio import activity
+ 
++from src.retrieval.atomic_tools import build_tool_schema
+ from src.workflow._search_deps import get_search_llm
+ from src.workflow._search_serde import serialized_to_message
+ from src.workflow.contracts import AgentDecision, ReasoningParams
+ 
+ 
++class _NoArgs(BaseModel):
++    """Empty arg schema for no-parameter tools (submit_answer)."""
++
++
+ def _stub_tool(name: str, description: str) -> FunctionTool:
+     async def _never_called(**kw):  # noqa: ARG001
+         raise NotImplementedError(
+             f"stub tool {name!r} must not be executed in-process — "
+             "workflow dispatches via tool_execution activity",
+         )
++    # Without an explicit schema the stub advertises only **kwargs, so
++    # the LLM emits empty/garbage args and dispatch() blows up.
++    # build_tool_schema derives the real param schema from the
++    # atomic-tool signatures; None ⇒ no-arg terminator (submit_answer),
++    # for which we still need an *empty* schema (not the **kwargs
++    # fallback, which would make a bogus ``kw`` arg required).
+     return FunctionTool.from_defaults(
+-        fn=_never_called, name=name, description=description,
++        fn=_never_called,
++        name=name,
++        description=description,
++        fn_schema=build_tool_schema(name) or _NoArgs,
+     )
+ 
+ 
+-- 
+2.53.0
+
