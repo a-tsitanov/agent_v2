@@ -36,6 +36,7 @@ _lock = asyncio.Lock()
 _state: dict[str, Any] = {
     "llm": None, "retriever": None, "graph_retriever": None,
     "chunk_repository": None, "synthesizer": None,
+    "synthesis_llm": None, "synthesis_synthesizer": None,
 }
 
 
@@ -137,12 +138,35 @@ async def get_synthesizer():
     return _state["synthesizer"]
 
 
+async def get_synthesis_llm() -> LLM:
+    """Large-tier final-synthesis LLM (R2 plan-execute flow), wrapped in
+    the shared BoundedLLM semaphore."""
+    async with _lock:
+        if _state["synthesis_llm"] is None:
+            from src.config import settings
+            from src.retrieval.llm import build_synthesis_llm
+            _state["synthesis_llm"] = wrap_if_needed(
+                build_synthesis_llm(),
+                max_concurrent=settings.agent.llm_max_concurrent,
+            )
+    return _state["synthesis_llm"]
+
+
+async def get_synthesis_synthesizer():
+    """ResponseSynthesizer bound to the large tier (R2)."""
+    async with _lock:
+        if _state["synthesis_synthesizer"] is None:
+            llm = await get_synthesis_llm()
+            _state["synthesis_synthesizer"] = await _build_synthesizer_once(llm)
+    return _state["synthesis_synthesizer"]
+
+
 def reset_for_tests() -> None:
     """Test hook — clear all caches.  Production code never calls."""
     for k in list(_state):
         _state[k] = None if k in (
             "llm", "retriever", "graph_retriever", "chunk_repository",
-            "synthesizer",
+            "synthesizer", "synthesis_llm", "synthesis_synthesizer",
         ) else _state[k]
     _state.pop("graph_retriever_attempted", None)
     _state.pop("_embed_model", None)

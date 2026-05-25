@@ -34,10 +34,15 @@ from temporalio.worker import Worker
 
 from src.config import settings
 from src.workflow.activities import (
-    LLM_ACTIVITIES, MAIN_ACTIVITIES, SEARCH_ACTIVITIES,
+    LLM_ACTIVITIES,
+    MAIN_ACTIVITIES,
+    SEARCH_ACTIVITIES,
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
+from src.workflow.search.activities import SEARCH_V2_ACTIVITIES
+from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
+from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 from src.workflow.search_workflow import SearchWorkflow
 
 
@@ -110,11 +115,20 @@ async def _run() -> None:
     # sessions don't fight ingest for GPU budget.  Cap independently
     # via TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY (default 4 — assumes
     # LLM proxy can handle a small handful of parallel sessions).
+    # Both flows share the search queue during the R2 parity window:
+    # the legacy ReAct SearchWorkflow and the new plan-execute
+    # SearchOrchestratorWorkflow + SubQueryRetrievalWorkflow child.  The
+    # orchestrator reuses synthesize_answer (in SEARCH_ACTIVITIES) and
+    # adds plan_subquestions + retrieve_subquestion (SEARCH_V2_ACTIVITIES).
     search_worker = Worker(
         client,
         task_queue=settings.temporal.search_task_queue,
-        workflows=[SearchWorkflow],
-        activities=SEARCH_ACTIVITIES,
+        workflows=[
+            SearchWorkflow,
+            SearchOrchestratorWorkflow,
+            SubQueryRetrievalWorkflow,
+        ],
+        activities=SEARCH_ACTIVITIES + SEARCH_V2_ACTIVITIES,
         max_concurrent_activities=settings.temporal.search_activity_concurrency,
     )
     logger.info(

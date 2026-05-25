@@ -15,7 +15,7 @@ from temporalio import activity
 
 from src.retrieval.reflective_synth import reflective_synthesize
 from src.workflow._search_deps import (
-    get_retriever, get_search_llm, get_synthesizer,
+    get_retriever, get_search_llm, get_synthesis_synthesizer, get_synthesizer,
 )
 from src.workflow._search_serde import serialized_to_node
 from src.workflow.contracts import (
@@ -73,7 +73,13 @@ async def synthesize_answer(params: SynthesizeParams) -> SynthesizeResult:
         )
 
     # mode == "simple" or "agent" — plain ResponseSynthesizer.
-    synthesizer = await get_synthesizer()
+    # R2 plan-execute flow opts into the large synthesis tier; legacy
+    # paths keep the small search-tier synthesizer (use_synthesis_llm=False).
+    synthesizer = (
+        await get_synthesis_synthesizer()
+        if params.use_synthesis_llm
+        else await get_synthesizer()
+    )
     activity.heartbeat({"stage": "plain_synth"})
     response = await synthesizer.asynthesize(query=query, nodes=nodes)
     text = getattr(response, "response", None) or str(response)

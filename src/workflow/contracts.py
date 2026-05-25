@@ -359,6 +359,10 @@ class SynthesizeParams(_Frozen):
     mode: SearchMode
     accumulated: list[SerializedNode] = Field(default_factory=list)
     max_refinements: int = 3
+    # R2 plan-execute flow synthesises on the large tier
+    # (``build_synthesis_llm``); legacy ReAct paths leave this False and
+    # keep the small search-tier synthesizer for backward compatibility.
+    use_synthesis_llm: bool = False
 
 
 class ReflectiveCitationDict(_Frozen):
@@ -386,6 +390,86 @@ class AgenticStepStatDict(_Frozen):
     tool_args: dict[str, Any] = Field(default_factory=dict)
     observation_summary: str = ""
     relevance: str = ""  # distiller verdict: relevant/partial/irrelevant
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Plan-execute search payloads (Search R2)
+# ══════════════════════════════════════════════════════════════════
+
+
+class PlanParams(_Frozen):
+    """Input to the ``plan_subquestions`` activity.
+
+    Decomposes a compound question into atomic sub-questions (small
+    planner model).  ``max_subqueries`` bounds the parallel fan-out.
+    """
+
+    query: str
+    max_subqueries: int = 5
+
+
+class PlanResult(_Frozen):
+    """Output of ``plan_subquestions`` — always ≥1 sub-question
+    (``[query]`` for atomic questions / on planner failure)."""
+
+    subquestions: list[str] = Field(default_factory=list)
+
+
+class RetrieveParams(_Frozen):
+    """Input to the ``retrieve_subquestion`` activity.
+
+    One deterministic retrieval step (hybrid vector + graph) for a
+    single sub-question.  No tool selection / no LLM reasoning here.
+    """
+
+    subquestion: str
+    top_k: int = 10
+    # Distillation knobs propagated from AgentSettings at submit time so
+    # the activity never reads env at runtime (mirrors SearchParams).
+    distill_enabled: bool = False
+    distill_min_chars: int = 1500
+
+
+class RetrieveResult(_Frozen):
+    """Output of ``retrieve_subquestion`` — sources gathered for one
+    sub-question, already deduped by chunk_id within the step."""
+
+    subquestion: str
+    sources: list[SerializedNode] = Field(default_factory=list)
+    duration_ms: int = 0
+    error: str = ""
+
+
+class SubQueryParams(_Frozen):
+    """Input to ``SubQueryRetrievalWorkflow`` — one sub-question."""
+
+    subquestion: str
+    top_k: int = 10
+    distill_enabled: bool = False
+    distill_min_chars: int = 1500
+
+
+class SubQueryResult(_Frozen):
+    """Output of ``SubQueryRetrievalWorkflow`` — deduped sources."""
+
+    subquestion: str
+    sources: list[SerializedNode] = Field(default_factory=list)
+
+
+class OrchestratorParams(_Frozen):
+    """Workflow input for ``SearchOrchestratorWorkflow`` — what the
+    ``/search/local`` route submits."""
+
+    query: str
+    max_subqueries: int = 5
+    top_k: int = 10
+    max_refinements: int = 3
+    request_id: str = ""
+    distill_enabled: bool = False
+    distill_min_chars: int = 1500
+    # Analytics (same shape as SearchParams so Search Attributes flow).
+    version_tag: str = "unspecified"
+    env: str = ""
 
 
 class SearchOutcome(_Frozen):

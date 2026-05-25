@@ -220,7 +220,12 @@ class TemporalSettings(BaseSettings):
     # control GPU split between ingest and search independently.  Cap
     # ≥ 1; raise it when LLM proxy / OpenAI quotas allow several
     # parallel search sessions.
-    search_task_queue: str = "kb-search-llm"
+    # Renamed kb-search-llm → kb-search-small (Search R2): the queue now
+    # also hosts the small-tier plan-execute flow (planner + parallel
+    # sub-query retrieval), so the name reflects the dominant model tier
+    # rather than "any LLM".  Legacy ReAct SearchWorkflow stays on this
+    # same queue during the parity window.
+    search_task_queue: str = "kb-search-small"
     search_activity_concurrency: int = 4
 
     @property
@@ -355,6 +360,10 @@ class AgentSettings(BaseSettings):
     # ReAct loop (R7): how many tool-call iterations before forcing
     # `submit_answer`.
     max_iterations: int = Field(default=8, ge=1, le=20)
+    # Plan-execute flow (R2): max sub-questions the planner may emit —
+    # bounds the parallel SubQueryRetrievalWorkflow fan-out (and planner
+    # LLM cost) regardless of what the small model returns.
+    max_subqueries: int = Field(default=5, ge=1, le=20)
     # Entity Resolution (cross-language / multi-form dedup).  When
     # enabled, the worker runs an extra step between
     # `merge_kg_extraction` and `PropertyGraphIndex` that finds
@@ -515,9 +524,9 @@ settings = Settings()
 
 
 __all__ = [
+    "AgentSettings",
     "AnalyticsSettings",
     "ApiSettings",
-    "AgentSettings",
     "IngestionSettings",
     "LiteLLMSettings",
     "MetricsSettings",

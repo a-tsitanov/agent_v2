@@ -8,6 +8,53 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R2] — 2026-05-26 — Plan-execute orchestrator + /search/local
+
+### Added
+- `src/retrieval/query_planner.py:decompose()` — splits a compound
+  question into atomic sub-questions via the small `plan` model;
+  returns `[question]` for atomic questions and on any planner failure
+  (fail-safe). Robust parsing (numbered / bulleted / JSON-array).
+- `plan_subquestions` activity (`src/workflow/search/activities/plan.py`)
+  wrapping `decompose` (`build_llm("plan")`).
+- `retrieve_subquestion` activity
+  (`src/workflow/search/activities/retrieve.py`) — deterministic hybrid
+  `vector_search` + `graph_search` for one sub-question via
+  `atomic_tools.dispatch`, sources deduped by chunk_id.
+- `SubQueryRetrievalWorkflow` (`src/workflow/search/subquery_wf.py`) —
+  deterministic per-sub-question retrieval; NO `agent_reasoning_step`.
+- `SearchOrchestratorWorkflow` (`src/workflow/search/orchestrator.py`) —
+  plan → parallel `SubQueryRetrievalWorkflow` children (`asyncio.gather`
+  over `execute_child_workflow`) → merge+dedup sources by chunk_id →
+  single `synthesize_answer` on the large tier. Same `SearchOutcome`
+  shape as legacy `SearchWorkflow`.
+- `POST /api/v1/search/local` (`src/api/routes/search_v2.py`) starting
+  `SearchOrchestratorWorkflow` on `kb-search-small`; reuses
+  `SearchRequest` / `SearchResponse`.
+- `AgentSettings.max_subqueries` (env `AGENT_MAX_SUBQUERIES`, default 5)
+  — caps the parallel sub-query fan-out.
+- `SynthesizeParams.use_synthesis_llm` flag + `get_synthesis_llm()` /
+  `get_synthesis_synthesizer()` in `_search_deps` — large-tier final
+  synthesis for the plan-execute flow.
+- `docs/QUEUES.md` (new) + plan-execute section in `docs/SEARCH.md`.
+
+### Changed
+- Search task queue renamed `kb-search-llm` → `kb-search-small`
+  (`TemporalSettings.search_task_queue` default, `.env.example`). The
+  queue now also hosts the small-tier plan-execute flow.
+- Worker registers `SearchOrchestratorWorkflow` +
+  `SubQueryRetrievalWorkflow` and `SEARCH_V2_ACTIVITIES` on the search
+  queue alongside the legacy `SearchWorkflow`.
+
+### Notes
+- Legacy ReAct `SearchWorkflow` + `/api/v1/search` (and `/agent`,
+  `/selfrag`) are UNCHANGED and remain the default behind the parity
+  window until cutover.
+- Core merge/dedup is extracted into pure helpers
+  (`src/workflow/search/_merge.py`) so it is unit-testable without a
+  live Temporal env; full workflow tests follow the repo's
+  skip-on-no-Temporal pattern.
+
 ## [Search R1] — 2026-05-25 — Two-tier model architecture
 
 ### Added
