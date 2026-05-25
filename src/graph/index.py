@@ -148,6 +148,10 @@ def build_kg_extractor(
 
         return GLiNERExtractor(model_name=settings.ingestion.gliner_model)
     if mode == "gliner+llm":
+        # Placeholder: LLM relation/description enrichment is TODO. For now
+        # this aliases plain "gliner" (span detection only) so the pipeline
+        # can A/B GLiNER without a code switch; compose with LightRAG in the
+        # ingest activity until a relations-only LightRAG mode lands.
         from src.config import settings
         from src.graph.gliner_extract import GLiNERExtractor
 
