@@ -76,6 +76,10 @@ IdentifierType = Literal[
     "PostalAddress",
     "DocumentDate",
     "Amount",
+    "BankAccount",
+    "KPP",
+    "IBAN",
+    "CreditCard",
     # Digital identity
     "URL",
     "Domain",
@@ -110,6 +114,14 @@ _PRIORITY: dict[str, int] = {
     "PostalAddress": 90,
     "DocumentDate": 90,
     "Amount": 90,
+    "BankAccount": 100,
+    "KPP": 100,
+    "IBAN": 100,
+    # Below IMEI/VIN (95): a bare 15-digit IMEI is also a Luhn-valid
+    # "card" shape — IMEI must win that overlap.  16-digit cards don't
+    # collide with the 15-digit IMEI shape, so this never starves real
+    # card detection.
+    "CreditCard": 92,
     "IMEI": 95,
     "MACAddress": 95,
     "LicensePlate": 95,
@@ -266,6 +278,145 @@ def _extract_bic(text: str) -> list[NormalizedIdentifier]:
                 canonical=m.group(0),
                 original=m.group(0),
                 span=m.span(),
+            )
+        )
+    return out
+
+
+# ── KPP (РФ: 9 chars — 4 digits, 2 alnum reason code, 3 digits) ──────
+
+_KPP_RE = re.compile(r"(?<!\d)(\d{4}[0-9A-Z]{2}\d{3})(?!\d)")
+
+
+def _extract_kpp(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _KPP_RE.finditer(text):
+        kpp = m.group(1)
+        out.append(
+            NormalizedIdentifier(
+                entity_type="KPP",
+                canonical=kpp,
+                original=kpp,
+                span=m.span(1),
+            )
+        )
+    return out
+
+
+# ── BankAccount (РФ: 20-digit settlement account, BIC-anchored) ──────
+#
+# We only emit a 20-digit run as a BankAccount when a BIC is present in
+# the same text — a bare 20-digit shape is far too ambiguous (collides
+# with IBAN-inner digit runs, order numbers, etc.).
+#
+# We must distinguish a customer *расчётный счёт* (balance section
+# ``407…``, ``408…``, etc.) from a *корреспондентский счёт* (корсчёт,
+# balance section ``301…``).  Both are 20 digits, but only the former is
+# the entity we want to canonicalize as a BankAccount.  The RU control
+# key (last 3 of BIC + account, weights (7,1,3) mod 10 == 0) is the
+# authoritative validator — when an account passes it against any BIC in
+# the text we accept it outright.  When it does NOT pass (common with
+# redacted/synthetic account bodies), we fall back to the balance-section
+# rule: accept customer sections, but never the ``301`` correspondent
+# section.  Either path rejects the корсчёт.
+
+_ACCOUNT_RE = re.compile(r"(?<!\d)(\d{20})(?!\d)")
+_ACCOUNT_WEIGHTS = (7, 1, 3) * 8  # 24 weights — first 23 are used
+# Balance-account first-3-digit sections that are NOT customer accounts:
+# 301 = correspondent accounts (корсчета).  Extend if other non-customer
+# sections surface as false positives in the corpus.
+_NON_CUSTOMER_SECTIONS: frozenset[str] = frozenset({"301"})
+
+
+def _account_control_ok(account: str, bic_tail: str) -> bool:
+    """РФ account control: (BIC last-3 + account) ✕ (7,1,3) mod 10 == 0."""
+    seq = bic_tail + account  # 3 + 20 = 23 chars
+    total = sum(int(c) * _ACCOUNT_WEIGHTS[i] for i, c in enumerate(seq))
+    return total % 10 == 0
+
+
+def _extract_bank_accounts(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    bic_tails = [m.group(0)[-3:] for m in _BIC_RE.finditer(text)]
+    if not bic_tails:
+        # No BIC to anchor on — bare 20-digit shape is too ambiguous.
+        return out
+    for m in _ACCOUNT_RE.finditer(text):
+        account = m.group(1)
+        control_ok = any(
+            _account_control_ok(account, tail) for tail in bic_tails
+        )
+        # The RU control key (BIC last-3 + account, weights (7,1,3)) is
+        # the authoritative validator: a control-valid account is always
+        # accepted.  When the control fails (frequent with redacted or
+        # synthetic account bodies in real corpora), fall back to the
+        # balance-section rule — accept any customer section but never a
+        # correspondent account (корсчёт, balance section ``301``).
+        if not control_ok and account[:3] in _NON_CUSTOMER_SECTIONS:
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="BankAccount",
+                canonical=account,
+                original=account,
+                span=m.span(1),
+            )
+        )
+    return out
+
+
+# ── IBAN (ISO 13616, mod-97 checksum) ────────────────────────────────
+
+_IBAN_RE = re.compile(r"\b([A-Z]{2}\d{2}[A-Z0-9]{11,30})\b")
+
+
+def _iban_mod97_ok(iban: str) -> bool:
+    """Move first 4 chars to end, map A-Z→10-35, check int % 97 == 1."""
+    rearranged = iban[4:] + iban[:4]
+    try:
+        digits = "".join(str(int(c, 36)) for c in rearranged)
+    except ValueError:
+        return False
+    return int(digits) % 97 == 1
+
+
+def _extract_ibans(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _IBAN_RE.finditer(text):
+        iban = m.group(1)
+        if not _iban_mod97_ok(iban):
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="IBAN",
+                canonical=iban,
+                original=iban,
+                span=m.span(1),
+            )
+        )
+    return out
+
+
+# ── CreditCard (13-19 digits, optional spaces/hyphens, Luhn) ─────────
+
+_CARD_RE = re.compile(r"(?<!\d)(\d[\d \-]{11,21}\d)(?!\d)")
+
+
+def _extract_credit_cards(text: str) -> list[NormalizedIdentifier]:
+    out: list[NormalizedIdentifier] = []
+    for m in _CARD_RE.finditer(text):
+        raw = m.group(1)
+        digits = re.sub(r"[ \-]", "", raw)
+        if not (13 <= len(digits) <= 19):
+            continue
+        if not _luhn_ok(digits):
+            continue
+        out.append(
+            NormalizedIdentifier(
+                entity_type="CreditCard",
+                canonical=digits,
+                original=raw,
+                span=m.span(1),
             )
         )
     return out
@@ -1208,6 +1359,10 @@ def extract_identifiers(text: str) -> list[NormalizedIdentifier]:
     found.extend(_extract_dates(text))
     found.extend(_extract_amounts(text))
     found.extend(_extract_addresses(text))
+    found.extend(_extract_kpp(text))
+    found.extend(_extract_bank_accounts(text))
+    found.extend(_extract_ibans(text))
+    found.extend(_extract_credit_cards(text))
     # Digital identity
     found.extend(_extract_urls(text))
     found.extend(_extract_domains(text))

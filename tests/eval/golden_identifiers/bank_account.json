@@ -1,0 +1,6 @@
+{
+  "name": "bank_account",
+  "description": "20-digit settlement account validated against its BIC.",
+  "text": "Расчётный счёт 40702810500000012345 в банке с БИК 044525225. Корсчёт 30101810400000000225.",
+  "expected": { "BankAccount": ["40702810500000012345"], "BIC": ["044525225"] }
+}
