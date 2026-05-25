@@ -54,7 +54,7 @@ def _parse_triplets_strip_thinking(response: str, **kwargs):
 KGExtractor = TransformComponent
 
 
-ExtractorMode = Literal["lightrag", "simple", "schema"]
+ExtractorMode = Literal["lightrag", "simple", "schema", "gliner", "gliner+llm"]
 
 
 class NoOpKGExtractor(TransformComponent):
@@ -142,6 +142,16 @@ def build_kg_extractor(
             num_workers=num_workers,
             gleaning_passes=gleaning_passes,
         )
+    if mode == "gliner":
+        from src.config import settings
+        from src.graph.gliner_extract import GLiNERExtractor
+
+        return GLiNERExtractor(model_name=settings.ingestion.gliner_model)
+    if mode == "gliner+llm":
+        from src.config import settings
+        from src.graph.gliner_extract import GLiNERExtractor
+
+        return GLiNERExtractor(model_name=settings.ingestion.gliner_model)
     if mode == "schema":
         return SchemaLLMPathExtractor(
             llm=llm,

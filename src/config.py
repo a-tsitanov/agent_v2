@@ -261,6 +261,12 @@ class IngestionSettings(BaseSettings):
     # structure — typically better retrieval precision on documents
     # with heterogeneous sections.  See docs/DEPLOYMENT.md.
     semantic_chunking: bool = False
+    # GLiNER span-NER model used by the OPT-IN ``gliner`` /
+    # ``gliner+llm`` extractor modes (see
+    # ``src/graph/index.py:build_kg_extractor``).  The ``gliner`` extra
+    # must be installed for those modes; the default extraction path
+    # (``lightrag``) never touches this.
+    gliner_model: str = "urchade/gliner_multi-v2.1"
 
 
 class WikibaseSettings(BaseSettings):
