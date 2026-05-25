@@ -18,7 +18,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Protocol
 
 
 GOLDEN_DIR_DEFAULT = Path(__file__).resolve().parent / "golden_entities"
@@ -61,6 +61,9 @@ def score_case(
     stats: dict[str, NERStats],
     lang: str,
 ) -> None:
+    # ``lang`` is accepted for call-site symmetry with ``_accumulate_lang``
+    # (both run per case); per-TYPE stats are intentionally language-agnostic
+    # — the per-language view is built separately by ``_accumulate_lang``.
     pred_by_type: dict[str, set[str]] = {}
     for surface, etype in predicted:
         pred_by_type.setdefault(etype, set()).add(_norm(surface))
@@ -123,6 +126,11 @@ def format_report(
     for k in sorted(per_type):
         s = per_type[k]
         lines.append(f"{k:16s} {s.precision:7.2%} {s.recall:7.2%} {s.f1:7.2%} {s.tp:5d} {s.fp:5d} {s.fn:5d}")
+    misses = {k: per_type[k].miss_examples for k in sorted(per_type) if per_type[k].miss_examples}
+    if misses:
+        lines.append("\nmissed surfaces (first few per type):")
+        for k, examples in misses.items():
+            lines.append(f"  {k:16s} {', '.join(examples[:5])}")
     lines.append("\nper-language:")
     for k in sorted(per_lang):
         s = per_lang[k]
