@@ -37,6 +37,7 @@ from src.workflow.activities import (
     LLM_ACTIVITIES,
     MAIN_ACTIVITIES,
     SEARCH_ACTIVITIES,
+    synthesize_answer,
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
@@ -136,9 +137,29 @@ async def _run() -> None:
         sq=settings.temporal.search_task_queue,
         sc=settings.temporal.search_activity_concurrency,
     )
+    # Large-tier final synthesis (Search R5) lives on its own queue with
+    # a LOW concurrency cap so the heavyweight synthesis model never
+    # serves many parallel sessions.  Same process, separate Worker pool:
+    # the orchestrator pins ``synthesize_answer`` here via
+    # ``execute_activity(task_queue=large_task_queue)``.  Only the
+    # synthesize activity registers here — plan/retrieve/rerank stay on
+    # the small queue.  No workflows host on this queue (it runs activities
+    # only); the orchestrator itself still lives on the small queue.
+    large_worker = Worker(
+        client,
+        task_queue=settings.temporal.large_task_queue,
+        activities=[synthesize_answer],
+        max_concurrent_activities=settings.temporal.large_activity_concurrency,
+    )
+    logger.info(
+        "temporal worker  large_queue={lgq}  large_concurrency={lgc}",
+        lgq=settings.temporal.large_task_queue,
+        lgc=settings.temporal.large_activity_concurrency,
+    )
 
     await asyncio.gather(
         main_worker.run(), llm_worker.run(), search_worker.run(),
+        large_worker.run(),
     )
 
 

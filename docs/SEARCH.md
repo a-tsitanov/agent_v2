@@ -35,7 +35,12 @@ question
                                                           │
                           merge + dedup by chunk_id  ◀────┘
                                                           │
-                          synthesize_answer  (large "synthesis" model)
+                          coverage gate (R4, bounded)
+                                                          │
+                          rerank_sources  (R5, unified graph+vector pool)
+                                                          │
+                          synthesize_answer  (large "synthesis" model,
+                                              kb-search-large queue)
                                                           │
                                                           ▼  SearchOutcome
 ```
@@ -134,6 +139,48 @@ fan-out otherwise lacks for multi-part questions.
   `max_coverage_checks`) — a SEPARATE mechanism from the orchestrator's
   "gap → extra sub-question".
 
+### Unified rerank + large-tier synthesis (R5)
+
+After the coverage gate produces the final merged pool — and BEFORE the
+single `synthesize_answer` — the orchestrator co-ranks the graph-derived
+and vector chunks in ONE unified rerank pass (`rerank_sources`), then
+schedules synthesis on a dedicated large-tier queue.
+
+```
+            merged graph+vector pool (deduped by chunk_id)
+                    │
+                    ▼  rerank_sources  (bge cross-encoder, ONE pass)
+            reranked top-N  (kb-search-small queue)
+                    │
+                    ▼  synthesize_answer  (large "synthesis" model)
+            FINAL ANSWER     (kb-search-large queue, low concurrency)
+```
+
+- **Unified pool**: `rerank_sources` reranks the COMBINED graph+vector
+  pool in a single cross-encoder call, so the two retrieval modalities
+  are scored against each other (not concatenated by retriever order).
+  A chunk surfacing from both modalities is deduped (first wins) before
+  reranking — the pure `prepare_rerank_pool` helper
+  (`src/workflow/search/activities/rerank.py`) so it's unit-tested
+  without loading the ~1 GB bge model. REUSES the existing
+  `src/retrieval/reranker.py` (`BAAI/bge-reranker-v2-m3`), process-cached
+  via `_search_deps.get_reranker`; `top_n` from
+  `TEMPORAL_RERANK_TOP_N` (default 5).
+- **FAIL-OPEN**: any rerank error → fall back to the unranked merged
+  pool (never block the answer). The displayed `SearchOutcome.sources`
+  stays the FULL merged pool (citations unchanged); only the synthesis
+  context is trimmed to the reranked top-N.
+- **Large-tier queue**: synthesis is pinned to `kb-search-large` via
+  `execute_activity("synthesize_answer", …, task_queue=large_task_queue)`
+  with `use_synthesis_llm=True` (large `build_synthesis_llm`). A separate
+  low-concurrency `Worker` pool in the same worker process polls that
+  queue (see `docs/QUEUES.md`). The call spec is built by the pure
+  `build_synthesize_call` helper so the queue + tier routing is
+  unit-tested outside Temporal.
+- **Legacy path unchanged**: the ReAct `SearchWorkflow` still synthesizes
+  on the small tier (`use_synthesis_llm=False`) on `kb-search-small`,
+  with no rerank step.
+
 ### Config knobs (R2)
 - `AGENT_MAX_SUBQUERIES` (`AgentSettings.max_subqueries`, default 5) —
   caps the parallel sub-query fan-out.
@@ -146,3 +193,13 @@ fan-out otherwise lacks for multi-part questions.
 - `TEMPORAL_SEARCH_TASK_QUEUE` (default `kb-search-small`) — queue
   hosting both the legacy ReAct workflow and the new orchestrator +
   sub-query child.
+
+### Config knobs (R5)
+- `TEMPORAL_LARGE_TASK_QUEUE` (`TemporalSettings.large_task_queue`,
+  default `kb-search-large`) — dedicated queue for the final large-tier
+  `synthesize_answer`.
+- `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY`
+  (`TemporalSettings.large_activity_concurrency`, default 2) — low cap so
+  the heavyweight synthesis model isn't dogpiled by parallel sessions.
+- `TEMPORAL_RERANK_TOP_N` (`TemporalSettings.rerank_top_n`, default 5) —
+  bge cross-encoder top-N for the unified graph+vector rerank pass.

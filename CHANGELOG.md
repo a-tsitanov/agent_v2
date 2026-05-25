@@ -8,6 +8,51 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R5] — 2026-05-26 — Large-tier synthesis queue + unified rerank
+
+### Added
+- Dedicated `kb-search-large` task queue
+  (`TemporalSettings.large_task_queue`, `large_activity_concurrency`
+  default 2) + a separate low-concurrency `Worker` pool in the same
+  worker process (`src/workflow/worker.py`) that polls it, hosting ONLY
+  the `synthesize_answer` activity so the heavyweight synthesis model is
+  never dogpiled by parallel search sessions.
+- `rerank_sources` activity
+  (`src/workflow/search/activities/rerank.py`,
+  `RerankParams`/`RerankResult` in `contracts.py`): co-ranks the merged
+  graph-derived + vector pool in ONE bge cross-encoder pass before
+  synthesis. REUSES `src/retrieval/reranker.py`
+  (`BAAI/bge-reranker-v2-m3`), process-cached via
+  `_search_deps.get_reranker`. Pure `prepare_rerank_pool`
+  (dedup-before-rerank) + `build_synthesize_call` (large-queue call
+  spec) helpers — unit-tested without a live Temporal env or the bge
+  model.
+- `TEMPORAL_RERANK_TOP_N` (`TemporalSettings.rerank_top_n`, default 5)
+  knob for the unified rerank top-N.
+- Queue/tier docs: `kb-search-large` row + small/large tier↔queue
+  mapping table in `docs/QUEUES.md`; rerank-before-synthesis step in
+  `docs/SEARCH.md`.
+
+### Changed
+- `SearchOrchestratorWorkflow` (`src/workflow/search/orchestrator.py`):
+  after the coverage gate / final merge it runs `rerank_sources` (on the
+  small queue), THEN pins `synthesize_answer` to `kb-search-large` via
+  `execute_activity(task_queue=large_task_queue)` with
+  `use_synthesis_llm=True` (large `build_synthesis_llm`). The displayed
+  `SearchOutcome.sources` stays the FULL merged pool (citations
+  unchanged); only the synthesis context is trimmed to the reranked
+  top-N.
+
+### Notes
+- FAIL-OPEN: any rerank error → fall back to the unranked merged pool
+  (never blocks the answer). Empty pool → reranker model is never loaded.
+- The orchestrator workflow itself still lives on `kb-search-small`; only
+  the final synthesis activity runs on `kb-search-large`. plan / retrieve
+  / coverage_check / rerank all stay on the small queue.
+- Legacy ReAct `SearchWorkflow` synthesis path UNCHANGED — still small
+  tier (`use_synthesis_llm=False`), default `kb-search-small` queue, no
+  rerank step.
+
 ## [Search R4] — 2026-05-26 — Coverage gate on orchestrator
 
 ### Added

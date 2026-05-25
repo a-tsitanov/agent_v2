@@ -438,6 +438,25 @@ class RetrieveResult(_Frozen):
     error: str = ""
 
 
+class RerankParams(_Frozen):
+    """Input to the ``rerank_sources`` activity (Search R5).
+
+    The merged graph+vector pool (already deduped by chunk_id across
+    sub-questions) plus the original user query.  The activity runs the
+    bge cross-encoder over the UNIFIED pool and returns the top-N.
+    """
+
+    query: str
+    sources: list[SerializedNode] = Field(default_factory=list)
+    top_n: int = 5
+
+
+class RerankResult(_Frozen):
+    """Output of ``rerank_sources`` — the reranked top-N pool."""
+
+    sources: list[SerializedNode] = Field(default_factory=list)
+
+
 class SubQueryParams(_Frozen):
     """Input to ``SubQueryRetrievalWorkflow`` — one sub-question."""
 

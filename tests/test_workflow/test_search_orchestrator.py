@@ -25,10 +25,13 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
+from src.config import settings
 from src.workflow.contracts import (
     OrchestratorParams,
     PlanParams,
     PlanResult,
+    RerankParams,
+    RerankResult,
     RetrieveParams,
     RetrieveResult,
     SearchOutcome,
@@ -66,6 +69,21 @@ async def _connect() -> Client:
         "localhost:7233", namespace="default",
         data_converter=pydantic_data_converter,
     )
+
+
+@activity.defn(name="rerank_sources")
+async def _rerank_passthrough(params: RerankParams) -> RerankResult:
+    """No-op rerank stub for orchestrator tests — returns the pool
+    unchanged so existing source-merge assertions still hold (the real
+    bge model is exercised in test_search_rerank.py)."""
+    return RerankResult(sources=list(params.sources))
+
+
+def _pin_large_queue(monkeypatch, queue: str) -> None:
+    """Pin the large-tier synthesize queue to the test's own Worker queue
+    so one in-test Worker serves every activity (R5 routes
+    synthesize_answer to ``large_task_queue``)."""
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
 
 
 # ── SubQueryRetrievalWorkflow ──────────────────────────────────────
@@ -133,10 +151,11 @@ async def test_orchestrator_plans_fans_out_merges_synth_once(monkeypatch):
 
     client = await _connect()
     queue = f"orch-test-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
     async with Worker(
         client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
-        activities=[_plan, _retrieve, _synth],
+        activities=[_plan, _retrieve, _rerank_passthrough, _synth],
     ):
         out: SearchOutcome = await client.execute_workflow(
             SearchOrchestratorWorkflow.run,
@@ -171,10 +190,11 @@ async def test_orchestrator_atomic_single_child(monkeypatch):
 
     client = await _connect()
     queue = f"orch-test-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
     async with Worker(
         client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
-        activities=[_plan, _retrieve, _synth],
+        activities=[_plan, _retrieve, _rerank_passthrough, _synth],
     ):
         out = await client.execute_workflow(
             SearchOrchestratorWorkflow.run,
@@ -214,11 +234,11 @@ def _orch_activities_with_coverage(cov_results, retrieve_calls, synth_calls):
         synth_calls.append([n.chunk_id for n in params.accumulated])
         return SynthesizeResult(text="ANSWER")
 
-    return [_plan, _retrieve, _coverage, _synth]
+    return [_plan, _retrieve, _coverage, _rerank_passthrough, _synth]
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_coverage_gap_runs_one_extra_subquery():
+async def test_orchestrator_coverage_gap_runs_one_extra_subquery(monkeypatch):
     """coverage returns complete=False+missing → exactly ONE extra
     sub-question runs, its sources merge in, then synthesize once."""
     from src.workflow.contracts import CoverageResult
@@ -232,6 +252,7 @@ async def test_orchestrator_coverage_gap_runs_one_extra_subquery():
 
     client = await _connect()
     queue = f"orch-cov-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
     async with Worker(
         client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
@@ -252,7 +273,7 @@ async def test_orchestrator_coverage_gap_runs_one_extra_subquery():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_coverage_complete_no_extra_round():
+async def test_orchestrator_coverage_complete_no_extra_round(monkeypatch):
     """coverage complete=True → NO extra sub-question, synth once."""
     from src.workflow.contracts import CoverageResult
 
@@ -265,6 +286,7 @@ async def test_orchestrator_coverage_complete_no_extra_round():
 
     client = await _connect()
     queue = f"orch-cov-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
     async with Worker(
         client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
@@ -281,7 +303,7 @@ async def test_orchestrator_coverage_complete_no_extra_round():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_coverage_fail_open_on_activity_error():
+async def test_orchestrator_coverage_fail_open_on_activity_error(monkeypatch):
     """coverage_check raises → NO extra round, synth proceeds (no raise)."""
 
     @activity.defn(name="plan_subquestions")
@@ -306,10 +328,11 @@ async def test_orchestrator_coverage_fail_open_on_activity_error():
 
     client = await _connect()
     queue = f"orch-cov-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
     async with Worker(
         client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
-        activities=[_plan, _retrieve, _coverage, _synth],
+        activities=[_plan, _retrieve, _coverage, _rerank_passthrough, _synth],
     ):
         out = await client.execute_workflow(
             SearchOrchestratorWorkflow.run,
@@ -321,7 +344,7 @@ async def test_orchestrator_coverage_fail_open_on_activity_error():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_coverage_bounded_to_max_rounds():
+async def test_orchestrator_coverage_bounded_to_max_rounds(monkeypatch):
     """Gap persists but max_coverage_rounds=1 → at most ONE extra round."""
     from src.workflow.contracts import CoverageResult
 
@@ -338,6 +361,7 @@ async def test_orchestrator_coverage_bounded_to_max_rounds():
 
     client = await _connect()
     queue = f"orch-cov-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
     async with Worker(
         client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],

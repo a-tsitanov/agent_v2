@@ -25,6 +25,7 @@ from datetime import timedelta
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
+    from src.config import settings
     from src.workflow.contracts import (
         AgenticStepStatDict,
         CoverageParams,
@@ -32,7 +33,10 @@ with workflow.unsafe.imports_passed_through():
         OrchestratorParams,
         PlanParams,
         PlanResult,
+        RerankParams,
+        RerankResult,
         SearchOutcome,
+        SerializedNode,
         SubQueryParams,
         SubQueryResult,
         SynthesizeParams,
@@ -46,6 +50,34 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.search._retry import FAST_RETRY
 
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
+
+
+def build_synthesize_call(
+    *,
+    query: str,
+    sources: list[SerializedNode],
+    max_refinements: int,
+) -> tuple[str, SynthesizeParams]:
+    """Pure spec for the final ``synthesize_answer`` schedule (R5).
+
+    Returns ``(task_queue, params)`` so the workflow body just unpacks
+    and forwards to ``execute_activity``.  Extracted so the large-tier
+    routing (``large_task_queue`` + ``use_synthesis_llm=True``) is
+    unit-testable WITHOUT a live Temporal env — the orchestrator's
+    Temporal-gated body is otherwise hard to assert on.
+
+    ``mode="simple"`` selects the plain ResponseSynthesizer branch in
+    ``synthesize_answer``; the user-facing label is "local" (set on
+    SearchOutcome in the workflow body).
+    """
+    params = SynthesizeParams(
+        query=query,
+        mode="simple",
+        accumulated=sources,
+        max_refinements=max_refinements,
+        use_synthesis_llm=True,  # large tier — build_synthesis_llm()
+    )
+    return settings.temporal.large_task_queue, params
 
 
 @workflow.defn
@@ -196,20 +228,55 @@ class SearchOrchestratorWorkflow:
                 len(merged), cov_round,
             )
 
-        # ── 4. synthesize once (large model) ────────────────────────
+        # ── 3c. unified graph+vector rerank (R5) ────────────────────
+        # Co-rank the merged pool (graph-derived + vector chunks) in ONE
+        # bge cross-encoder pass so synthesis sees the globally most
+        # relevant top-N rather than the raw union order.  Runs on the
+        # small search queue (the model is cheap relative to the large
+        # synthesis LLM).  FAIL-OPEN: any rerank error → fall back to the
+        # unranked merged pool (never block the answer).
+        self._state["phase"] = "rerank"
+        synth_sources = merged
+        try:
+            rr: RerankResult = await workflow.execute_activity(
+                "rerank_sources",
+                RerankParams(
+                    query=params.query,
+                    sources=merged,
+                    top_n=settings.temporal.rerank_top_n,
+                ),
+                result_type=RerankResult,
+                start_to_close_timeout=timedelta(minutes=3),
+                schedule_to_close_timeout=timedelta(minutes=10),
+                retry_policy=FAST_RETRY,
+            )
+            if rr.sources:
+                synth_sources = list(rr.sources)
+                log.info(
+                    "orchestrator  reranked %d → %d sources",
+                    len(merged), len(synth_sources),
+                )
+        except Exception as exc:
+            log.warning(
+                "orchestrator  rerank err=%s — fall back to merged pool", exc,
+            )
+
+        # ── 4. synthesize once (large model, dedicated large queue) ──
+        # Pin synthesize_answer to ``large_task_queue`` so the heavyweight
+        # synthesis model runs on its own low-concurrency worker pool
+        # (TEMPORAL_LARGE_ACTIVITY_CONCURRENCY).  The call spec (queue +
+        # use_synthesis_llm=True) comes from the pure ``build_synthesize_call``
+        # helper so it's unit-testable outside Temporal.
         self._state["phase"] = "synthesize"
+        synth_queue, synth_params = build_synthesize_call(
+            query=params.query,
+            sources=synth_sources,
+            max_refinements=params.max_refinements,
+        )
         synth: SynthesizeResult = await workflow.execute_activity(
             "synthesize_answer",
-            SynthesizeParams(
-                query=params.query,
-                # Synthesizer-tier selector: "simple" picks the plain
-                # ResponseSynthesizer branch in synthesize_answer (the
-                # user-facing label is "local", set on SearchOutcome below).
-                mode="simple",
-                accumulated=merged,
-                max_refinements=params.max_refinements,
-                use_synthesis_llm=True,
-            ),
+            synth_params,
+            task_queue=synth_queue,
             result_type=SynthesizeResult,
             start_to_close_timeout=timedelta(minutes=5),
             schedule_to_close_timeout=timedelta(minutes=15),

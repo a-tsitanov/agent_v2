@@ -7,15 +7,18 @@ same queue (legacy ReAct activities + these) during the parity window.
 """
 
 from src.workflow.search.activities.plan import plan_subquestions
+from src.workflow.search.activities.rerank import rerank_sources
 from src.workflow.search.activities.retrieve import retrieve_subquestion
 
 SEARCH_V2_ACTIVITIES = [
     plan_subquestions,
     retrieve_subquestion,
+    rerank_sources,
 ]
 
 __all__ = [
     "SEARCH_V2_ACTIVITIES",
     "plan_subquestions",
+    "rerank_sources",
     "retrieve_subquestion",
 ]

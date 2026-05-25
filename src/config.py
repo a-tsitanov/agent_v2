@@ -228,6 +228,20 @@ class TemporalSettings(BaseSettings):
     search_task_queue: str = "kb-search-small"
     search_activity_concurrency: int = 4
 
+    # Large-tier final synthesis (Search R5) runs on a dedicated queue
+    # with a LOW concurrency cap so the heavyweight synthesis model is
+    # never asked to serve many parallel sessions (it dominates GPU /
+    # proxy budget).  The orchestrator pins ``synthesize_answer`` here
+    # via ``execute_activity(task_queue=...)``; everything else (plan,
+    # retrieve, coverage_check, rerank) stays on ``search_task_queue``.
+    large_task_queue: str = "kb-search-large"
+    large_activity_concurrency: int = 2
+
+    # bge cross-encoder top-N for the unified graph+vector rerank pass
+    # (Search R5).  Trims the merged pool to the most relevant chunks
+    # before the (expensive) large-tier synthesis.
+    rerank_top_n: int = 5
+
     @property
     def target(self) -> str:
         return f"{self.host}:{self.port}"

@@ -37,6 +37,7 @@ _state: dict[str, Any] = {
     "llm": None, "retriever": None, "graph_retriever": None,
     "chunk_repository": None, "synthesizer": None,
     "synthesis_llm": None, "synthesis_synthesizer": None,
+    "reranker": None,
 }
 
 
@@ -161,12 +162,34 @@ async def get_synthesis_synthesizer():
     return _state["synthesis_synthesizer"]
 
 
+async def get_reranker(top_n: int | None = None):
+    """Process-cached bge cross-encoder (Search R5 unified rerank).
+
+    Heavy: pulls ``sentence-transformers`` and downloads
+    ``BAAI/bge-reranker-v2-m3`` on first use — memoised per worker
+    process so the unified rerank pass before synthesis doesn't reload
+    it.  ``top_n`` defaults to ``TemporalSettings.rerank_top_n``; the
+    cached instance is built once with that top_n (the rerank activity
+    enforces top_n on its side too, so a config change between calls
+    still truncates correctly)."""
+    async with _lock:
+        if _state["reranker"] is None:
+            from src.config import settings
+            from src.retrieval.reranker import build_reranker
+            _state["reranker"] = build_reranker(
+                top_n=top_n if top_n is not None
+                else settings.temporal.rerank_top_n,
+            )
+    return _state["reranker"]
+
+
 def reset_for_tests() -> None:
     """Test hook — clear all caches.  Production code never calls."""
     for k in list(_state):
         _state[k] = None if k in (
             "llm", "retriever", "graph_retriever", "chunk_repository",
             "synthesizer", "synthesis_llm", "synthesis_synthesizer",
+            "reranker",
         ) else _state[k]
     _state.pop("graph_retriever_attempted", None)
     _state.pop("_embed_model", None)
