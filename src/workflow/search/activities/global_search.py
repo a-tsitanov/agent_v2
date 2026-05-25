@@ -72,9 +72,9 @@ def _get_store() -> Any | None:
 
 
 def _get_map_llm() -> Any:
-    """Small-tier LLM for the per-community MAP step (role ``route``/small
-    tier — same cheap tier as routing/summaries; REDUCE uses the large
-    synthesizer).  Indirected for monkeypatching."""
+    """Small-tier LLM for the per-community MAP step (role ``retrieve``,
+    which maps to the small tier — same cheap tier as routing/summaries;
+    REDUCE uses the large synthesizer).  Indirected for monkeypatching."""
     from src.retrieval.llm import build_llm
 
     return build_llm("retrieve")
