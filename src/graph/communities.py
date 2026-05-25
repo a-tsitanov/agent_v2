@@ -32,16 +32,28 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 from typing import Any
 
 from loguru import logger
 
 from src.workflow.contracts import CommunityRef
 
-# Name of the transient in-memory GDS projection.  Dropped at the end of
-# every run (and defensively re-created with IF-exists handling) so reruns
-# never collide.
-_GDS_GRAPH_NAME = "kb-communities"
+# Prefix for the transient in-memory GDS projection.  The actual name is
+# generated PER CALL (``_new_graph_name``) with a random suffix so two
+# concurrent rebuilds (graph_build worker concurrency >= 2) never collide —
+# one run's ``gds.graph.drop`` must not kill another's live projection.
+_GDS_GRAPH_PREFIX = "kb-communities"
+
+
+def _new_graph_name() -> str:
+    """Unique GDS projection name for a single ``detect_communities`` call.
+
+    ``detect_communities`` runs inside a Temporal ACTIVITY (not a workflow
+    body), so non-determinism is fine here.  A per-call name isolates
+    concurrent rebuilds from each other's project/drop."""
+    return f"{_GDS_GRAPH_PREFIX}-{uuid.uuid4().hex[:8]}"
+
 
 # 1. Cypher projection of the __Entity__ sub-graph.  Cypher projection
 #    (``gds.graph.project`` aggregation form) handles the arbitrary
@@ -49,11 +61,12 @@ _GDS_GRAPH_NAME = "kb-communities"
 #    type up front.  Self-/dangling nodes are included via OPTIONAL MATCH
 #    so isolated entities still appear (they land in singleton communities
 #    that the min_size floor drops).
-_PROJECT_CYPHER = f"""
+def _project_cypher(graph_name: str) -> str:
+    return f"""
 MATCH (s:__Entity__)
 OPTIONAL MATCH (s)-[r]->(t:__Entity__)
 RETURN gds.graph.project(
-    '{_GDS_GRAPH_NAME}',
+    '{graph_name}',
     s,
     t,
     {{ sourceNodeLabels: labels(s), targetNodeLabels: labels(t),
@@ -61,15 +74,29 @@ RETURN gds.graph.project(
 )
 """
 
+
 # 2. Leiden stream — community per node, read back the entity name.
-_LEIDEN_STREAM_CYPHER = f"""
-CALL gds.leiden.stream('{_GDS_GRAPH_NAME}', {{ randomSeed: 19 }})
+def _leiden_stream_cypher(graph_name: str) -> str:
+    return f"""
+CALL gds.leiden.stream('{graph_name}', {{ randomSeed: 19 }})
 YIELD nodeId, communityId
 RETURN gds.util.asNode(nodeId).name AS name, communityId AS communityId
 """
 
+
 # 5. Drop the transient projection (idempotent: failIfMissing=false).
-_DROP_CYPHER = f"CALL gds.graph.drop('{_GDS_GRAPH_NAME}', false) YIELD graphName"
+def _drop_cypher(graph_name: str) -> str:
+    return f"CALL gds.graph.drop('{graph_name}', false) YIELD graphName"
+
+
+# Before re-writing a level's communities, DETACH DELETE the prior ones for
+# THAT level only: a re-run of Leiden can produce fewer/renumbered ids, so
+# stale ``:Community {level:$level}`` nodes (with orphaned summaries) would
+# otherwise linger.  Scoped to ``$level`` so other levels are untouched.
+_PRUNE_LEVEL_CYPHER = """
+MATCH (c:Community {level: $level})
+DETACH DELETE c
+"""
 
 # Constraint backing the :Community MERGE (idempotent, prevents dupes).
 _COMMUNITY_CONSTRAINT = (
@@ -147,18 +174,21 @@ async def detect_communities(
         logger.info("communities: no graph store — skipping detection")
         return []
 
+    # Unique per-call projection name so concurrent rebuilds don't collide.
+    graph_name = _new_graph_name()
+
     try:
         # Re-project from scratch: drop any stale projection first, then
         # build a fresh one (a leftover projection from a crashed run would
         # otherwise make gds.graph.project fail with "already exists").
-        await asyncio.to_thread(_run_query, store, _DROP_CYPHER)
-        await asyncio.to_thread(_run_query, store, _PROJECT_CYPHER)
-        rows = await asyncio.to_thread(_run_query, store, _LEIDEN_STREAM_CYPHER)
+        await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+        await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+        rows = await asyncio.to_thread(_run_query, store, _leiden_stream_cypher(graph_name))
     except Exception as exc:  # noqa: BLE001
         logger.warning("communities: GDS Leiden detection failed: {e}", e=exc)
         # Best-effort cleanup so we don't leak the projection.
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(_run_query, store, _DROP_CYPHER)
+            await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         return []
 
     communities = _group_by_community(rows, min_size=min_size, level=level)
@@ -170,6 +200,12 @@ async def detect_communities(
     # Persist :Community nodes + member links (idempotent MERGE).
     try:
         await asyncio.to_thread(_run_query, store, _COMMUNITY_CONSTRAINT)
+        # Prune the prior run's communities for THIS level FIRST so a
+        # rebuild starts clean (Leiden may renumber/shrink ids, leaving
+        # ghost :Community nodes + orphaned summaries).  Level-scoped.
+        await asyncio.to_thread(
+            _run_query, store, _PRUNE_LEVEL_CYPHER, {"level": level},
+        )
         for comm in communities:
             await asyncio.to_thread(
                 _run_query, store, _MERGE_COMMUNITY_CYPHER,
@@ -186,7 +222,7 @@ async def detect_communities(
         # workflow can at least attempt summaries.
     finally:
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(_run_query, store, _DROP_CYPHER)
+            await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
 
     return communities
 

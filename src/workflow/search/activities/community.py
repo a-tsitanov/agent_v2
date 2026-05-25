@@ -19,6 +19,7 @@ is fine and the next run reconciles).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from temporalio import activity
@@ -146,8 +147,6 @@ async def summarize_community_activity(
 
     # 1. Gather member context (names, descriptions, inter-member rels).
     try:
-        import asyncio
-
         rows = await asyncio.to_thread(
             store.structured_query,
             _MEMBER_CONTEXT_CYPHER,
@@ -184,8 +183,6 @@ async def summarize_community_activity(
     # 3. Persist on :Community.summary (idempotent MERGE).
     persisted = False
     try:
-        import asyncio
-
         await asyncio.to_thread(
             store.structured_query,
             _WRITE_SUMMARY_CYPHER,
