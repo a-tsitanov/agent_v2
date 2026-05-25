@@ -160,6 +160,15 @@ class ERConfig:
     "СтройИнвест" ⊂ "АО «СтройИнвест", overlap=1.0).  Set to a
     value > 1.0 to disable this bypass."""
 
+    verdict_cache_enabled: bool = True
+    """When True AND an `er_store` is passed to `resolve_entities`,
+    borderline LLM-judge verdicts are cached in Neo4j (label
+    `:ERVerdict`, keyed on the order-insensitive
+    `(label:norm)|(label:norm)` pair) so recurring name-pairs across
+    re-ingests / hub-heavy docs skip the LLM.  The cache is OPTIONAL
+    and FAIL-SAFE: with no store (or any Neo4j error) ER falls back
+    to pure LLM judging with byte-for-byte identical behaviour."""
+
 
 # ── small utilities ────────────────────────────────────────────────
 
@@ -697,6 +706,85 @@ def _parse_judge_response(raw: str, expected: int) -> list[bool]:
     return out
 
 
+# ── persistent verdict cache ───────────────────────────────────────
+#
+# Borderline pairs are judged by an LLM every run; the same
+# `(name, label)` pairs recur across re-ingests and within hub-heavy
+# documents.  Caching `(norm_a, label_a, norm_b, label_b) -> SAME/
+# DIFFERENT` in Neo4j (`:ERVerdict {key, same}`) lets ER skip
+# already-judged pairs.  Everything here is OPTIONAL and FAIL-SAFE:
+# with `store is None` (or any Neo4j error) the functions degrade to
+# no-ops and ER behaves exactly as pure LLM judging.
+
+
+def _verdict_key(a, b) -> str:
+    """Order-insensitive cache key for a candidate pair.
+
+    Keyed on `(norm, label)` of both items, sorted so that
+    `_verdict_key(a, b) == _verdict_key(b, a)`.
+    """
+    left = (a.norm, a.label)
+    right = (b.norm, b.label)
+    lo, hi = sorted([left, right])
+    return f"{lo[1]}:{lo[0]}|{hi[1]}:{hi[0]}"
+
+
+def _partition_cached(pairs, cache):
+    """Split `pairs` into `(cached, uncached)`.
+
+    `cached` is a list of `(pair, verdict)` for pairs whose key is in
+    `cache`; `uncached` is the list of pairs that still need judging.
+    Original order is preserved within each partition.
+    """
+    cached, uncached = [], []
+    for pair in pairs:
+        key = _verdict_key(pair[0], pair[1])
+        if key in cache:
+            cached.append((pair, cache[key]))
+        else:
+            uncached.append(pair)
+    return cached, uncached
+
+
+def _load_verdict_cache(store, keys) -> dict[str, bool]:
+    """Fetch cached verdicts for `keys` from Neo4j.
+
+    Returns `{key -> same}`.  Empty (no-op) when `store is None`,
+    `keys` is empty, or any query error — ER then judges everything.
+    """
+    if store is None or not keys:
+        return {}
+    try:
+        rows = store.structured_query(
+            "MATCH (v:ERVerdict) WHERE v.key IN $keys "
+            "RETURN v.key AS key, v.same AS same",
+            param_map={"keys": keys},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ER verdict cache load failed: {e}", e=exc)
+        return {}
+    return {r["key"]: bool(r["same"]) for r in (rows or []) if isinstance(r, dict)}
+
+
+def _store_verdicts(store, entries: dict[str, bool]) -> None:
+    """Persist freshly-judged verdicts to Neo4j (`MERGE` by key).
+
+    No-op when `store is None` or `entries` is empty.  Any query
+    error is logged and swallowed — caching is best-effort and must
+    never break ER.
+    """
+    if store is None or not entries:
+        return
+    try:
+        store.structured_query(
+            "UNWIND $rows AS row MERGE (v:ERVerdict {key: row.key}) "
+            "SET v.same = row.same, v.updated = datetime()",
+            param_map={"rows": [{"key": k, "same": s} for k, s in entries.items()]},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ER verdict cache store failed: {e}", e=exc)
+
+
 # ── consolidation ──────────────────────────────────────────────────
 
 
@@ -1052,6 +1140,7 @@ async def resolve_entities(
     embed_model: Any,
     graph_store: Any | None = None,
     config: ERConfig | None = None,
+    er_store: Any | None = None,
 ) -> tuple[list[EntityNode], list[Relation], dict[str, str]]:
     """Run ER over already-merged entities.
 
@@ -1161,7 +1250,28 @@ async def resolve_entities(
                 a=it_a.name, la=it_a.label,
                 b=it_b.name, lb=it_b.label, c=cos,
             )
-        verdicts = await _llm_judge_pairs(judge_input, llm, cfg)
+        # Persistent verdict cache: skip re-judging pairs we've already
+        # judged in a prior run / earlier hub-heavy doc.  OPTIONAL and
+        # FAIL-SAFE — when disabled or no store is available, this
+        # reduces to the original `verdicts = _llm_judge_pairs(...)`
+        # path (cache empty, nothing cached, nothing uncached-only,
+        # nothing persisted).  Order/length of `verdicts` is preserved
+        # to match `judge_input` exactly for the downstream zip.
+        cache: dict[str, bool] = {}
+        if cfg.verdict_cache_enabled and er_store is not None:
+            keys = [_verdict_key(a, b) for a, b in judge_input]
+            cache = _load_verdict_cache(er_store, keys)
+        cached, uncached = _partition_cached(judge_input, cache)
+        fresh = await _llm_judge_pairs(uncached, llm, cfg)
+        vmap = {id(p): v for (p, v) in cached}
+        for p, v in zip(uncached, fresh):
+            vmap[id(p)] = v
+        verdicts = [vmap[id(p)] for p in judge_input]
+        if cfg.verdict_cache_enabled and er_store is not None:
+            _store_verdicts(
+                er_store,
+                {_verdict_key(a, b): v for (a, b), v in zip(uncached, fresh)},
+            )
         for ok, (it_a, it_b) in zip(verdicts, judge_input):
             logger.info(
                 "ER judge-verdict  '{a}' vs '{b}' = {v}",

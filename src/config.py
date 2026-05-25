@@ -314,6 +314,12 @@ class AgentSettings(BaseSettings):
     er_enabled: bool = True
     # Pairs per LLM-judge call when ER routes borderline candidates.
     er_judge_batch_size: int = Field(default=10, ge=1, le=50)
+    # Persistent ER verdict cache: when on, borderline LLM-judge
+    # verdicts are stored in Neo4j (`:ERVerdict`, order-insensitive
+    # name/label key) so recurring pairs across re-ingests / hub-heavy
+    # docs skip the LLM.  OPTIONAL + FAIL-SAFE: any Neo4j error or a
+    # missing store falls back to pure LLM judging.
+    er_verdict_cache_enabled: bool = True
     # Process-wide concurrency cap for LLM calls (search-side).
     # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
     # graph_search's LLMSynonymRetriever, judge) share this gate.
