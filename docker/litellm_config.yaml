@@ -16,6 +16,13 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
+  # Local Ollama model — proxied to the host ollama daemon.  Used for
+  # offline agent function-calling tests (set LITELLM_LLM_MODEL=gemma4:e4b).
+  - model_name: gemma4:e4b
+    litellm_params:
+      model: ollama_chat/gemma4:e4b
+      api_base: http://host.docker.internal:11434
+
   # Heavier fallback for harder multi-hop / reflective work.  Switch
   # to it by changing LITELLM_LLM_MODEL=gpt-4o in the host `.env`.
   - model_name: gpt-4o

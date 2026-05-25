@@ -192,13 +192,30 @@ class SerializedNode(_Frozen):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SerializedToolCall(_Frozen):
+    """One tool call an assistant turn requested.
+
+    Mirrors the OpenAI ``tool_calls`` entry shape so serde can rebuild
+    a valid function-calling history: every TOOL message must be
+    preceded by the ASSISTANT message whose ``tool_calls`` it answers.
+    """
+
+    id: str
+    name: str
+    arguments: str  # JSON-encoded kwargs
+
+
 class SerializedMessage(_Frozen):
     """Wire-friendly projection of LlamaIndex ``ChatMessage``."""
 
     role: Literal["system", "user", "assistant", "tool"]
     content: str = ""
-    tool_call_id: str = ""
-    name: str = ""  # for assistant messages with tool_calls — function name
+    tool_call_id: str = ""  # for TOOL messages — which call this answers
+    name: str = ""  # for TOOL messages — the function name
+    # for ASSISTANT messages — the tool call(s) this turn requested, so
+    # the next reasoning step sees a valid assistant→tool pairing
+    # instead of an orphan tool observation.
+    tool_calls: list[SerializedToolCall] = Field(default_factory=list)
 
 
 class ToolSpec(_Frozen):

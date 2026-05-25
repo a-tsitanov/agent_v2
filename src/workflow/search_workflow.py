@@ -21,6 +21,7 @@ back to the client.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import timedelta
 from typing import Any
@@ -38,6 +39,7 @@ with workflow.unsafe.imports_passed_through():
         SearchOutcome,
         SearchParams,
         SerializedMessage,
+        SerializedToolCall,
         SynthesizeParams,
         SynthesizeResult,
         ToolCallParams,
@@ -69,6 +71,19 @@ You have access to tools to look things up.  Your job:
 2. Decide which tool to call to gather missing information.
 3. Repeat until you have enough.
 4. Call `submit_answer` to finalize.
+
+Tool selection — choose deliberately, do NOT default to vector_search:
+- The question names a concrete identifier (phone, INN, email, exact
+  name) → call `find_entity_by_id` first.
+- The question is about a specific person/organization/topic, or asks
+  how things are connected ("кто связан с", "связь между X и Y",
+  "чьи", "с кем") → call `graph_search`.
+- "расскажи всё про X" once X is anchored → `find_neighbours`.
+- `vector_search` is only for open-ended topical questions with no
+  named entity, or to gather supporting passages AFTER the graph has
+  surfaced entity names.
+- Good pattern: anchor on entities with the graph first, then use
+  `vector_search` for surrounding text — not the other way around.
 
 Rules:
 - Do NOT answer from prior knowledge — only from tool observations.
@@ -194,6 +209,12 @@ class SearchWorkflow:
                     repeat_count = 0
                 last_sig = sig
 
+                # Stable id linking the assistant tool-call turn to the
+                # TOOL observation below.  Fall back to a deterministic
+                # step-derived id when the LLM didn't supply one (keeps
+                # the workflow replay-safe — no uuid/random).
+                call_id = decision.tool_call_id or f"call_{step_i}"
+
                 self._state["phase"] = f"tool_execution_{step_i}"
                 self._state["last_tool"] = decision.tool_name
                 tool_params = ToolCallParams(
@@ -245,11 +266,26 @@ class SearchWorkflow:
                     )
                     break
 
-                # Append TOOL response to history for next reasoning step.
+                # Record the assistant tool-call turn, THEN its TOOL
+                # observation — a valid function-calling pairing.  Without
+                # the assistant turn the next reasoning step sees orphan
+                # tool messages, can't tell what it already called, and
+                # keeps falling back to the most generic tool.
+                messages.append(SerializedMessage(
+                    role="assistant",
+                    content=decision.raw_text,
+                    tool_calls=[SerializedToolCall(
+                        id=call_id,
+                        name=decision.tool_name,
+                        arguments=json.dumps(
+                            decision.tool_kwargs, ensure_ascii=False,
+                        ),
+                    )],
+                ))
                 messages.append(SerializedMessage(
                     role="tool",
                     content=tool_result.observation,
-                    tool_call_id=decision.tool_call_id,
+                    tool_call_id=call_id,
                     name=decision.tool_name,
                 ))
 

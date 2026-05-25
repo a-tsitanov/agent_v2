@@ -304,20 +304,29 @@ def filter_by_metadata(
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "vector_search": (
-        "Semantic search over text chunks. Use this for questions "
-        "where you don't know an exact entity name yet."
+        "Semantic search over raw text chunks. Use ONLY for open-ended "
+        "topical questions with no named entity or relation involved, "
+        "or to gather supporting passages AFTER the graph has given you "
+        "entity names. Do NOT use this as the default for questions "
+        "about a specific person/org/identifier or about connections "
+        "between them — prefer the graph tools below for those."
     ),
     "graph_search": (
-        "Knowledge-graph traversal. Use when the question involves "
-        "relations between people/organizations/topics/concepts."
+        "Knowledge-graph traversal: returns entities, their relations, "
+        "and related chunks. PREFER THIS for any question mentioning a "
+        "named person/organization/topic or asking how things are "
+        "connected ('кто связан с', 'связь между X и Y', 'чьи', 'с "
+        "кем'). This is the primary tool for entity/relation questions."
     ),
     "find_entity_by_id": (
-        "Exact lookup by canonical name (phone in E.164, INN, email). "
-        "Use when you already know the ID."
+        "Exact graph lookup by canonical identifier (phone in E.164, "
+        "INN, email, exact name). Use FIRST whenever the question "
+        "contains a concrete identifier you can match verbatim."
     ),
     "find_neighbours": (
         "List entities connected to a known one in the graph "
-        "(1-2 hops). Use for 'tell me everything about X' questions."
+        "(1-2 hops). Use for 'расскажи всё про X' / 'tell me everything "
+        "about X' questions once you have anchored on entity X."
     ),
     "filter_by_metadata": (
         "Filter accumulated sources by doc_id / department / doc_type. "
