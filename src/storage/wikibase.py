@@ -183,8 +183,9 @@ class AsyncWikibase:
 
     def _set_aliases_sync(self, qid: str, aliases: list[str]) -> None:
         item = self._wbi.item.get(entity_id=qid)
-        for alias in aliases:
-            item.aliases.set(language=self._language, values=alias)
+        # Aliases.set defaults to APPEND_OR_REPLACE (de-duped), so passing
+        # the whole list adds them without clobbering existing aliases.
+        item.aliases.set(language=self._language, values=aliases)
         item.write()
 
     # -- sync internals --------------------------------------------------
