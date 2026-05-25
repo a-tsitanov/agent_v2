@@ -1,0 +1,10 @@
+{
+  "name": "news_en",
+  "lang": "en",
+  "text": "Moscow-based Romashka LLC has announced a strategic partnership with TechnoStroy Group, marking one of the largest construction deals in the Russian capital this quarter. The agreement was signed by Ivan Sidorov, CEO of Romashka, and Anna Morozova, head of TechnoStroy. Sidorov, who has led the company since 2019, stated that the partnership reflects growing demand in the Moscow market. Morozova previously held a senior position at StroyInvest JSC before joining TechnoStroy last year. International inquiries can be directed to +7-495-123-4567 or via the company's London representative office at +44 20 7946 0958. A press conference is scheduled in Moscow next week.",
+  "expected": {
+    "Person": ["Ivan Sidorov", "Anna Morozova"],
+    "Organization": ["Romashka LLC", "TechnoStroy Group", "StroyInvest JSC"],
+    "Location": ["Moscow", "London"]
+  }
+}
