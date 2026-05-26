@@ -3,7 +3,9 @@
 We don't talk to a real Temporal cluster here — only assert that:
   * `_list_tools` exposes exactly the kb_search tool with the right
     name + description excerpt,
-  * the tool's input schema reflects the mode literal options,
+  * the tool's input schema exposes the `query` parameter (R7b: the
+    server now submits the plan-execute ``SearchOrchestratorWorkflow``,
+    a local-only flow with no `mode` selector),
   * the auth gate fails when KB_MCP_REQUIRE_AUTH=true and no API_KEYS
     is set.
 """
@@ -29,17 +31,15 @@ async def test_search_server_lists_kb_search_tool():
 
 
 @pytest.mark.asyncio
-async def test_kb_search_schema_includes_mode_enum():
+async def test_kb_search_schema_includes_query_param():
     from src.mcp import search_server
     tools = await search_server.mcp._list_tools()
     schema = tools[0].parameters
     props = schema.get("properties", {})
-    assert "mode" in props
-    enum_or_default = props["mode"].get("enum") or [props["mode"].get("default")]
-    assert any(
-        v in {"simple", "agent", "selfrag"}
-        for v in enum_or_default if v is not None
-    )
+    # R7b: orchestrator is local-only — `mode` is gone; `query` is the
+    # required input.
+    assert "query" in props
+    assert "mode" not in props
 
 
 def test_auth_gate_blocks_when_keys_missing(monkeypatch):

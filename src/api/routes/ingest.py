@@ -126,7 +126,7 @@ async def upload_document(
     # used (per Stage 4 of the multimodel plan).
     version_tag = x_version_tag or settings.analytics.default_version_tag
     cfg = settings.litellm
-    model = cfg.llm_model
+    model = cfg.effective_base
     extraction_model = cfg.model_for("extraction")
     judge_model = cfg.model_for("judge")
     search_model = cfg.model_for("search")

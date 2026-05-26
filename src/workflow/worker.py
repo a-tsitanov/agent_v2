@@ -34,11 +34,22 @@ from temporalio.worker import Worker
 
 from src.config import settings
 from src.workflow.activities import (
-    LLM_ACTIVITIES, MAIN_ACTIVITIES, SEARCH_ACTIVITIES,
+    LLM_ACTIVITIES,
+    MAIN_ACTIVITIES,
+    SEARCH_ACTIVITIES,
+    synthesize_answer,
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
-from src.workflow.search_workflow import SearchWorkflow
+from src.workflow.search.activities import (
+    GRAPH_BUILD_ACTIVITIES,
+    SEARCH_V2_ACTIVITIES,
+)
+from src.workflow.search.community_wf import CommunityBuildWorkflow
+from src.workflow.search.global_wf import GlobalSearchWorkflow
+from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
+from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
+from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 
 
 def _build_runtime() -> Runtime | None:
@@ -106,15 +117,30 @@ async def _run() -> None:
         activities=LLM_ACTIVITIES,
         max_concurrent_activities=settings.temporal.llm_activity_concurrency,
     )
-    # SearchWorkflow lives on its own queue so concurrent search
+    # Search workflows live on their own queue so concurrent search
     # sessions don't fight ingest for GPU budget.  Cap independently
     # via TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY (default 4 — assumes
     # LLM proxy can handle a small handful of parallel sessions).
+    # R7b cutover: the legacy ReAct SearchWorkflow was removed — the
+    # plan-execute SearchOrchestratorWorkflow (+ SubQueryRetrievalWorkflow
+    # child) is now the sole local path.  The orchestrator reuses
+    # synthesize_answer (in SEARCH_ACTIVITIES) and adds plan_subquestions +
+    # retrieve_subquestion (SEARCH_V2_ACTIVITIES).
+    # R7a adds the GraphRAG GlobalSearchWorkflow (orchestration on this
+    # small queue; its MAP partials are small-tier and its REDUCE pins
+    # synthesize_answer to the large queue, same as the local orchestrator)
+    # plus route_query + map_communities/map_community_partial activities.
     search_worker = Worker(
         client,
         task_queue=settings.temporal.search_task_queue,
-        workflows=[SearchWorkflow],
-        activities=SEARCH_ACTIVITIES,
+        workflows=[
+            SearchOrchestratorWorkflow,
+            SubQueryRetrievalWorkflow,
+            GlobalSearchWorkflow,
+            DriftSearchWorkflow,
+            AutoSearchWorkflow,
+        ],
+        activities=SEARCH_ACTIVITIES + SEARCH_V2_ACTIVITIES,
         max_concurrent_activities=settings.temporal.search_activity_concurrency,
     )
     logger.info(
@@ -122,9 +148,48 @@ async def _run() -> None:
         sq=settings.temporal.search_task_queue,
         sc=settings.temporal.search_activity_concurrency,
     )
+    # Large-tier final synthesis (Search R5) lives on its own queue with
+    # a LOW concurrency cap so the heavyweight synthesis model never
+    # serves many parallel sessions.  Same process, separate Worker pool:
+    # the orchestrator pins ``synthesize_answer`` here via
+    # ``execute_activity(task_queue=large_task_queue)``.  Only the
+    # synthesize activity registers here — plan/retrieve/rerank stay on
+    # the small queue.  No workflows host on this queue (it runs activities
+    # only); the orchestrator itself still lives on the small queue.
+    large_worker = Worker(
+        client,
+        task_queue=settings.temporal.large_task_queue,
+        activities=[synthesize_answer],
+        max_concurrent_activities=settings.temporal.large_activity_concurrency,
+    )
+    logger.info(
+        "temporal worker  large_queue={lgq}  large_concurrency={lgc}",
+        lgq=settings.temporal.large_task_queue,
+        lgc=settings.temporal.large_activity_concurrency,
+    )
+    # Offline graph-community build (Search R6) lives on its OWN dedicated
+    # queue so the heavy GDS Leiden projection + per-community batch
+    # summaries are fully DECOUPLED from the query hot path.  Hosts the
+    # CommunityBuildWorkflow + its detect/summarize activities; concurrency
+    # is kept low (TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY) so a rebuild
+    # doesn't flood the small-tier LLM proxy.  Triggered by the admin
+    # endpoint (and an optional Temporal Schedule) — never by a search.
+    graph_build_worker = Worker(
+        client,
+        task_queue=settings.temporal.graph_build_task_queue,
+        workflows=[CommunityBuildWorkflow],
+        activities=GRAPH_BUILD_ACTIVITIES,
+        max_concurrent_activities=settings.temporal.graph_build_activity_concurrency,
+    )
+    logger.info(
+        "temporal worker  graph_build_queue={gbq}  graph_build_concurrency={gbc}",
+        gbq=settings.temporal.graph_build_task_queue,
+        gbc=settings.temporal.graph_build_activity_concurrency,
+    )
 
     await asyncio.gather(
         main_worker.run(), llm_worker.run(), search_worker.run(),
+        large_worker.run(), graph_build_worker.run(),
     )
 
 

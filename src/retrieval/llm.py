@@ -1,11 +1,11 @@
 """LLM-client factory wrapping LiteLLM-proxied OpenAILike.
 
-Per-role variants (extraction / judge / search) read distinct model
-names from ``LiteLLMSettings`` so the operator can pair the right
-size/speed model with each workload — see ``docs/MODELS.md`` for
-recommended pairings.  ``build_llm()`` with no role kwarg stays as
-the legacy fallback (uses ``LITELLM_LLM_MODEL``) so we don't break
-callers that haven't migrated yet.
+Per-role variants resolve their model through the two-tier
+``LiteLLMSettings`` (role → tier → small/large physical model) — see
+``docs/MODELS.md`` for the role→tier table and escalation path.
+``build_llm()`` with no role kwarg stays as the legacy fallback (uses
+``model_small``, or the deprecated ``llm_model`` if explicitly set) so
+we don't break callers that haven't migrated yet.
 """
 
 from __future__ import annotations
@@ -43,27 +43,33 @@ def _build(model: str) -> LLM:
 def build_llm(role: LLMRole | None = None) -> LLM:
     """Construct an LLM client.
 
-    ``role=None`` (legacy) ⇒ uses ``settings.litellm.llm_model``.
-    ``role="extraction"|"judge"|"search"`` ⇒ uses
-    ``settings.litellm.model_for(role)`` which falls back to
-    ``llm_model`` when the per-role override is empty.
+    ``role=None`` (legacy) ⇒ uses ``settings.litellm.model_small``
+    (or the deprecated ``llm_model`` if explicitly set).
+    ``role=<name>`` ⇒ uses ``settings.litellm.model_for(role)`` which
+    resolves role → tier → one of the two physical models.
     """
     cfg = settings.litellm
-    model = cfg.model_for(role) if role else cfg.llm_model
+    model = cfg.model_for(role) if role else cfg.effective_base
     return _build(model)
 
 
 def build_extraction_llm() -> LLM:
-    """High-volume KG triple extraction + translation."""
+    """High-volume KG triple extraction + translation (small tier)."""
     return build_llm("extraction")
 
 
 def build_judge_llm() -> LLM:
     """ER pair-wise yes/no judgements + cross-chunk merge summary
-    (high call volume; benefits from a smaller / cheaper model)."""
+    (high call volume; small tier)."""
     return build_llm("judge")
 
 
 def build_search_llm() -> LLM:
-    """Latency-sensitive user-facing ReAct / Self-RAG / legacy agent."""
+    """Latency-sensitive user-facing ReAct / Self-RAG / legacy agent
+    reasoning (small tier)."""
     return build_llm("search")
+
+
+def build_synthesis_llm() -> LLM:
+    """Final user-facing answer synthesis (large tier)."""
+    return build_llm("synthesis")

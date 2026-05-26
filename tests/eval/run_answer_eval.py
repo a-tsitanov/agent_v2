@@ -1,4 +1,7 @@
-"""R9 CLI — run the 15 golden Q&A through the three live endpoints.
+"""R9 CLI — run the 15 golden Q&A through the live search endpoints.
+
+R7b cutover: the legacy ReAct endpoints were removed; this harness now
+probes ``/api/v1/search/{local,global,drift,auto}``.
 
 Assumes:
   * API server is up at `--api-url` (default http://localhost:8000),
@@ -16,8 +19,7 @@ Usage::
     python -m tests.eval.run_answer_eval                         # informative
     python -m tests.eval.run_answer_eval --strict                # CI mode
     python -m tests.eval.run_answer_eval --json-out out.json
-    python -m tests.eval.run_answer_eval --include-legacy        # also probe legacy
-    python -m tests.eval.run_answer_eval --endpoints search,agent
+    python -m tests.eval.run_answer_eval --endpoints local,auto
 
 Out-of-scope: ingestion of the corpus, model loading, prom-pulling.
 The runner just hits the API.
@@ -51,13 +53,14 @@ from tests.eval.medical_fixture import (  # noqa: E402
 )
 
 
-# `legacy` exercises the judge-based path via the same /search endpoint
-# but with the legacy flag if it's still wired (R10 may remove this).
+# R7b cutover: the legacy ReAct endpoints (/search, /agent, /selfrag)
+# and the judge-based /legacy/agent baseline were removed.  The eval now
+# probes the plan-execute / GraphRAG surface.
 ENDPOINT_MAP = {
-    "search": "/api/v1/search",
-    "agent": "/api/v1/agent",
-    "selfrag": "/api/v1/selfrag",
-    "legacy": "/api/v1/legacy/agent",
+    "local": "/api/v1/search/local",
+    "global": "/api/v1/search/global",
+    "drift": "/api/v1/search/drift",
+    "auto": "/api/v1/search/auto",
 }
 
 
@@ -132,8 +135,6 @@ async def run(args: argparse.Namespace) -> int:
               f"(seed={args.medical_seed}, types={qt_filter or 'all'})")
         cases = list(cases) + medical
     endpoints = [e.strip() for e in args.endpoints.split(",") if e.strip()]
-    if args.include_legacy and "legacy" not in endpoints:
-        endpoints.append("legacy")
 
     print(f"Running {len(cases)} cases × {len(endpoints)} endpoints "
           f"→ {len(cases) * len(endpoints)} calls\n",
@@ -147,13 +148,12 @@ async def run(args: argparse.Namespace) -> int:
                   f": {case.query[:80]}", flush=True)
             for ep in endpoints:
                 t_ep = time.monotonic()
-                # /search is single-shot — 120s tops on qwen3:8b.
-                # /agent and /selfrag chain multiple LLM calls
-                # (reasoning + tool round-trips + final synth +
-                # reflective re-drafts), so they need a much
-                # larger budget on CPU-bound stacks.
+                # `local` is the leanest path (plan → parallel retrieve →
+                # one synth).  global/drift/auto chain a map-reduce and/or
+                # an extra orchestration pass, so they get the larger
+                # agentic budget on CPU-bound stacks.
                 per_ep_timeout = (
-                    args.search_timeout if ep == "search"
+                    args.search_timeout if ep == "local"
                     else args.agentic_timeout
                 )
                 resp = await _hit_endpoint(
@@ -265,8 +265,7 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--api-url", default="http://localhost:8000")
     p.add_argument("--api-key", default="dev-local-key")
-    p.add_argument("--endpoints", default="search,agent,selfrag")
-    p.add_argument("--include-legacy", action="store_true")
+    p.add_argument("--endpoints", default="local,global,drift,auto")
     p.add_argument("--golden", type=Path, default=GOLDEN_DIR_DEFAULT)
     p.add_argument(
         "--no-golden", action="store_true",
@@ -297,14 +296,14 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--search-timeout", type=float, default=180.0,
-        help="httpx timeout (s) for /search calls.",
+        help="httpx timeout (s) for /search/local calls.",
     )
     p.add_argument(
         "--agentic-timeout", type=float, default=900.0,
         help=(
-            "httpx timeout (s) for /agent and /selfrag calls. "
+            "httpx timeout (s) for /search/{global,drift,auto} calls. "
             "Long-form Creative Generation answers on qwen3:8b CPU "
-            "can take 5-15 minutes through the multi-LLM-call agentic "
+            "can take 5-15 minutes through the map-reduce / multi-pass "
             "stack — default is generous on purpose."
         ),
     )

@@ -2,10 +2,11 @@
 
 Two servers:
 
-* ``search_server`` (MCP-1) — high-level: one ``kb_search(query,
-  mode)`` tool that submits ``SearchWorkflow`` and streams progress
-  back as MCP notifications.  Goes through Temporal so concurrent
-  search sessions share GPU budget via the search task queue cap.
+* ``search_server`` (MCP-1) — high-level: one ``kb_search(query)``
+  tool that submits ``SearchOrchestratorWorkflow`` (plan-execute-
+  synthesize) and streams progress back as MCP notifications.  Goes
+  through Temporal so concurrent search sessions share GPU budget via
+  the search task queue cap.
 
 * ``tools_server`` (MCP-2) — atomic: seven raw retrieval tools
   (vector_search, graph_search, ...) reusing ``atomic_tools.*``

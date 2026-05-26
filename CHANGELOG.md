@@ -8,6 +8,373 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R3b] — 2026-05-26 — Activate graph_walk in retrieve path
+
+### Added
+- `graph_walk` (the bounded multi-hop tool built + registered in R3 but
+  previously DORMANT — nothing invoked it) is now auto-seeded from the TOP
+  `graph_search` entity in the deterministic SubQuery retrieve path. The
+  `retrieve_subquestion` activity parses the `graph_search` observation,
+  picks the top entity via the new pure helper
+  `top_entity_name(observation) -> str | None`, dispatches `graph_walk`
+  with that `start_entity` and `hops=settings.agent.graph_walk_hops`, and
+  merges its chunks (deduped by `chunk_id`). Flag-gated by
+  `settings.agent.graph_walk_enabled` (default `True`; `graph_walk_hops`
+  default `2`) and FAIL-OPEN — no entities / parse error / walk error all
+  skip the walk and return the vector + graph_search results unchanged
+  (never raises). Parsing lives in the activity, not a `@workflow.run`.
+
+## [Search R7b] — 2026-05-26 — Legacy search cutover (BREAKING)
+
+### Removed
+- Legacy ReAct `SearchWorkflow` (`src/workflow/search_workflow.py`) and
+  its worker registration on the `kb-search-small` queue.
+- Legacy API routes: `POST /api/v1/search`, `/agent`, `/selfrag`
+  (`src/api/routes/{search,agent,selfrag}.py`) and the judge-based
+  baseline `POST /api/v1/legacy/agent`
+  (`src/api/routes/legacy_agent.py`), plus their `include_router`
+  registrations in `src/api/main.py` and the now-dead
+  `AgentSettings.enable_legacy_agent` config flag.
+- Legacy-ONLY activities `agent_reasoning_step`, `tool_execution`,
+  `distill_observation` (`src/workflow/activities/{agent_reasoning,
+  tool_execution,distill_observation}.py`), removed from
+  `SEARCH_ACTIVITIES` / `__all__`.
+- Legacy-ONLY contracts: `SearchParams`, `ReasoningParams`,
+  `AgentDecision`, `ToolCallParams`/`ToolCallResult`,
+  `DistillParams`/`DistillResult`, `ToolSpec`,
+  `SerializedMessage`/`SerializedToolCall`, the `Relevance` alias; and
+  the legacy `serialized_to_message`/`message_to_serialized` serde
+  helpers (`src/workflow/_search_serde.py`).
+- Legacy `SearchWorkflow` integration test
+  (`tests/test_workflow/test_search_workflow.py`).
+
+### Changed
+- MCP-1 `kb_search` tool (`src/mcp/search_server.py`) now submits
+  `SearchOrchestratorWorkflow` (local plan-execute) instead of the
+  removed `SearchWorkflow`; dropped the `mode`/`max_iterations` params
+  (the orchestrator is local-only) and adapted progress polling to the
+  orchestrator's `get_state` keys.
+- Migrated tests to the new surface: `test_route_skeletons.py` now
+  asserts `/api/v1/search/{local,global,drift,auto}` are registered and
+  the removed legacy routes 404; `test_search_server.py` asserts the
+  `query` param (no `mode` enum).
+- Eval harness (`tests/eval/run_answer_eval.py`) repointed from the
+  legacy endpoints to `/api/v1/search/{local,global,drift,auto}`
+  (dropped `--include-legacy`).
+
+### Kept (SHARED — the new path depends on these)
+- Activities `synthesize_answer`, `coverage_check`; contracts
+  `SerializedNode`, `SynthesizeParams`/`SynthesizeResult`,
+  `CoverageParams`/`CoverageResult`, `AgenticStepStatDict`,
+  `SearchOutcome`, `SearchMode`; serde `node_to_serialized` /
+  `serialized_to_node`.
+
+### Notes
+- **BREAKING**: the old `/search`, `/agent`, `/selfrag` (and
+  `/legacy/agent`) endpoints are gone. The new surface is
+  `/api/v1/search/{local,global,drift,auto}` (+
+  `/admin/communities/rebuild`).
+- **Live-Temporal parity verification of the new endpoints is REQUIRED
+  before merging to main** — the suites here run with Temporal mocked /
+  skip-gated.
+
+## [Search R7a] — 2026-05-26 — Query routing + GraphRAG global search (additive)
+
+### Added
+- `src/workflow/search/activities/route.py` — `route_query` activity
+  (small `route` model) classifies a question into `local` (specific /
+  factual), `global` (corpus-level / thematic / aggregate) or `drift`
+  (complex / mixed). Fail-safe → `local` on any LLM/parse error. Pure
+  `classify_route` helper for Temporal-free unit testing.
+- `src/workflow/search/global_wf.py` — `GlobalSearchWorkflow`: GraphRAG
+  **map-reduce** over the R6 `:Community.summary` texts. `map_communities`
+  reads + ranks summaries (capped by `global_max_communities`); MAP fans
+  out one per-community partial (small tier, bounded by
+  `global_map_parallelism`, off-topic communities self-drop); REDUCE reuses
+  `synthesize_answer` pinned to `large_task_queue` with
+  `use_synthesis_llm=True` (the R5 large-tier pattern). Pure helpers
+  `build_map_specs` / `partials_to_sources` / `build_reduce_call`.
+- `src/workflow/search/activities/global_search.py` — `map_communities`
+  + `map_community_partial` activities (fail-safe; pure `rank_summaries` /
+  `is_relevant_partial` helpers).
+- `src/workflow/search/router_wf.py` — `DriftSearchWorkflow` (local pass
+  → global community expansion seeded with the local sources, `drift_mode`)
+  and `AutoSearchWorkflow` (`route_query` → dispatch to local/global/drift
+  as a child workflow). Pure `dispatch_for_route` helper.
+- Endpoints in `src/api/routes/search_v2.py`: `POST /api/v1/search/global`
+  (→ `GlobalSearchWorkflow`), `/search/drift` (→ `DriftSearchWorkflow`),
+  `/search/auto` (→ `AutoSearchWorkflow`). All on `kb-search-small`
+  orchestration; synthesis pinned large in the chosen flow. Reuse the
+  legacy `SearchRequest`/`SearchResponse` shapes.
+- `AgentSettings`: `global_max_communities` (20), `global_map_parallelism`
+  (4). New contracts: `RouteParams/Result`, `CommunitySummaryRef`,
+  `MapCommunitiesParams/Result`, `MapPartialParams/Result`,
+  `GlobalSearchParams`. `SearchMode` extended with `global`/`drift`.
+- Worker (`src/workflow/worker.py`): registers `GlobalSearchWorkflow`,
+  `DriftSearchWorkflow`, `AutoSearchWorkflow` + `route_query` /
+  `map_communities` / `map_community_partial` on the `kb-search-small`
+  queue (REDUCE still pins synthesize to `kb-search-large`).
+
+### Notes
+- **Additive only — legacy intentionally RETAINED.** The legacy
+  `SearchWorkflow` (`src/workflow/search_workflow.py`) and the
+  `/search`,`/agent`,`/selfrag` routes are NOT modified; the local R2–R5
+  flow is unchanged. Defaults are unchanged. The legacy cutover/deletion is
+  a SEPARATE phase pending live-environment parity verification.
+- GraphRAG global search reads the `:Community.summary` nodes built offline
+  in R6; run `POST /api/v1/admin/communities/rebuild` first or global/drift
+  answers have no community evidence to map over.
+
+## [Search R6] — 2026-05-26 — Offline community build (GDS Leiden + summaries)
+
+### Added
+- `src/graph/communities.py` — `detect_communities(store, *, min_size, level)`
+  runs Neo4j **GDS Leiden** over the `__Entity__` sub-graph (Cypher
+  projection → `gds.leiden.stream` → group by `communityId`), drops
+  communities below `min_size`, and idempotently MERGEs
+  `:Community {id, level, member_count}` nodes linked to members via
+  `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`. All GDS/Cypher isolated as
+  module constants for easy fix-against-live. Fail-safe: any GDS/store
+  error → `[]` (logged, never raised).
+- `src/workflow/search/activities/community.py` —
+  `detect_communities_activity` (wraps detection) and
+  `summarize_community_activity` (small-tier `build_llm("retrieve")`
+  summary per community, persisted on `:Community.summary` via idempotent
+  MERGE; fail-safe per community).
+- `src/workflow/search/community_wf.py` — `CommunityBuildWorkflow`:
+  detect → bounded-parallel summarize fan-out → done. Pure
+  `build_summarize_specs` helper for Temporal-free unit testing.
+- Dedicated **`kb-graph-build`** task queue + a separate `Worker` pool in
+  `src/workflow/worker.py` hosting the workflow + its activities — fully
+  DECOUPLED from the query hot path.
+- Admin endpoint `POST /api/v1/admin/communities/rebuild`
+  (`src/api/routes/search_v2.py`) — starts `CommunityBuildWorkflow` on
+  `kb-graph-build`, returns the workflow id. Optional Temporal
+  Schedule/cron documented in `docs/QUEUES.md` (none wired yet).
+- `TemporalSettings`: `graph_build_task_queue` (default `kb-graph-build`),
+  `graph_build_activity_concurrency` (2), `community_summary_parallelism`
+  (4), `community_min_size` (3). New contracts: `CommunityRef`,
+  `DetectCommunitiesParams/Result`, `SummarizeCommunityParams/Result`,
+  `CommunityBuildResult`.
+
+### Notes
+- Additive / offline only — the query path (orchestrator + local search)
+  is UNCHANGED; nothing on the query path reads `:Community` yet. Summaries
+  are written for a future global-search phase.
+- The GDS Cypher (`gds.graph.project` / `gds.leiden.stream` /
+  `gds.graph.drop`) is written per the Neo4j GDS 2.x API but is
+  **UNVERIFIED against a live GDS install** — no Neo4j/GDS in the dev
+  sandbox, so all tests mock the store + GDS rows. Validate against the
+  live GDS version before production use.
+
+## [Search R5] — 2026-05-26 — Large-tier synthesis queue + unified rerank
+
+### Added
+- Dedicated `kb-search-large` task queue
+  (`TemporalSettings.large_task_queue`, `large_activity_concurrency`
+  default 2) + a separate low-concurrency `Worker` pool in the same
+  worker process (`src/workflow/worker.py`) that polls it, hosting ONLY
+  the `synthesize_answer` activity so the heavyweight synthesis model is
+  never dogpiled by parallel search sessions.
+- `rerank_sources` activity
+  (`src/workflow/search/activities/rerank.py`,
+  `RerankParams`/`RerankResult` in `contracts.py`): co-ranks the merged
+  graph-derived + vector pool in ONE bge cross-encoder pass before
+  synthesis. REUSES `src/retrieval/reranker.py`
+  (`BAAI/bge-reranker-v2-m3`), process-cached via
+  `_search_deps.get_reranker`. Pure `prepare_rerank_pool`
+  (dedup-before-rerank) + `build_synthesize_call` (large-queue call
+  spec) helpers — unit-tested without a live Temporal env or the bge
+  model.
+- `TEMPORAL_RERANK_TOP_N` (`TemporalSettings.rerank_top_n`, default 5)
+  knob for the unified rerank top-N.
+- Queue/tier docs: `kb-search-large` row + small/large tier↔queue
+  mapping table in `docs/QUEUES.md`; rerank-before-synthesis step in
+  `docs/SEARCH.md`.
+
+### Changed
+- `SearchOrchestratorWorkflow` (`src/workflow/search/orchestrator.py`):
+  after the coverage gate / final merge it runs `rerank_sources` (on the
+  small queue), THEN pins `synthesize_answer` to `kb-search-large` via
+  `execute_activity(task_queue=large_task_queue)` with
+  `use_synthesis_llm=True` (large `build_synthesis_llm`). The displayed
+  `SearchOutcome.sources` stays the FULL merged pool (citations
+  unchanged); only the synthesis context is trimmed to the reranked
+  top-N.
+
+### Notes
+- FAIL-OPEN: any rerank error → fall back to the unranked merged pool
+  (never blocks the answer). Empty pool → reranker model is never loaded.
+- The orchestrator workflow itself still lives on `kb-search-small`; only
+  the final synthesis activity runs on `kb-search-large`. plan / retrieve
+  / coverage_check / rerank all stay on the small queue.
+- Legacy ReAct `SearchWorkflow` synthesis path UNCHANGED — still small
+  tier (`use_synthesis_llm=False`), default `kb-search-small` queue, no
+  rerank step.
+
+## [Search R4] — 2026-05-26 — Coverage gate on orchestrator
+
+### Added
+- Bounded coverage round on `SearchOrchestratorWorkflow`
+  (`src/workflow/search/orchestrator.py`): after merging all
+  sub-question sources (and before the single `synthesize_answer`), the
+  orchestrator runs ONE `coverage_check` — REUSING the existing
+  small-tier activity (`src/workflow/activities/coverage_check.py`,
+  already registered via `SEARCH_ACTIVITIES` on the search worker), not
+  a re-implementation. On `complete=False` with a named `missing` gap it
+  issues that gap as ONE extra `SubQueryRetrievalWorkflow` (child id
+  `…-cov-N`), re-merges its sources (dedup by chunk_id), records an
+  extra step-stat, then synthesizes.
+- Pure, Temporal-free gate helpers (`src/workflow/search/_coverage.py`):
+  `should_run_coverage_round(result, rounds_left) -> str | None` and
+  `build_evidence(sources, max_chars)` — unit-tested for the gap /
+  complete / empty-gap / bound branches without a live Temporal env.
+- `AgentSettings.max_coverage_rounds` (`AGENT_MAX_COVERAGE_ROUNDS`,
+  default 1) capping the orchestrator's extra rounds; the existing
+  `coverage_check_enabled` knob is REUSED to gate the check.
+  `OrchestratorParams` carries both (resolved at submit time in
+  `search_v2.py` → replay-safe).
+- Coverage-gate section in `docs/SEARCH.md`.
+
+### Notes
+- FAIL-OPEN: any error in the coverage check OR the extra retrieval
+  round → proceed straight to synthesis (never blocks the answer).
+- Bounded by `max_coverage_rounds` (default 1) — at most one extra
+  sub-question even if a gap persists, so the loop always terminates.
+- The legacy ReAct `SearchWorkflow` coverage path (gap fed back into the
+  reasoning history, bounded by `max_coverage_checks`) is UNCHANGED — a
+  separate mechanism from the orchestrator's "gap → extra sub-question".
+
+## [Search R3] — 2026-05-26 — Multi-hop graph_walk tool
+
+### Added
+- `graph_walk(start_entity, hops=2, rel_filter=None)` atomic tool
+  (`src/retrieval/atomic_tools.py`) — EXPLICIT, BOUNDED multi-hop graph
+  traversal. Registered in `TOOL_FUNCTIONS`, `TOOL_DESCRIPTIONS`, and
+  `dispatch()` exactly like the sibling graph tools; returns the same
+  serialized `{"entities", "relations"}` observation + chunk `sources`.
+- `GraphRetriever.awalk()` (`src/graph/retriever.py`) — N-hop backend:
+  one bounded Cypher query (`MATCH (e {name:$name})-[r*1..hops]-(m)` with
+  a `rel_filter` `WHERE` clause + `LIMIT $node_cap`) via the store's
+  `structured_query`, with an APOC-free fallback. `hops` clamped and
+  interpolated as a vetted int; row mapping re-applies the caps.
+- Hard caps `GRAPH_WALK_MAX_HOPS=3`, `GRAPH_WALK_MAX_NODES=50`,
+  `GRAPH_WALK_MAX_EDGES=100` (mirrored tool-side + retriever-side) so a
+  multi-hop walk can never blow up the agent's context window.
+- `ALLOWED_TOOLS` on the R2 retrieve path
+  (`src/workflow/search/activities/retrieve.py`) now lists `graph_walk`
+  as dispatchable via the same `graph_retriever` DI.
+- `graph_walk` section in `docs/SEARCH.md` (purpose, caps, when used).
+
+### Notes
+- Default `graph_search` (similarity, `path_depth=1`) behaviour and tests
+  are UNCHANGED; `awalk` is a separate method, not a change to
+  `aretrieve`.
+- `graph_walk` is NOT in the default deterministic `_PIPELINE` — it needs
+  an explicit `start_entity` (a real entity name), which belongs to a
+  future connection-aware planner / LLM tool-pick step. Dispatch wiring +
+  caps are in place; the tool description documents WHEN to pick it.
+
+## [Search R2] — 2026-05-26 — Plan-execute orchestrator + /search/local
+
+### Added
+- `src/retrieval/query_planner.py:decompose()` — splits a compound
+  question into atomic sub-questions via the small `plan` model;
+  returns `[question]` for atomic questions and on any planner failure
+  (fail-safe). Robust parsing (numbered / bulleted / JSON-array).
+- `plan_subquestions` activity (`src/workflow/search/activities/plan.py`)
+  wrapping `decompose` (`build_llm("plan")`).
+- `retrieve_subquestion` activity
+  (`src/workflow/search/activities/retrieve.py`) — deterministic hybrid
+  `vector_search` + `graph_search` for one sub-question via
+  `atomic_tools.dispatch`, sources deduped by chunk_id.
+- `SubQueryRetrievalWorkflow` (`src/workflow/search/subquery_wf.py`) —
+  deterministic per-sub-question retrieval; NO `agent_reasoning_step`.
+- `SearchOrchestratorWorkflow` (`src/workflow/search/orchestrator.py`) —
+  plan → parallel `SubQueryRetrievalWorkflow` children (`asyncio.gather`
+  over `execute_child_workflow`) → merge+dedup sources by chunk_id →
+  single `synthesize_answer` on the large tier. Same `SearchOutcome`
+  shape as legacy `SearchWorkflow`.
+- `POST /api/v1/search/local` (`src/api/routes/search_v2.py`) starting
+  `SearchOrchestratorWorkflow` on `kb-search-small`; reuses
+  `SearchRequest` / `SearchResponse`.
+- `AgentSettings.max_subqueries` (env `AGENT_MAX_SUBQUERIES`, default 5)
+  — caps the parallel sub-query fan-out.
+- `SynthesizeParams.use_synthesis_llm` flag + `get_synthesis_llm()` /
+  `get_synthesis_synthesizer()` in `_search_deps` — large-tier final
+  synthesis for the plan-execute flow.
+- `docs/QUEUES.md` (new) + plan-execute section in `docs/SEARCH.md`.
+
+### Changed
+- Search task queue renamed `kb-search-llm` → `kb-search-small`
+  (`TemporalSettings.search_task_queue` default, `.env.example`). The
+  queue now also hosts the small-tier plan-execute flow.
+- Worker registers `SearchOrchestratorWorkflow` +
+  `SubQueryRetrievalWorkflow` and `SEARCH_V2_ACTIVITIES` on the search
+  queue alongside the legacy `SearchWorkflow`.
+
+### Notes
+- Legacy ReAct `SearchWorkflow` + `/api/v1/search` (and `/agent`,
+  `/selfrag`) are UNCHANGED and remain the default behind the parity
+  window until cutover.
+- Core merge/dedup is extracted into pure helpers
+  (`src/workflow/search/_merge.py`) so it is unit-testable without a
+  live Temporal env; full workflow tests follow the repo's
+  skip-on-no-Temporal pattern.
+
+## [Search R1] — 2026-05-25 — Two-tier model architecture
+
+### Added
+- `LiteLLMSettings.model_small` (default `gemma4:e4b`) and
+  `model_large` (default `gpt-4o-mini`) — the two physical model
+  tiers operators manage.
+- `LiteLLMSettings.role_tiers` (env `LITELLM_ROLE_TIERS`, JSON) —
+  declarative role→tier map, merged onto `_DEFAULT_ROLE_TIERS` so a
+  partial override (e.g. `{"plan":"large"}`) escalates one role
+  without re-declaring the rest.
+- `LiteLLMSettings.tier_for(role)` and `effective_base` property.
+- `LLMTier = Literal["small","large"]`; `LLMRole` extended with
+  `route`, `plan`, `retrieve`, `distill`, `coverage`, `synthesis`.
+- `src/retrieval/llm.py:build_synthesis_llm()` — final synthesis on
+  the large tier.
+
+### Changed
+- `LiteLLMSettings.model_for` now resolves `role → tier → one of the
+  two physical models` instead of reading per-role model fields.
+- **Behavior change**: default extraction/judge/search model is now
+  `gemma4:e4b` (small tier) instead of `qwen3:8b`.  Every role maps
+  to the small tier except `synthesis` → large (`gpt-4o-mini`).
+- `build_llm()` no-role path uses `effective_base` (small tier, or the
+  deprecated `llm_model` alias when explicitly set).
+- `src/observability/litellm_models.py` validates the two physical
+  models (small/large) rather than per-role names.
+- `src/api/routes/ingest.py` analytics `Model` snapshot now uses
+  `effective_base`.
+- `.env.example`, `docker/litellm_config.yaml`, `docs/MODELS.md`
+  rewritten for the two-tier model.
+
+### Removed
+- Per-role `extraction_model` / `judge_model` / `search_model` fields
+  on `LiteLLMSettings` and their `LITELLM_*_MODEL` env vars.
+
+### Notes
+- `LITELLM_LLM_MODEL` / `LiteLLMSettings.llm_model` kept as a
+  deprecated alias (defaults to `""`) so the legacy no-role
+  `build_llm()` path keeps working.  Remove once all callers pass a
+  role.
+
+## [Search R0] — 2026-05-25 — Search package scaffold
+
+### Added
+- `src/workflow/search/` package (+ `activities/` subpackage) — skeleton
+  for decomposing the monolithic `search_workflow.py` into an
+  orchestrator + per-mode child workflows (Plan #2, agentic-search).
+- `docs/SEARCH.md` — search subsystem overview + target workflows/endpoints.
+
+### Notes
+- No behavior change: the legacy `SearchWorkflow` and its endpoints are
+  untouched. New workflows land behind flags/new endpoints in later phases.
+
 ## [R1] — 2026-05-11 — Model migration to qwen3:8b
 
 ### Changed

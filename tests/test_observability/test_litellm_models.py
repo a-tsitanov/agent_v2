@@ -34,10 +34,10 @@ def _proxy_returns(models: list[str]):
 
 
 def test_all_models_registered_logs_info(caplog, monkeypatch):
-    monkeypatch.setenv("LITELLM_LLM_MODEL", "gpt-4o-mini")
-    monkeypatch.delenv("LITELLM_EXTRACTION_MODEL", raising=False)
-    monkeypatch.delenv("LITELLM_JUDGE_MODEL", raising=False)
-    monkeypatch.delenv("LITELLM_SEARCH_MODEL", raising=False)
+    # Two-tier model: validation cross-checks the two physical models.
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "gpt-4o")
+    monkeypatch.setenv("LITELLM_MODEL_LARGE", "gpt-4o-mini")
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "")
     monkeypatch.delenv("LITELLM_VALIDATE_MODELS_STRICT", raising=False)
 
     # Re-import settings under the new env.
@@ -53,8 +53,9 @@ def test_all_models_registered_logs_info(caplog, monkeypatch):
 
 
 def test_missing_model_warns_in_non_strict_mode(monkeypatch):
-    monkeypatch.setenv("LITELLM_LLM_MODEL", "gpt-4o-mini")
-    monkeypatch.setenv("LITELLM_JUDGE_MODEL", "qwen3:8b-not-real")
+    monkeypatch.setenv("LITELLM_MODEL_LARGE", "gpt-4o-mini")
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "qwen3:8b-not-real")
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "")
     monkeypatch.delenv("LITELLM_VALIDATE_MODELS_STRICT", raising=False)
 
     from importlib import reload
@@ -69,8 +70,9 @@ def test_missing_model_warns_in_non_strict_mode(monkeypatch):
 
 
 def test_missing_model_raises_in_strict_mode(monkeypatch):
-    monkeypatch.setenv("LITELLM_LLM_MODEL", "gpt-4o-mini")
-    monkeypatch.setenv("LITELLM_JUDGE_MODEL", "qwen3:8b-not-real")
+    monkeypatch.setenv("LITELLM_MODEL_LARGE", "gpt-4o-mini")
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "qwen3:8b-not-real")
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "")
     monkeypatch.setenv("LITELLM_VALIDATE_MODELS_STRICT", "true")
 
     from importlib import reload
@@ -80,7 +82,7 @@ def test_missing_model_raises_in_strict_mode(monkeypatch):
     reload(mod)
 
     with _proxy_returns(["gpt-4o-mini", "gpt-4o"]):
-        with pytest.raises(RuntimeError, match="missing=judge="):
+        with pytest.raises(RuntimeError, match="missing=small="):
             mod.validate_litellm_models(source="test-strict")
 
 

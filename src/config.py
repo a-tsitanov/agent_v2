@@ -14,11 +14,34 @@ from __future__ import annotations
 from functools import cached_property
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Two physical model tiers operators actually manage:
+#   * ``small`` — local, high-volume (extraction, judge, search, plan, …)
+#   * ``large`` — final user-facing synthesis only.
+LLMTier = Literal["small", "large"]
+# Logical workloads.  Each role maps to a tier via ``_DEFAULT_ROLE_TIERS``
+# (overridable per role through ``LITELLM_ROLE_TIERS``).
+LLMRole = Literal[
+    "extraction", "judge", "search",
+    "route", "plan", "retrieve", "distill", "coverage", "synthesis",
+]
 
-LLMRole = Literal["extraction", "judge", "search"]
+# Declarative role→tier map.  Everything runs on the small/local model
+# EXCEPT the final answer synthesis which gets the large model.  Operators
+# escalate any single role with ``LITELLM_ROLE_TIERS='{"plan":"large"}'``.
+_DEFAULT_ROLE_TIERS: dict[str, LLMTier] = {
+    "extraction": "small",
+    "judge": "small",
+    "search": "small",
+    "route": "small",
+    "plan": "small",
+    "retrieve": "small",
+    "distill": "small",
+    "coverage": "small",
+    "synthesis": "large",
+}
 
 
 # ── per-subsystem settings ───────────────────────────────────────────
@@ -112,36 +135,63 @@ class LiteLLMSettings(BaseSettings):
 
     base_url: str = "http://localhost:4000"
     api_key: SecretStr = SecretStr("sk-litellm-stub")
-    # Default model: qwen3:8b.  Has reliable tool calling (Hermes-
-    # style) and structured output — required by R7/R8 (ReAct agent
-    # and reflective synthesis).  Smaller models (qwen2.5:3b,
-    # llama3.1:8b) work for plain retrieve+synthesize but fail
-    # function-calling reliability tests; see docs/MODELS.md for
-    # escalation path.
-    llm_model: str = "qwen3:8b"
-    # Per-role overrides — empty ("") means "use ``llm_model``".  Keeps
-    # single-model deployments simple; cap into a per-role model when
-    # the operator wants the cheap/fast model for high-volume judge
-    # calls (cross-chunk merge + ER pair-wise yes/no) while keeping a
-    # stronger model for extraction or the user-facing answer agent.
-    # See ``model_for`` for resolution semantics.
-    extraction_model: str = ""
-    judge_model: str = ""
-    search_model: str = ""
+    # ── two physical model tiers ─────────────────────────────────────
+    # Operators manage exactly two model names.  Every logical role maps
+    # to one of these via ``role_tiers`` (see ``_DEFAULT_ROLE_TIERS``).
+    #   * small — local, high-volume.  Default gemma4:e4b: cheap/fast and
+    #     reliable enough for extraction/judge/search/plan/etc.
+    #   * large — final user-facing synthesis only.  Default gpt-4o-mini.
+    # Escalate a single role to large via
+    # ``LITELLM_ROLE_TIERS='{"plan":"large"}'``.  See docs/MODELS.md.
+    model_small: str = "gemma4:e4b"
+    model_large: str = "gpt-4o-mini"
+    # Provided overrides are MERGED onto ``_DEFAULT_ROLE_TIERS`` so an
+    # operator can escalate one role (e.g. ``{"plan": "large"}``) without
+    # having to re-declare every other role's tier.
+    role_tiers: dict[str, LLMTier] = Field(
+        default_factory=lambda: dict(_DEFAULT_ROLE_TIERS)
+    )
+    # DEPRECATED alias.  Kept (defaulting to "") only so the legacy
+    # ``build_llm()`` no-role path and any unmigrated reader resolves to
+    # a model.  Empty ⇒ callers fall back to ``model_small`` via
+    # ``effective_base``.  Remove once all readers use the tier fields.
+    llm_model: str = ""
     embedding_model: str = "nomic-embed-text"
     embedding_dim: int = 768
     timeout_s: float = 900.0
     max_retries: int = 2
 
+    @field_validator("role_tiers", mode="before")
+    @classmethod
+    def _merge_role_tiers(cls, v: object) -> dict[str, str]:
+        """Merge any provided overrides onto the full default map so a
+        partial ``role_tiers`` (e.g. ``{"plan": "large"}``) escalates one
+        role while every other role keeps its default tier.  Accepts a
+        JSON string (pydantic-settings env) or a dict."""
+        merged: dict[str, str] = dict(_DEFAULT_ROLE_TIERS)
+        if v is None:
+            return merged
+        if isinstance(v, str):
+            import json
+
+            v = json.loads(v) if v.strip() else {}
+        if isinstance(v, dict):
+            merged.update(v)
+        return merged
+
+    @property
+    def effective_base(self) -> str:
+        """Base model for the no-role legacy path: the deprecated
+        ``llm_model`` if explicitly set, else the small tier."""
+        return self.llm_model or self.model_small
+
+    def tier_for(self, role: LLMRole) -> LLMTier:
+        """Resolve ``role`` to a physical tier.  Unknown roles → small."""
+        return self.role_tiers.get(role, "small")
+
     def model_for(self, role: LLMRole) -> str:
-        """Return the configured model name for ``role`` with fallback
-        to ``llm_model`` when the role-specific field is empty."""
-        override = {
-            "extraction": self.extraction_model,
-            "judge":      self.judge_model,
-            "search":     self.search_model,
-        }[role]
-        return override or self.llm_model
+        """Resolve ``role`` → tier → one of the two physical models."""
+        return self.model_large if self.tier_for(role) == "large" else self.model_small
 
 
 class TemporalSettings(BaseSettings):
@@ -165,13 +215,48 @@ class TemporalSettings(BaseSettings):
     llm_task_queue: str = "kb-ingest-llm"
     llm_activity_concurrency: int = 1
 
-    # Search-side activities (agent_reasoning_step, tool_execution,
-    # synthesize_answer) live on their own task queue so operators can
-    # control GPU split between ingest and search independently.  Cap
-    # ≥ 1; raise it when LLM proxy / OpenAI quotas allow several
-    # parallel search sessions.
-    search_task_queue: str = "kb-search-llm"
+    # Search-side activities (plan_subquestions, retrieve_subquestion,
+    # coverage_check, rerank_sources, synthesize_answer) live on their own
+    # task queue so operators can control GPU split between ingest and
+    # search independently.  Cap ≥ 1; raise it when LLM proxy / OpenAI
+    # quotas allow several parallel search sessions.
+    # Renamed kb-search-llm → kb-search-small (Search R2): the queue hosts
+    # the small-tier plan-execute flow (planner + parallel sub-query
+    # retrieval), so the name reflects the dominant model tier rather than
+    # "any LLM".  The R7b cutover removed the legacy ReAct SearchWorkflow
+    # that previously shared this queue.
+    search_task_queue: str = "kb-search-small"
     search_activity_concurrency: int = 4
+
+    # Large-tier final synthesis (Search R5) runs on a dedicated queue
+    # with a LOW concurrency cap so the heavyweight synthesis model is
+    # never asked to serve many parallel sessions (it dominates GPU /
+    # proxy budget).  The orchestrator pins ``synthesize_answer`` here
+    # via ``execute_activity(task_queue=...)``; everything else (plan,
+    # retrieve, coverage_check, rerank) stays on ``search_task_queue``.
+    large_task_queue: str = "kb-search-large"
+    large_activity_concurrency: int = 2
+
+    # bge cross-encoder top-N for the unified graph+vector rerank pass
+    # (Search R5).  Trims the merged pool to the most relevant chunks
+    # before the (expensive) large-tier synthesis.
+    rerank_top_n: int = 5
+
+    # Offline graph-community build (Search R6) — GDS Leiden detection +
+    # per-community batch summarisation.  Runs on its OWN dedicated queue
+    # so the heavy GDS projection + batch summary work NEVER touches the
+    # query hot path; an admin endpoint (and an optional Temporal Schedule)
+    # is the only trigger.  Concurrency is intentionally LOW: summaries use
+    # the small tier but there can be many communities, and we don't want
+    # to flood the LLM proxy with a burst from a single rebuild.
+    graph_build_task_queue: str = "kb-graph-build"
+    graph_build_activity_concurrency: int = 2
+    # Bounded parallelism for the per-community summarize fan-out inside
+    # CommunityBuildWorkflow (independent of the worker-side activity cap).
+    community_summary_parallelism: int = 4
+    # Communities smaller than this are ignored (too small to summarise
+    # meaningfully — likely noise / disconnected pairs).
+    community_min_size: int = 3
 
     @property
     def target(self) -> str:
@@ -305,6 +390,10 @@ class AgentSettings(BaseSettings):
     # ReAct loop (R7): how many tool-call iterations before forcing
     # `submit_answer`.
     max_iterations: int = Field(default=8, ge=1, le=20)
+    # Plan-execute flow (R2): max sub-questions the planner may emit —
+    # bounds the parallel SubQueryRetrievalWorkflow fan-out (and planner
+    # LLM cost) regardless of what the small model returns.
+    max_subqueries: int = Field(default=5, ge=1, le=20)
     # Entity Resolution (cross-language / multi-form dedup).  When
     # enabled, the worker runs an extra step between
     # `merge_kg_extraction` and `PropertyGraphIndex` that finds
@@ -352,11 +441,32 @@ class AgentSettings(BaseSettings):
     # submit_answer is accepted unconditionally (caps extra LLM calls +
     # guarantees termination alongside max_iterations).
     max_coverage_checks: int = Field(default=1, ge=0, le=5)
-    # R10: legacy judge-based agentic_search remains in the codebase
-    # as a comparative baseline for R9 eval.  Routed under
-    # `/api/v1/legacy/agent` only when this flag is true.  Default
-    # off — production traffic should go through /agent or /selfrag.
-    enable_legacy_agent: bool = False
+    # Plan-execute flow (R4): after the orchestrator merges all
+    # sub-question sources, it runs ONE coverage_check (reusing
+    # ``coverage_check_enabled`` above).  On a named gap it issues the
+    # gap as ONE extra SubQueryRetrievalWorkflow, re-merges, then
+    # synthesizes.  Bounds the number of such extra rounds (and the
+    # extra LLM + retrieval cost) — distinct from the ReAct loop's
+    # ``max_coverage_checks`` so the two paths tune independently.
+    max_coverage_rounds: int = Field(default=1, ge=0, le=3)
+    # GraphRAG global search (R7a, decision C): the routing modes
+    # local|global|drift map-reduce over the community summaries built in
+    # R6.  ``global_max_communities`` caps how many summaries enter the
+    # (parallel) MAP step so a huge corpus doesn't fan out unbounded;
+    # ``global_map_parallelism`` bounds the per-community MAP concurrency
+    # inside GlobalSearchWorkflow so a single query doesn't flood the
+    # small-tier LLM proxy.
+    global_max_communities: int = Field(default=20, ge=1, le=200)
+    global_map_parallelism: int = Field(default=4, ge=1, le=32)
+    # Multi-hop graph_walk seeding (Search R3b): in the deterministic
+    # SubQuery retrieve path, after ``graph_search`` returns entities the
+    # retrieve activity auto-seeds the bounded ``graph_walk`` tool from
+    # the TOP graph_search entity (no LLM tool-pick needed).  Fail-open:
+    # any walk error is swallowed and the vector+graph_search results are
+    # returned unchanged.  ``graph_walk_hops`` is the requested hop count
+    # (the tool clamps it to GRAPH_WALK_MAX_HOPS).
+    graph_walk_enabled: bool = True
+    graph_walk_hops: int = Field(default=2, ge=1, le=3)
     # Canonical entity linking (Task 6): when enabled, ingest resolves
     # each mention to an existing Wikibase QID via exact-alias →
     # embedding-kNN → optional LLM verify before deciding to mint a new
@@ -465,9 +575,9 @@ settings = Settings()
 
 
 __all__ = [
+    "AgentSettings",
     "AnalyticsSettings",
     "ApiSettings",
-    "AgentSettings",
     "IngestionSettings",
     "LiteLLMSettings",
     "MetricsSettings",

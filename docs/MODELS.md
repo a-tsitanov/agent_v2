@@ -5,33 +5,70 @@ proxy** in front of a local **Ollama** instance.  All model
 references are configured through `LITELLM_*` env variables and
 the `model_list` in `docker/litellm_config.yaml`.
 
-## Default stack
+## Two physical tiers — you manage exactly two model names
 
-| Role | Model | Why |
+Every logical workload ("role") maps to one of **two physical model
+tiers**.  Operators only ever set two model names:
+
+| Env var | Tier | Default | Character |
+|---|---|---|---|
+| `LITELLM_MODEL_SMALL` | `small` | `gemma4:e4b` | Local, cheap, fast.  Runs every high-volume role — extraction, judge, search, plan, route, retrieve, distill, coverage. |
+| `LITELLM_MODEL_LARGE` | `large` | `gpt-4o-mini` | Final user-facing answer synthesis only. |
+
+| Other | Model | Why |
 |---|---|---|
-| LLM | `qwen3:8b` | Reliable Hermes-style tool calling, structured output, multilingual.  Used as fallback for all three application roles below when no per-role override is set. |
-| Embedding | `nomic-embed-text` | 768-dim, fast, decent quality on English/Russian. |
+| Embedding | `nomic-embed-text` (local) / `text-embedding-3-small` (OpenAI) | 768 / 1536-dim.  MUST match `MILVUS_DIM`. |
 | Reranker | not configured | Optional layer; would slot between retriever and synthesizer. |
 
-## Per-role LLMs
+## Role → tier map
 
-The project routes LLM calls through three role-keyed factories
-(`src/retrieval/llm.py`).  Each role has an optional env var; empty
-⇒ falls back to `LITELLM_LLM_MODEL` so single-model deployments work
-without further config.
+Roles are mapped declaratively to tiers in
+`src/config.py:_DEFAULT_ROLE_TIERS`.  Resolution is
+`role → tier → one of the two physical models`
+(`LiteLLMSettings.model_for`).  Default: **everything is `small`
+except `synthesis` which is `large`.**
 
-| Env var | Role | Used by | Workload character | Recommended size |
-|---|---|---|---|---|
-| `LITELLM_EXTRACTION_MODEL` | extraction | `extract_kg`, `parse_and_chunk` (translator), CLI ingest | high-volume KG triples + translation; full chunk text in/out | biggest available — needs deep reading |
-| `LITELLM_JUDGE_MODEL` | judge | `merge_and_resolve` (cross-chunk merge summary + ER pair-wise yes/no) | high call volume, mostly binary outputs, schema-strict | cheapest/fastest that still emits valid JSON |
-| `LITELLM_SEARCH_MODEL` | search | `/api/v1/agent`, `/selfrag`, `/legacy/agent` route LLMs (via DI) | user-facing latency, multi-turn tool calls | balanced — speed matters, must do function calls |
+| Role | Default tier | Used by |
+|---|---|---|
+| `extraction` | small | `extract_kg`, `parse_and_chunk` (translator), CLI ingest |
+| `judge` | small | `merge_and_resolve` (cross-chunk merge + ER pair-wise yes/no) |
+| `search` | small | `/api/v1/agent`, `/selfrag`, `/legacy/agent` reasoning (via DI) |
+| `route` | small | query routing (search refactor) |
+| `plan` | small | multi-step planning (search refactor) |
+| `retrieve` | small | retrieval-side LLM calls (search refactor) |
+| `distill` | small | observation distillation (R11) |
+| `coverage` | small | pre-submit coverage check |
+| `synthesis` | **large** | final user-facing answer synthesis |
 
-Per-row `ingest_metrics.model` reflects the model **actually used** for
-each activity (see `docs/runbook/analytics.md`).  A model swap shows up
-in the version-compare Grafana dashboard only on rows for the swapped
-role's activities — e.g. setting `LITELLM_JUDGE_MODEL=gpt-4o-2024-08-06`
-changes only `merge_and_resolve` rows; `extract_kg` rows stay on the
-extraction model.
+The factories in `src/retrieval/llm.py` (`build_extraction_llm`,
+`build_judge_llm`, `build_search_llm`, `build_synthesis_llm`) call
+`build_llm(role)`, which resolves through this map.  `build_llm()`
+with no role uses the small tier (or the deprecated `LITELLM_LLM_MODEL`
+alias if it is explicitly set — see below).
+
+## Escalating a single role
+
+To move one role onto the large model without touching the rest, set
+`LITELLM_ROLE_TIERS` to a JSON object.  It is **merged** onto the
+defaults, so you only name the role(s) you want to change:
+
+```env
+# Run planning on the large model too; everything else stays small.
+LITELLM_ROLE_TIERS={"plan":"large"}
+```
+
+The merge preserves `synthesis: large` and every other default — you
+never have to re-declare the full map.  Unknown roles fall back to
+`small`.
+
+### Deprecated `LITELLM_LLM_MODEL` alias
+
+`LITELLM_LLM_MODEL` is kept only as a deprecated alias so legacy
+`build_llm()` (no role) still resolves.  Leave it empty; it defaults
+to `""`, in which case the no-role path uses `LITELLM_MODEL_SMALL`.
+If explicitly set, it wins for the no-role path only — per-role
+resolution always uses the tier map.  Remove it once all callers pass
+a role.
 
 ### Smoke verification
 
@@ -40,20 +77,23 @@ extraction model.
 curl -F file=@doc.txt -H "X-Version-Tag: baseline" \
      -H "X-API-Key: $API_KEY" localhost:8000/api/v1/ingest
 
-# Swap judge, restart worker + API
-export LITELLM_JUDGE_MODEL=qwen2.5:14b
+# Swap the small tier, restart worker + API
+export LITELLM_MODEL_SMALL=qwen2.5:14b
 # (restart processes)
 
 # Submit batch B
-curl -F file=@doc.txt -H "X-Version-Tag: judge-14b" ... /api/v1/ingest
+curl -F file=@doc.txt -H "X-Version-Tag: small-14b" ... /api/v1/ingest
 
 # Verify in Postgres
 psql -c "SELECT activity_name, model, version_tag FROM ingest_metrics
-         WHERE version_tag IN ('baseline','judge-14b')
+         WHERE version_tag IN ('baseline','small-14b')
          ORDER BY activity_name, version_tag"
 ```
 
-Expected: only `merge_and_resolve` rows differ in `model`.
+All ingest-side activities run on the small tier, so changing
+`LITELLM_MODEL_SMALL` shifts every ingest row's `model`.  Per-row
+`ingest_metrics.model` still reflects the model **actually used** for
+each activity (see `docs/runbook/analytics.md`).
 
 `MILVUS_DIM` MUST equal the embedding model's output dim (768 for
 `nomic-embed-text`, 1024 for `bge-m3`).  Changing the embed model
@@ -62,7 +102,7 @@ requires dropping and recreating the Milvus collection.
 ## Pulling models into Ollama
 
 ```bash
-ollama pull qwen3:8b
+ollama pull gemma4:e4b
 ollama pull nomic-embed-text
 # optional baseline for R9 comparative eval:
 ollama pull llama3.1:8b
@@ -90,30 +130,36 @@ emit tool calls (llama3.1:8b, qwen2.5:3b).
 
 ## Escalation path
 
-If qwen3:8b proves insufficient on the project's corpus (signals:
-tool-call reliability < 80%, regular `[NEED]`/`[UNCERTAIN]` marker
-misses, rising hallucination rate in R9 eval), escalate to a
-larger qwen3 variant:
+If the small tier proves insufficient on the project's corpus
+(signals: tool-call reliability < 80%, regular `[NEED]`/`[UNCERTAIN]`
+marker misses, rising hallucination rate in R9 eval) there are two
+levers, in order of cost:
+
+1. **Escalate one role** to the large tier via `LITELLM_ROLE_TIERS`
+   (e.g. push `plan` or `judge` to `large`) — surgical, no infra
+   change beyond env.
+2. **Swap the small model itself** to a larger local variant:
 
 | Model | RAM est. | When to consider |
 |---|---|---|
-| `qwen3:8b` | 6-8 GB | default |
-| `qwen3:14b` | 12-16 GB | first escalation step — best price/quality bump |
+| `gemma4:e4b` | 4-6 GB | default small tier |
+| `qwen3:8b` | 6-8 GB | reliable tool calling at modest cost |
+| `qwen3:14b` | 12-16 GB | best price/quality bump |
 | `qwen3:32b` | 24-32 GB | sustained tool-call accuracy issues |
-| `qwen3:72b` | 48-64 GB | only with dedicated A100/H100 GPU |
 
-To swap:
+To swap the small tier:
 
 1. `ollama pull qwen3:14b`
-2. Edit `.env`: `LITELLM_LLM_MODEL=qwen3:14b`.
+2. Edit `.env`: `LITELLM_MODEL_SMALL=qwen3:14b`.
 3. Add a `model_list` entry in `docker/litellm_config.yaml`
-   (mirror the qwen3:8b entry, change the path).
+   (mirror the `gemma4:e4b` entry, change the path).
 4. `docker compose restart litellm`.
 
-The escalation path stays on-prem on purpose — moving to external
-APIs (OpenAI/Anthropic) is a separate operational decision
-involving cost / privacy / vendor lock-in trade-offs and is out
-of scope for the in-prem-first design.
+The local tier stays on-prem on purpose — moving to external APIs
+(OpenAI/Anthropic) is a separate operational decision involving cost /
+privacy / vendor lock-in trade-offs.  The `large` tier defaults to a
+hosted model (`gpt-4o-mini`) precisely because final synthesis is the
+one low-volume, quality-critical role where that trade-off is worth it.
 
 ## Baseline for comparative eval (R9)
 
@@ -165,7 +211,8 @@ Same `OpenAILike` client is compatible with:
   ```env
   LITELLM_BASE_URL=https://api.openai.com/v1
   LITELLM_API_KEY=sk-real-openai-key
-  LITELLM_LLM_MODEL=gpt-4o-mini
+  LITELLM_MODEL_SMALL=gpt-4o-mini
+  LITELLM_MODEL_LARGE=gpt-4o
   LITELLM_EMBEDDING_MODEL=text-embedding-3-small
   LITELLM_EMBEDDING_DIM=1536        # MUST match MILVUS_DIM
   ```

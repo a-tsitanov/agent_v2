@@ -1,11 +1,11 @@
 """MCP-1: high-level search server.
 
-Exposes one tool — ``kb_search(query, mode)`` — that submits the
-project ``SearchWorkflow`` to Temporal and forwards progress back
-to the client as MCP ``notifications/progress`` messages while it
-runs.  Returns the synthesized answer + structured fields
-(citations, uncertainties, refinement_rounds) when the workflow
-completes.
+Exposes one tool — ``kb_search(query)`` — that submits the project
+``SearchOrchestratorWorkflow`` (plan-execute-synthesize, local mode)
+to Temporal and forwards progress back to the client as MCP
+``notifications/progress`` messages while it runs.  Returns the
+synthesized answer + structured fields (citations, uncertainties,
+refinement_rounds) when the workflow completes.
 
 Run::
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from fastmcp import Context, FastMCP
 from loguru import logger
@@ -31,19 +31,17 @@ from src.mcp._shared import (
     assert_api_key_env_set, log_banner, parse_args,
 )
 from src.workflow.client import get_temporal_client
-from src.workflow.contracts import SearchOutcome, SearchParams
-from src.workflow.search_workflow import SearchWorkflow
+from src.workflow.contracts import OrchestratorParams, SearchOutcome
+from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 
 
 mcp = FastMCP(
     name="kb-llamaindex-search",
     instructions=(
         "High-level search over the project knowledge base.  The "
-        "underlying ReAct agent reads the corpus through vector + "
-        "graph retrievers and synthesises a Russian answer with "
-        "citations.  Use `mode='selfrag'` for highest fidelity, "
-        "`mode='agent'` for balanced default, `mode='simple'` for "
-        "fast single-shot answers."
+        "underlying plan-execute-synthesize flow decomposes the "
+        "question, retrieves per sub-question in parallel over vector "
+        "+ graph, then synthesises a Russian answer with citations."
     ),
 )
 
@@ -52,26 +50,20 @@ mcp = FastMCP(
 async def kb_search(
     query: str,
     ctx: Context,
-    mode: Literal["simple", "agent", "selfrag"] = "agent",
-    max_iterations: int = 8,
     max_refinements: int = 3,
 ) -> dict[str, Any]:
     """Search the project knowledge base.
 
     Args:
       query: question in Russian (or the source-document language).
-      mode:  simple = single retrieve+synth; agent = ReAct loop
-             (recommended default); selfrag = reflective synthesis
-             with [NEED]/[SUPPORTED]/[UNCERTAIN] markers.
-      max_iterations: cap for the ReAct loop (modes agent/selfrag).
-      max_refinements: cap for the reflective loop (mode selfrag).
+      max_refinements: cap for the reflective synthesis loop.
 
     Returns:
       {
         "answer": str,
         "sources": [{chunk_id, doc_id, text, score}, ...],
-        "citations": [...],         # selfrag only
-        "uncertainties": [...],     # selfrag only
+        "citations": [...],
+        "uncertainties": [...],
         "refinement_rounds": int,
         "step_stats": [...],
         "latency_ms": int,
@@ -81,45 +73,34 @@ async def kb_search(
     workflow_id = f"mcp-search-{request_id}"
     client = await get_temporal_client()
     handle = await client.start_workflow(
-        SearchWorkflow.run,
-        SearchParams(
+        SearchOrchestratorWorkflow.run,
+        OrchestratorParams(
             query=query,
-            mode=mode,
-            max_iterations=max_iterations,
+            max_subqueries=settings.agent.max_subqueries,
             max_refinements=max_refinements,
-            request_id=request_id,
-            version_tag=settings.analytics.default_version_tag,
-            env=settings.analytics.env_name,
-            distill_enabled=settings.agent.distill_enabled,
-            distill_min_chars=settings.agent.distill_min_chars,
-            observation_max_chars=settings.agent.observation_max_chars,
             coverage_check_enabled=settings.agent.coverage_check_enabled,
-            max_coverage_checks=settings.agent.max_coverage_checks,
+            max_coverage_rounds=settings.agent.max_coverage_rounds,
         ),
         id=workflow_id,
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
     )
 
-    # Poll workflow state for progress and forward to MCP client.
-    # Loop steps + max_iterations give a coarse progress fraction;
-    # use `last_tool` text for the message.
+    # Poll workflow state for progress and forward to MCP client.  The
+    # orchestrator exposes phase + sub-question / source counts (it has
+    # no open-ended step loop), so progress is coarse phase text rather
+    # than a step fraction.
     result_task = asyncio.create_task(handle.result())
     try:
         while not result_task.done():
             try:
-                state = await handle.query(SearchWorkflow.get_state)
-                progress = min(
-                    1.0,
-                    (state.get("steps_completed") or 0) / max(1, max_iterations),
-                )
+                state = await handle.query(SearchOrchestratorWorkflow.get_state)
                 await ctx.report_progress(
-                    progress=progress,
+                    progress=0.0,
                     total=1.0,
                     message=(
                         f"{state.get('phase','init')}  "
-                        f"step={state.get('steps_completed')}  "
-                        f"last_tool={state.get('last_tool')}  "
+                        f"subqueries={state.get('n_subqueries')}  "
                         f"sources={state.get('n_sources')}"
                     ),
                 )

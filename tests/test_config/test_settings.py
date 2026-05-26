@@ -78,34 +78,47 @@ def test_wikibase_enabled_via_env(monkeypatch):
     assert fresh.base_url == "http://wb.internal:8181"
 
 
-def test_per_role_model_falls_back_to_llm_model(monkeypatch):
-    """When the role-specific env var is empty, model_for() returns
-    LITELLM_LLM_MODEL so existing single-model deployments don't break."""
+def test_roles_resolve_to_small_tier_by_default(monkeypatch):
+    """Every role except synthesis runs on the small (local) model;
+    synthesis runs on the large model.  Two physical model names."""
     from src.config import LiteLLMSettings
 
-    monkeypatch.setenv("LITELLM_LLM_MODEL", "fallback-model")
-    monkeypatch.delenv("LITELLM_EXTRACTION_MODEL", raising=False)
-    monkeypatch.delenv("LITELLM_JUDGE_MODEL", raising=False)
-    monkeypatch.delenv("LITELLM_SEARCH_MODEL", raising=False)
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "small-model")
+    monkeypatch.setenv("LITELLM_MODEL_LARGE", "large-model")
+    monkeypatch.delenv("LITELLM_ROLE_TIERS", raising=False)
 
     fresh = LiteLLMSettings()
-    assert fresh.model_for("extraction") == "fallback-model"
-    assert fresh.model_for("judge") == "fallback-model"
-    assert fresh.model_for("search") == "fallback-model"
+    for role in ("extraction", "judge", "search", "plan", "coverage"):
+        assert fresh.model_for(role) == "small-model"
+    assert fresh.model_for("synthesis") == "large-model"
 
 
-def test_per_role_model_explicit_override(monkeypatch):
-    """Each role-specific env-var wins over LITELLM_LLM_MODEL."""
+def test_role_tier_override_via_env(monkeypatch):
+    """A partial LITELLM_ROLE_TIERS escalates one role to large while
+    every other role keeps its default tier."""
     from src.config import LiteLLMSettings
 
-    monkeypatch.setenv("LITELLM_LLM_MODEL", "default-model")
-    monkeypatch.setenv("LITELLM_EXTRACTION_MODEL", "ext-14b")
-    monkeypatch.setenv("LITELLM_JUDGE_MODEL", "judge-3b")
-    monkeypatch.setenv("LITELLM_SEARCH_MODEL", "search-7b")
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "small-model")
+    monkeypatch.setenv("LITELLM_MODEL_LARGE", "large-model")
+    monkeypatch.setenv("LITELLM_ROLE_TIERS", '{"plan": "large"}')
 
     fresh = LiteLLMSettings()
-    assert fresh.model_for("extraction") == "ext-14b"
-    assert fresh.model_for("judge") == "judge-3b"
-    assert fresh.model_for("search") == "search-7b"
-    # Legacy llm_model still readable for callers that don't use role.
-    assert fresh.llm_model == "default-model"
+    assert fresh.model_for("plan") == "large-model"
+    # synthesis default-large preserved through the merge.
+    assert fresh.model_for("synthesis") == "large-model"
+    # untouched roles stay small.
+    assert fresh.model_for("judge") == "small-model"
+
+
+def test_effective_base_prefers_deprecated_alias(monkeypatch):
+    """Legacy no-role path: explicit llm_model wins, else small tier."""
+    from src.config import LiteLLMSettings
+
+    monkeypatch.setenv("LITELLM_MODEL_SMALL", "small-model")
+    # Force-empty (not delenv): the tracked .env file may still carry a
+    # deprecated LITELLM_LLM_MODEL value that env_file would otherwise load.
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "")
+    assert LiteLLMSettings().effective_base == "small-model"
+
+    monkeypatch.setenv("LITELLM_LLM_MODEL", "legacy-model")
+    assert LiteLLMSettings().effective_base == "legacy-model"

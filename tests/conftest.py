@@ -10,7 +10,7 @@ helps in some cases.  If you hit
 run, split the suites:
 
     pytest tests/test_mcp/
-    pytest tests/test_workflow/test_search_workflow.py
+    pytest tests/test_workflow/test_search_orchestrator.py
 
 Both pass green individually.  The flake is order-dependent, not
 correctness-related.
