@@ -354,6 +354,34 @@ class IngestionSettings(BaseSettings):
     gliner_model: str = "urchade/gliner_multi-v2.1"
 
 
+class HFSettings(BaseSettings):
+    """Offline HuggingFace model loading for air-gapped deploys.
+
+    Two project models are pulled from the HuggingFace Hub on first use:
+    the GLiNER span-NER model (``settings.ingestion.gliner_model``) and
+    the BGE cross-encoder reranker (``rerank_model`` below).  In an
+    air-gapped deploy those weights must already live in a local HF
+    cache; ``scripts/download_models.py`` pre-populates it online and
+    ``src/retrieval/hf_offline.py:configure_hf`` flips the standard HF
+    env vars so the loaders read from the cache only.
+
+    EXPLICIT env names (no shared prefix): each field binds to exactly
+    one env var via ``validation_alias`` so we NEVER accidentally bind
+    HuggingFace's OWN ``HF_HOME`` / ``HF_HUB_OFFLINE`` — those belong to
+    the HF libraries and ``configure_hf`` sets them itself.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="", env_file=".env", extra="ignore",
+    )
+
+    offline: bool = Field(default=False, validation_alias="HF_OFFLINE")
+    cache_dir: str | None = Field(default=None, validation_alias="HF_CACHE_DIR")
+    rerank_model: str = Field(
+        default="BAAI/bge-reranker-v2-m3", validation_alias="HF_RERANK_MODEL",
+    )
+
+
 class WikibaseSettings(BaseSettings):
     """Self-hosted Wikibase populator settings.
 
@@ -563,6 +591,10 @@ class Settings(BaseSettings):
         return WikibaseSettings()
 
     @cached_property
+    def hf(self) -> HFSettings:
+        return HFSettings()
+
+    @cached_property
     def metrics(self) -> MetricsSettings:
         return MetricsSettings()
 
@@ -578,6 +610,7 @@ __all__ = [
     "AgentSettings",
     "AnalyticsSettings",
     "ApiSettings",
+    "HFSettings",
     "IngestionSettings",
     "LiteLLMSettings",
     "MetricsSettings",

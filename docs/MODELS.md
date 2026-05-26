@@ -112,6 +112,53 @@ LiteLLM proxy reaches Ollama on the host at
 `host.docker.internal:11434`.  This is wired in
 `docker/litellm_config.yaml`.
 
+## Offline / air-gapped models
+
+LLMs and embeddings go through the **LiteLLM proxy**, so an air-gapped
+host only needs the proxy reachable.  But **two** models are pulled
+directly from the **HuggingFace Hub** on first use and must be
+pre-cached for offline deploys:
+
+| Model | Config | Default | Used by |
+|---|---|---|---|
+| GLiNER span-NER | `INGESTION_GLINER_MODEL` (`settings.ingestion.gliner_model`) | `urchade/gliner_multi-v2.1` | OPT-IN `gliner` / `gliner+llm` extractor modes |
+| BGE cross-encoder reranker | `HF_RERANK_MODEL` (`settings.hf.rerank_model`) | `BAAI/bge-reranker-v2-m3` | unified graph+vector rerank before synthesis |
+
+### 1. Pre-download online (populate the cache)
+
+On a box that can reach the Hub:
+
+```bash
+python -m scripts.download_models --cache-dir /data/hf
+# or just one:  --models gliner   |   --models reranker
+```
+
+This forces the download process online (even if `HF_OFFLINE` /
+`HF_HUB_OFFLINE` is set in the env), points the HF cache vars at the
+resolved dir (CLI `--cache-dir` > `HF_CACHE_DIR` > HF default), pulls
+both models, and prints the cache dir + next steps.  It exits non-zero
+if any download fails.
+
+### 2. Copy the cache to the air-gapped host, then run offline
+
+```env
+HF_OFFLINE=true
+HF_CACHE_DIR=/data/hf
+HF_RERANK_MODEL=BAAI/bge-reranker-v2-m3   # only if non-default
+```
+
+`HF_OFFLINE=true` makes `src/retrieval/hf_offline.py:configure_hf()`
+set `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`, and `HF_CACHE_DIR`
+points `HF_HOME` / `SENTENCE_TRANSFORMERS_HOME` / `TRANSFORMERS_CACHE`
+at the copied cache.  `configure_hf()` runs at every HF model-load
+point (GLiNER `__init__` + `gliner_ner_callable`, and `build_reranker`)
+BEFORE the heavy library imports, so the loaders read the cache only.
+
+These are the project's OWN env vars (read via explicit aliases so they
+never clobber HuggingFace's own `HF_HOME` / `HF_HUB_OFFLINE` — the app
+derives and sets those itself).  An operator-set `HF_HOME` is left
+untouched, so manual overrides win.
+
 ## Capability flags
 
 `src/retrieval/llm.py:build_llm` consults the env var

@@ -8,6 +8,39 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Offline Models] — 2026-05-26 — Offline HF model loading + pre-download script
+
+### Added
+- `HFSettings` (mounted as `settings.hf`) — three EXPLICIT-alias env
+  vars (`HF_OFFLINE`, `HF_CACHE_DIR`, `HF_RERANK_MODEL`) for air-gapped
+  HuggingFace loading. Explicit `validation_alias` per field (no shared
+  prefix) so they never clobber HuggingFace's own `HF_HOME` /
+  `HF_HUB_OFFLINE`.
+- `src/retrieval/hf_offline.py:configure_hf()` — idempotent helper that
+  translates `settings.hf` into the standard HF env vars BEFORE any HF
+  library loads a model: sets `HF_HOME` / `SENTENCE_TRANSFORMERS_HOME` /
+  `TRANSFORMERS_CACHE` from `cache_dir` (only when unset — operator env
+  wins) and forces `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1` when
+  `offline`.
+- `scripts/download_models.py` — argparse CLI (`--models {all,gliner,
+  reranker}`, `--cache-dir`) that FORCES the download process online
+  (overriding any ambient offline env), points the cache vars at the
+  resolved dir, downloads the GLiNER + reranker models, and fails loudly
+  on error.
+- docs/MODELS.md "Offline / air-gapped models" section; `.env.example`
+  `HF_OFFLINE` / `HF_CACHE_DIR` / `HF_RERANK_MODEL`.
+
+### Changed
+- GLiNER load points (`GLiNERExtractor.__init__`, `gliner_ner_callable`)
+  now go through `_load_gliner()`, which calls `configure_hf()` before
+  importing `gliner` and passes `local_files_only=True` to
+  `from_pretrained` when offline (try/except falls back to a plain call
+  if the kwarg is unsupported).
+- `build_reranker()` resolves its `model_name` from
+  `settings.hf.rerank_model` (was hardcoded), calls `configure_hf()`
+  first, and forwards `cache_folder` / `local_files_only` (via
+  `cross_encoder_kwargs`) to `SentenceTransformerRerank` when configured.
+
 ## [Search R3b] — 2026-05-26 — Activate graph_walk in retrieve path
 
 ### Added
