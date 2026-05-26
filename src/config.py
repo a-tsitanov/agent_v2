@@ -458,6 +458,15 @@ class AgentSettings(BaseSettings):
     # small-tier LLM proxy.
     global_max_communities: int = Field(default=20, ge=1, le=200)
     global_map_parallelism: int = Field(default=4, ge=1, le=32)
+    # Multi-hop graph_walk seeding (Search R3b): in the deterministic
+    # SubQuery retrieve path, after ``graph_search`` returns entities the
+    # retrieve activity auto-seeds the bounded ``graph_walk`` tool from
+    # the TOP graph_search entity (no LLM tool-pick needed).  Fail-open:
+    # any walk error is swallowed and the vector+graph_search results are
+    # returned unchanged.  ``graph_walk_hops`` is the requested hop count
+    # (the tool clamps it to GRAPH_WALK_MAX_HOPS).
+    graph_walk_enabled: bool = True
+    graph_walk_hops: int = Field(default=2, ge=1, le=3)
     # Canonical entity linking (Task 6): when enabled, ingest resolves
     # each mention to an existing Wikibase QID via exact-alias →
     # embedding-kNN → optional LLM verify before deciding to mint a new

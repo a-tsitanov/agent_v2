@@ -8,6 +8,22 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R3b] — 2026-05-26 — Activate graph_walk in retrieve path
+
+### Added
+- `graph_walk` (the bounded multi-hop tool built + registered in R3 but
+  previously DORMANT — nothing invoked it) is now auto-seeded from the TOP
+  `graph_search` entity in the deterministic SubQuery retrieve path. The
+  `retrieve_subquestion` activity parses the `graph_search` observation,
+  picks the top entity via the new pure helper
+  `top_entity_name(observation) -> str | None`, dispatches `graph_walk`
+  with that `start_entity` and `hops=settings.agent.graph_walk_hops`, and
+  merges its chunks (deduped by `chunk_id`). Flag-gated by
+  `settings.agent.graph_walk_enabled` (default `True`; `graph_walk_hops`
+  default `2`) and FAIL-OPEN — no entities / parse error / walk error all
+  skip the walk and return the vector + graph_search results unchanged
+  (never raises). Parsing lives in the activity, not a `@workflow.run`.
+
 ## [Search R7b] — 2026-05-26 — Legacy search cutover (BREAKING)
 
 ### Removed

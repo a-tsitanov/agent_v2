@@ -14,10 +14,12 @@ sink the activity — we still return whatever the other tool found.
 
 from __future__ import annotations
 
+import json
 import time
 
 from temporalio import activity
 
+from src.config import settings
 from src.retrieval import atomic_tools
 from src.workflow._search_deps import get_graph_retriever, get_retriever
 from src.workflow._search_serde import node_to_serialized
@@ -28,19 +30,46 @@ from src.workflow.contracts import RetrieveParams, RetrieveResult
 # atomic_tools.graph_search returns empty for a None retriever).
 #
 # graph_walk (bounded multi-hop, R3) is registered in atomic_tools and
-# dispatchable on this path via the same graph_retriever DI — it is NOT
-# in the default deterministic pipeline because it needs an explicit
-# `start_entity` (a real entity name), which only an LLM tool-pick step
-# can supply. When R3's connection-aware planner lands, add "graph_walk"
-# to a per-sub-question pipeline keyed on questions classified as
-# multi-hop/connection ('как связаны', 'через цепочку'); the dispatch
-# wiring + caps are already in place here.
+# dispatchable on this path via the same graph_retriever DI. It is NOT
+# in this fixed pipeline because it needs an explicit `start_entity`
+# (a real entity name). R3b ACTIVATES it deterministically WITHOUT an
+# LLM tool-pick: after graph_search runs, the activity seeds graph_walk
+# from the TOP graph_search entity (``top_entity_name`` + the seed block
+# in the activity body), flag-gated by
+# ``settings.agent.graph_walk_enabled`` and fail-open.
 _PIPELINE = ("vector_search", "graph_search")
 
 # Tools this deterministic activity is ALLOWED to dispatch (default
 # pipeline + the explicitly-bounded multi-hop walk available for the
 # connection-aware path). Kept as the contract surface for R3 wiring.
 ALLOWED_TOOLS = ("vector_search", "graph_search", "graph_walk")
+
+
+def top_entity_name(observation: str) -> str | None:
+    """Pick the top entity_name from a ``graph_search`` observation.
+
+    PURE (no I/O) so it's unit-testable without dispatch. ``graph_search``
+    serialises ``{"entities": [...], "relations": [...]}`` with entities
+    in similarity-rank order, so the "top" entity is the first one with a
+    non-blank ``entity_name``.
+
+    Returns ``None`` for any non-conforming input — empty / missing
+    entities, a list-shaped observation (vector_search), or garbled JSON —
+    so the caller treats it as "no seed available" and skips the walk.
+    """
+    try:
+        data = json.loads(observation)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for ent in data.get("entities") or []:
+        if not isinstance(ent, dict):
+            continue
+        name = (ent.get("entity_name") or "").strip()
+        if name:
+            return name
+    return None
 
 
 @activity.defn
@@ -55,6 +84,17 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
     collected = []  # list[NodeWithScore]
     seen: set[str] = set()
     errors: list[str] = []
+
+    def _merge_sources(new_sources) -> None:
+        """Append new NodeWithScore items, deduping by chunk_id."""
+        for n in new_sources:
+            cid = n.node.node_id
+            if cid in seen:
+                continue
+            seen.add(cid)
+            collected.append(n)
+
+    graph_search_obs: str | None = None
 
     for tool_name in _PIPELINE:
         try:
@@ -71,12 +111,32 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
             )
             errors.append(f"{tool_name}: {exc}")
             continue
-        for n in result.sources:
-            cid = n.node.node_id
-            if cid in seen:
-                continue
-            seen.add(cid)
-            collected.append(n)
+        if tool_name == "graph_search":
+            graph_search_obs = result.observation
+        _merge_sources(result.sources)
+
+    # R3b: deterministically seed the bounded multi-hop graph_walk from
+    # the TOP graph_search entity. FAIL-OPEN — any error (parse failure,
+    # store error, missing seed) just skips the walk and returns the
+    # vector + graph_search results unchanged; never raises.
+    if settings.agent.graph_walk_enabled and graph_search_obs is not None:
+        try:
+            start = top_entity_name(graph_search_obs)
+            if start:
+                walk = await atomic_tools.dispatch(
+                    "graph_walk",
+                    {
+                        "start_entity": start,
+                        "hops": settings.agent.graph_walk_hops,
+                    },
+                    graph_retriever=graph_retriever,
+                )
+                _merge_sources(walk.sources)
+        except Exception as exc:
+            activity.logger.warning(
+                "retrieve_subquestion  graph_walk skipped  err=%s", exc,
+            )
+            errors.append(f"graph_walk: {exc}")
 
     sources = [node_to_serialized(n) for n in collected]
     duration_ms = int((time.monotonic() - t0) * 1000)

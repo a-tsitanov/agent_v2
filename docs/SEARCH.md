@@ -104,10 +104,25 @@ enough — "who is connected to X transitively", "что/кто связывае
   `TOOL_DESCRIPTIONS`, `dispatch()`) and dispatchable on the R2 retrieve
   path via the same `graph_retriever` DI (see `ALLOWED_TOOLS` in
   `retrieve.py`). It is NOT in the default deterministic `_PIPELINE`
-  because it needs an explicit `start_entity` — that belongs to a future
-  connection-aware planner / LLM tool-pick step. The tool description
+  because it needs an explicit `start_entity`. The tool description
   (`TOOL_DESCRIPTIONS["graph_walk"]`) documents WHEN an LLM should pick it
   vs `graph_search`.
+- **Auto-seeding in the local retrieve path (R3b)**: rather than waiting
+  for an LLM tool-pick, the `retrieve_subquestion` activity now SEEDS
+  `graph_walk` deterministically. After `graph_search` runs, the activity
+  parses its observation, picks the TOP entity (first non-blank
+  `entity_name` — graph_search returns entities in similarity-rank order)
+  via the pure helper `top_entity_name(observation) -> str | None`, then
+  dispatches `graph_walk` with that `start_entity` and
+  `hops=settings.agent.graph_walk_hops`. The walk's chunks are merged into
+  the accumulated sources (deduped by `chunk_id`, same `seen` set as the
+  pipeline). Gated by `settings.agent.graph_walk_enabled` (default `True`,
+  `graph_walk_hops` default `2`). FAIL-OPEN: if `graph_search` returned no
+  entities, or parsing / the walk raises for any reason, the seed step is
+  skipped and the vector + graph_search results are returned unchanged
+  (the activity never raises on the walk). Because parsing is
+  non-deterministic, this logic lives in the ACTIVITY, never in a
+  `@workflow.run` body.
 
 ### Coverage gate (R4)
 
