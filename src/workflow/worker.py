@@ -50,7 +50,6 @@ from src.workflow.search.global_wf import GlobalSearchWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
-from src.workflow.search_workflow import SearchWorkflow
 
 
 def _build_runtime() -> Runtime | None:
@@ -118,15 +117,15 @@ async def _run() -> None:
         activities=LLM_ACTIVITIES,
         max_concurrent_activities=settings.temporal.llm_activity_concurrency,
     )
-    # SearchWorkflow lives on its own queue so concurrent search
+    # Search workflows live on their own queue so concurrent search
     # sessions don't fight ingest for GPU budget.  Cap independently
     # via TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY (default 4 — assumes
     # LLM proxy can handle a small handful of parallel sessions).
-    # Both flows share the search queue during the R2 parity window:
-    # the legacy ReAct SearchWorkflow and the new plan-execute
-    # SearchOrchestratorWorkflow + SubQueryRetrievalWorkflow child.  The
-    # orchestrator reuses synthesize_answer (in SEARCH_ACTIVITIES) and
-    # adds plan_subquestions + retrieve_subquestion (SEARCH_V2_ACTIVITIES).
+    # R7b cutover: the legacy ReAct SearchWorkflow was removed — the
+    # plan-execute SearchOrchestratorWorkflow (+ SubQueryRetrievalWorkflow
+    # child) is now the sole local path.  The orchestrator reuses
+    # synthesize_answer (in SEARCH_ACTIVITIES) and adds plan_subquestions +
+    # retrieve_subquestion (SEARCH_V2_ACTIVITIES).
     # R7a adds the GraphRAG GlobalSearchWorkflow (orchestration on this
     # small queue; its MAP partials are small-tier and its REDUCE pins
     # synthesize_answer to the large queue, same as the local orchestrator)
@@ -135,7 +134,6 @@ async def _run() -> None:
         client,
         task_queue=settings.temporal.search_task_queue,
         workflows=[
-            SearchWorkflow,
             SearchOrchestratorWorkflow,
             SubQueryRetrievalWorkflow,
             GlobalSearchWorkflow,

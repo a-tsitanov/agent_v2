@@ -2,12 +2,14 @@
 
 Submits ``SearchOrchestratorWorkflow``: decompose → parallel per-sub-
 question retrieval → merge/dedup → single large-model synthesis.  No
-ReAct loop.  Reuses the legacy ``SearchRequest`` / ``SearchResponse``
-shapes so existing clients work unchanged — only the underlying flow
-differs.
+ReAct loop.  Reuses the ``SearchRequest`` / ``SearchResponse`` shapes so
+existing clients work unchanged — only the underlying flow differs.
 
-Lives alongside the legacy ``/api/v1/search`` (ReAct ``SearchWorkflow``)
-behind the parity window; cutover happens in a later phase.
+R7b cutover: this module is the SOLE search surface
+(``/api/v1/search/{local,global,drift,auto}`` + the community-rebuild
+admin trigger).  The legacy ReAct ``/api/v1/search``, ``/agent`` and
+``/selfrag`` endpoints (and the ``SearchWorkflow`` behind them) were
+removed.
 """
 
 from __future__ import annotations

@@ -8,6 +8,60 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Search R7b] — 2026-05-26 — Legacy search cutover (BREAKING)
+
+### Removed
+- Legacy ReAct `SearchWorkflow` (`src/workflow/search_workflow.py`) and
+  its worker registration on the `kb-search-small` queue.
+- Legacy API routes: `POST /api/v1/search`, `/agent`, `/selfrag`
+  (`src/api/routes/{search,agent,selfrag}.py`) and the judge-based
+  baseline `POST /api/v1/legacy/agent`
+  (`src/api/routes/legacy_agent.py`), plus their `include_router`
+  registrations in `src/api/main.py` and the now-dead
+  `AgentSettings.enable_legacy_agent` config flag.
+- Legacy-ONLY activities `agent_reasoning_step`, `tool_execution`,
+  `distill_observation` (`src/workflow/activities/{agent_reasoning,
+  tool_execution,distill_observation}.py`), removed from
+  `SEARCH_ACTIVITIES` / `__all__`.
+- Legacy-ONLY contracts: `SearchParams`, `ReasoningParams`,
+  `AgentDecision`, `ToolCallParams`/`ToolCallResult`,
+  `DistillParams`/`DistillResult`, `ToolSpec`,
+  `SerializedMessage`/`SerializedToolCall`, the `Relevance` alias; and
+  the legacy `serialized_to_message`/`message_to_serialized` serde
+  helpers (`src/workflow/_search_serde.py`).
+- Legacy `SearchWorkflow` integration test
+  (`tests/test_workflow/test_search_workflow.py`).
+
+### Changed
+- MCP-1 `kb_search` tool (`src/mcp/search_server.py`) now submits
+  `SearchOrchestratorWorkflow` (local plan-execute) instead of the
+  removed `SearchWorkflow`; dropped the `mode`/`max_iterations` params
+  (the orchestrator is local-only) and adapted progress polling to the
+  orchestrator's `get_state` keys.
+- Migrated tests to the new surface: `test_route_skeletons.py` now
+  asserts `/api/v1/search/{local,global,drift,auto}` are registered and
+  the removed legacy routes 404; `test_search_server.py` asserts the
+  `query` param (no `mode` enum).
+- Eval harness (`tests/eval/run_answer_eval.py`) repointed from the
+  legacy endpoints to `/api/v1/search/{local,global,drift,auto}`
+  (dropped `--include-legacy`).
+
+### Kept (SHARED — the new path depends on these)
+- Activities `synthesize_answer`, `coverage_check`; contracts
+  `SerializedNode`, `SynthesizeParams`/`SynthesizeResult`,
+  `CoverageParams`/`CoverageResult`, `AgenticStepStatDict`,
+  `SearchOutcome`, `SearchMode`; serde `node_to_serialized` /
+  `serialized_to_node`.
+
+### Notes
+- **BREAKING**: the old `/search`, `/agent`, `/selfrag` (and
+  `/legacy/agent`) endpoints are gone. The new surface is
+  `/api/v1/search/{local,global,drift,auto}` (+
+  `/admin/communities/rebuild`).
+- **Live-Temporal parity verification of the new endpoints is REQUIRED
+  before merging to main** — the suites here run with Temporal mocked /
+  skip-gated.
+
 ## [Search R7a] — 2026-05-26 — Query routing + GraphRAG global search (additive)
 
 ### Added

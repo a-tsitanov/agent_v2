@@ -15,10 +15,8 @@ Activities are split into two pools by GPU/LLM pressure:
 a single worker pool.
 """
 
-from src.workflow.activities.agent_reasoning import agent_reasoning_step
 from src.workflow.activities.build_property_graph import build_property_graph
 from src.workflow.activities.coverage_check import coverage_check
-from src.workflow.activities.distill_observation import distill_observation
 from src.workflow.activities.extract_kg import extract_kg
 from src.workflow.activities.fetch_source import fetch_source
 from src.workflow.activities.finalize import finalize, mark_failed
@@ -28,7 +26,6 @@ from src.workflow.activities.merge_and_resolve import merge_and_resolve
 from src.workflow.activities.parse_and_chunk import parse_and_chunk
 from src.workflow.activities.push_wikibase import push_wikibase
 from src.workflow.activities.synthesize_answer import synthesize_answer
-from src.workflow.activities.tool_execution import tool_execution
 
 LLM_ACTIVITIES = [
     extract_kg,
@@ -52,10 +49,13 @@ MAIN_ACTIVITIES = [
     mark_failed,
 ]
 
+# R7b cutover: the legacy ReAct SearchWorkflow was removed, so its
+# exclusive activities (agent_reasoning_step, tool_execution,
+# distill_observation) are gone.  Only the SHARED search activities the
+# plan-execute / GraphRAG paths use remain here: coverage_check (R4
+# pre-synthesis gate, reused by the orchestrator) and synthesize_answer
+# (final synthesis, also pinned to the large queue).
 SEARCH_ACTIVITIES = [
-    agent_reasoning_step,
-    tool_execution,
-    distill_observation,
     coverage_check,
     synthesize_answer,
 ]
@@ -67,10 +67,8 @@ __all__ = [
     "LLM_ACTIVITIES",
     "MAIN_ACTIVITIES",
     "SEARCH_ACTIVITIES",
-    "agent_reasoning_step",
     "build_property_graph",
     "coverage_check",
-    "distill_observation",
     "extract_kg",
     "fetch_source",
     "finalize",
@@ -81,5 +79,4 @@ __all__ = [
     "parse_and_chunk",
     "push_wikibase",
     "synthesize_answer",
-    "tool_execution",
 ]

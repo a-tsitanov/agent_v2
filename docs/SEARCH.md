@@ -1,22 +1,31 @@
 # Search subsystem
 
-> Status: refactor in progress (Plan #2, agentic-search). The monolithic
-> `src/workflow/search_workflow.py` is being decomposed into a
-> `src/workflow/search/` package: a thin orchestrator + per-mode child
-> workflows (sub-query retrieval, global search) + an offline community
-> builder. Legacy search remains the default until cutover.
+> Status: refactor complete through R7b (Plan #2, agentic-search). The
+> monolithic `src/workflow/search_workflow.py` has been DECOMPOSED into
+> the `src/workflow/search/` package — a thin orchestrator + per-mode
+> child workflows (sub-query retrieval, global search) + an offline
+> community builder — and the legacy monolith has been REMOVED. The new
+> package is now the SOLE search path.
+>
+> **BREAKING (R7b cutover)**: the legacy ReAct endpoints
+> `/api/v1/search`, `/api/v1/agent`, `/api/v1/selfrag` and the judge-based
+> `/api/v1/legacy/agent` baseline were removed along with the
+> `SearchWorkflow` workflow and its exclusive activities
+> (`agent_reasoning_step`, `tool_execution`, `distill_observation`).
+> Clients must move to `/api/v1/search/{local,global,drift,auto}`.
 
-## Workflows (target)
-- `SearchOrchestratorWorkflow` — route → plan → fan-out → rerank → coverage → synthesize
+## Workflows
+- `SearchOrchestratorWorkflow` — plan → fan-out → coverage → rerank → synthesize
 - `SubQueryRetrievalWorkflow` — plan-execute retrieval for one sub-question
 - `GlobalSearchWorkflow` — GraphRAG community map-reduce
+- `DriftSearchWorkflow` / `AutoSearchWorkflow` — drift + routed dispatch
 - `CommunityBuildWorkflow` — offline GDS Leiden + batch community summaries
 
-## Endpoints (target)
+## Endpoints (the sole search surface)
 - `POST /api/v1/search/local`, `/search/global`, `/search/drift`, `/search/auto`
 - `POST /api/v1/admin/communities/rebuild`
 
-(Populated phase by phase; see `docs/superpowers/plans/2026-05-25-agentic-search.md`.)
+(See `docs/superpowers/plans/2026-05-25-agentic-search.md`.)
 
 ## Local plan-execute flow (R2, shipped)
 
@@ -55,13 +64,14 @@ question
   sources by chunk_id. No `agent_reasoning_step`.
 - **`SearchOrchestratorWorkflow`** — plan → one child per sub-question
   in parallel → merge+dedup sources by chunk_id → `synthesize_answer`
-  on the large tier (`use_synthesis_llm=True`) → returns the same
-  `SearchOutcome` shape as the legacy `SearchWorkflow`, mapped onto
-  `SearchResponse` by the route handler.
+  on the large tier (`use_synthesis_llm=True`) → returns the
+  `SearchOutcome` shape (formerly shared with the now-removed legacy
+  `SearchWorkflow`), mapped onto `SearchResponse` by the route handler.
 
-The legacy ReAct `SearchWorkflow` + `/api/v1/search` stay UNTOUCHED and
-remain the default until cutover (parity window). Both flows share the
-`kb-search-small` task queue (see `docs/QUEUES.md`).
+The orchestrator runs on the `kb-search-small` task queue (see
+`docs/QUEUES.md`). The R7b cutover removed the legacy ReAct
+`SearchWorkflow` that previously shared this queue — the orchestrator is
+now the sole local path.
 
 ### Multi-hop traversal: `graph_walk` (R3)
 
@@ -103,8 +113,10 @@ enough — "who is connected to X transitively", "что/кто связывае
 
 After the orchestrator merges all sub-question sources (and before the
 single `synthesize_answer`), it runs ONE small-tier `coverage_check`
-(the SAME activity the legacy ReAct `SearchWorkflow` uses — reused, not
-re-implemented) asking whether the gathered evidence FULLY covers the
+(a SHARED activity retained through the R7b cutover — the legacy ReAct
+`SearchWorkflow` that originally introduced it has been removed, but the
+activity stays as the orchestrator's gate) asking whether the gathered
+evidence FULLY covers the
 question. On a verdict of `complete=False` with a non-empty `missing`
 gap, the orchestrator issues that gap as ONE extra
 `SubQueryRetrievalWorkflow` (deterministic child id `…-cov-1`), merges
@@ -134,10 +146,11 @@ fan-out otherwise lacks for multi-part questions.
   (`src/workflow/search/_coverage.py`: `should_run_coverage_round`,
   `build_evidence`) so the gap/complete/bound branching is unit-tested
   without a live Temporal env.
-- **Legacy path unchanged**: the ReAct `SearchWorkflow` keeps its own
-  coverage gate (gap fed back into the reasoning history, bounded by
-  `max_coverage_checks`) — a SEPARATE mechanism from the orchestrator's
-  "gap → extra sub-question".
+- **R7b note**: the legacy ReAct `SearchWorkflow` had a SEPARATE coverage
+  mechanism (gap fed back into the reasoning history, bounded by
+  `max_coverage_checks`). That workflow — and its `max_coverage_checks`
+  knob — were removed in the cutover; only the orchestrator's
+  "gap → extra sub-question" gate remains.
 
 ### Unified rerank + large-tier synthesis (R5)
 
@@ -177,21 +190,21 @@ schedules synthesis on a dedicated large-tier queue.
   queue (see `docs/QUEUES.md`). The call spec is built by the pure
   `build_synthesize_call` helper so the queue + tier routing is
   unit-tested outside Temporal.
-- **Legacy path unchanged**: the ReAct `SearchWorkflow` still synthesizes
-  on the small tier (`use_synthesis_llm=False`) on `kb-search-small`,
-  with no rerank step.
+- **R7b note**: the small-tier ReAct synthesis path
+  (`use_synthesis_llm=False`, no rerank) belonged to the removed legacy
+  `SearchWorkflow`; the orchestrator always synthesizes large-tier with
+  rerank.
 
 ### Config knobs (R2)
 - `AGENT_MAX_SUBQUERIES` (`AgentSettings.max_subqueries`, default 5) —
   caps the parallel sub-query fan-out.
 - `AGENT_COVERAGE_CHECK_ENABLED` (`AgentSettings.coverage_check_enabled`,
-  default true) — gates the orchestrator coverage check (R4); REUSED
-  from the legacy ReAct knob.
+  default true) — gates the orchestrator coverage check (R4).
 - `AGENT_MAX_COVERAGE_ROUNDS` (`AgentSettings.max_coverage_rounds`,
   default 1) — caps the orchestrator's extra coverage sub-question
-  rounds (R4); distinct from the ReAct `max_coverage_checks`.
+  rounds (R4).
 - `TEMPORAL_SEARCH_TASK_QUEUE` (default `kb-search-small`) — queue
-  hosting both the legacy ReAct workflow and the new orchestrator +
+  hosting the orchestrator +
   sub-query child.
 
 ### Config knobs (R5)
@@ -264,13 +277,14 @@ is **unchanged**; nothing in the query path reads `:Community` yet.
   (`TemporalSettings.community_min_size`, default 3) — communities smaller
   than this are ignored (noise / disconnected pairs).
 
-## Query routing + GraphRAG global search (R7a, shipped — additive)
+## Query routing + GraphRAG global search (R7a, shipped)
 
 R7a adds query **routing** and a GraphRAG **global** search that
-map-reduces over the R6 community summaries, plus per-type endpoints. All
-additive: defaults unchanged, the local R2–R5 flow is untouched, and the
-legacy `SearchWorkflow` + `/search`,`/agent`,`/selfrag` routes are RETAINED
-(cutover is a separate phase pending live-parity verification).
+map-reduces over the R6 community summaries, plus per-type endpoints.
+(Originally shipped additively alongside the legacy ReAct routes; those
+legacy routes + `SearchWorkflow` were removed in the R7b cutover, leaving
+the routed `/api/v1/search/{local,global,drift,auto}` surface as the
+sole search path.)
 
 ### Routing (`route_query`)
 
@@ -346,9 +360,10 @@ flow as a child workflow (`dispatch_for_route` — pure, fallback `local`).
 | `POST /api/v1/search/auto` | `AutoSearchWorkflow` | `kb-search-small` | per chosen flow |
 | `POST /api/v1/admin/communities/rebuild` | `CommunityBuildWorkflow` | `kb-graph-build` | n/a (offline build) |
 
-All require `X-API-Key` and reuse the legacy `SearchRequest` /
-`SearchResponse` shapes (`SearchResponse.mode` now also carries
-`global`/`drift`).
+All require `X-API-Key` and reuse the `SearchRequest` / `SearchResponse`
+shapes (`SearchResponse.mode` carries `local`/`global`/`drift`). These
+four endpoints (plus the admin rebuild trigger) are the COMPLETE search
+surface after the R7b cutover.
 
 ### Config knobs (R7a)
 - `AGENT_GLOBAL_MAX_COMMUNITIES` (`AgentSettings.global_max_communities`,
@@ -360,7 +375,23 @@ All require `X-API-Key` and reuse the legacy `SearchRequest` /
 - The `route` role tier is configurable via `LITELLM_ROLE_TIERS`
   (defaults to `small`, per `_DEFAULT_ROLE_TIERS`).
 
-> **Legacy still present**: this phase is purely additive. The legacy
-> `SearchWorkflow` and the `/search`,`/agent`,`/selfrag` routes are
-> intentionally RETAINED until a later cutover phase verifies parity
-> against a live environment.
+## Legacy cutover (R7b, shipped — BREAKING)
+
+The legacy ReAct `SearchWorkflow`, the `/api/v1/search`, `/agent`,
+`/selfrag` endpoints, the judge-based `/api/v1/legacy/agent` baseline,
+and the legacy-only activities (`agent_reasoning_step`, `tool_execution`,
+`distill_observation`) + their exclusive contracts (`SearchParams`,
+`ReasoningParams`, `AgentDecision`, `ToolCall*`, `Distill*`, `ToolSpec`,
+`SerializedMessage`/`SerializedToolCall`, the `Relevance` alias) were
+REMOVED. The MCP-1 `kb_search` tool now submits
+`SearchOrchestratorWorkflow` (local plan-execute) instead.
+
+SHARED activities/contracts the new path depends on were KEPT:
+`synthesize_answer`, `coverage_check`, `SerializedNode`,
+`SynthesizeParams`/`SynthesizeResult`, `CoverageParams`/`CoverageResult`,
+`AgenticStepStatDict`, `SearchOutcome`, and the `node_to_serialized` /
+`serialized_to_node` serde helpers.
+
+> **REQUIRED before merge to main**: live-Temporal parity verification of
+> `/api/v1/search/{local,global,drift,auto}` against a real environment.
+> The unit/integration suites here run with Temporal mocked / skip-gated.

@@ -215,16 +215,16 @@ class TemporalSettings(BaseSettings):
     llm_task_queue: str = "kb-ingest-llm"
     llm_activity_concurrency: int = 1
 
-    # Search-side activities (agent_reasoning_step, tool_execution,
-    # synthesize_answer) live on their own task queue so operators can
-    # control GPU split between ingest and search independently.  Cap
-    # ≥ 1; raise it when LLM proxy / OpenAI quotas allow several
-    # parallel search sessions.
-    # Renamed kb-search-llm → kb-search-small (Search R2): the queue now
-    # also hosts the small-tier plan-execute flow (planner + parallel
-    # sub-query retrieval), so the name reflects the dominant model tier
-    # rather than "any LLM".  Legacy ReAct SearchWorkflow stays on this
-    # same queue during the parity window.
+    # Search-side activities (plan_subquestions, retrieve_subquestion,
+    # coverage_check, rerank_sources, synthesize_answer) live on their own
+    # task queue so operators can control GPU split between ingest and
+    # search independently.  Cap ≥ 1; raise it when LLM proxy / OpenAI
+    # quotas allow several parallel search sessions.
+    # Renamed kb-search-llm → kb-search-small (Search R2): the queue hosts
+    # the small-tier plan-execute flow (planner + parallel sub-query
+    # retrieval), so the name reflects the dominant model tier rather than
+    # "any LLM".  The R7b cutover removed the legacy ReAct SearchWorkflow
+    # that previously shared this queue.
     search_task_queue: str = "kb-search-small"
     search_activity_concurrency: int = 4
 
@@ -458,11 +458,6 @@ class AgentSettings(BaseSettings):
     # small-tier LLM proxy.
     global_max_communities: int = Field(default=20, ge=1, le=200)
     global_map_parallelism: int = Field(default=4, ge=1, le=32)
-    # R10: legacy judge-based agentic_search remains in the codebase
-    # as a comparative baseline for R9 eval.  Routed under
-    # `/api/v1/legacy/agent` only when this flag is true.  Default
-    # off — production traffic should go through /agent or /selfrag.
-    enable_legacy_agent: bool = False
     # Canonical entity linking (Task 6): when enabled, ingest resolves
     # each mention to an existing Wikibase QID via exact-alias →
     # embedding-kNN → optional LLM verify before deciding to mint a new

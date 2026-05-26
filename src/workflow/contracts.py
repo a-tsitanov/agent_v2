@@ -22,8 +22,11 @@ from pydantic import BaseModel, ConfigDict, Field
 GraphStatus = Literal["completed", "vector_only"]
 WikibaseStatus = Literal["ok", "skipped", "failed"]
 # "local" is the R2 plan-execute path (SearchOrchestratorWorkflow);
-# "global"/"drift" are the R7a GraphRAG routing modes (GlobalSearchWorkflow);
-# "simple"/"agent"/"selfrag" are the legacy ReAct SearchWorkflow modes.
+# "global"/"drift" are the R7a GraphRAG routing modes (GlobalSearchWorkflow).
+# "simple" is no longer a user-facing mode after the R7b legacy cutover,
+# but is retained as the SynthesizeParams branch selector the orchestrator
+# passes for plain (non-reflective) synthesis.  "agent"/"selfrag" are kept
+# only for backward-compatible synthesize_answer branch selection.
 SearchMode = Literal["simple", "agent", "selfrag", "local", "global", "drift"]
 
 
@@ -195,139 +198,14 @@ class SerializedNode(_Frozen):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class SerializedToolCall(_Frozen):
-    """One tool call an assistant turn requested.
-
-    Mirrors the OpenAI ``tool_calls`` entry shape so serde can rebuild
-    a valid function-calling history: every TOOL message must be
-    preceded by the ASSISTANT message whose ``tool_calls`` it answers.
-    """
-
-    id: str
-    name: str
-    arguments: str  # JSON-encoded kwargs
-
-
-class SerializedMessage(_Frozen):
-    """Wire-friendly projection of LlamaIndex ``ChatMessage``."""
-
-    role: Literal["system", "user", "assistant", "tool"]
-    content: str = ""
-    tool_call_id: str = ""  # for TOOL messages — which call this answers
-    name: str = ""  # for TOOL messages — the function name
-    # for ASSISTANT messages — the tool call(s) this turn requested, so
-    # the next reasoning step sees a valid assistant→tool pairing
-    # instead of an orphan tool observation.
-    tool_calls: list[SerializedToolCall] = Field(default_factory=list)
-
-
-class ToolSpec(_Frozen):
-    """LLM-visible tool description: just the name + prose for the
-    function-calling prompt.  The activity uses these as stub
-    ``FunctionTool`` entries so ``llm.achat_with_tools`` sees the
-    tools menu — but the tool bodies are never executed in-process
-    (Workflow dispatches via ``tool_execution`` activity instead).
-    """
-
-    name: str
-    description: str
-
-
 # ── inputs / outputs for activities ─────────────────────────────
-
-
-class SearchParams(_Frozen):
-    """Workflow input — what the API route / MCP server submits."""
-
-    query: str
-    mode: SearchMode = "agent"
-    max_iterations: int = 8
-    max_refinements: int = 3
-    request_id: str = ""
-    # Observation distillation knobs, resolved from AgentSettings at
-    # submit time and propagated here so the workflow never reads env
-    # at runtime (replay-safe).  Defaults mirror AgentSettings.
-    distill_enabled: bool = True
-    distill_min_chars: int = 1500
-    observation_max_chars: int = 6000
-    # Pre-submit coverage check knobs (mirror AgentSettings).
-    coverage_check_enabled: bool = True
-    max_coverage_checks: int = 1
-    # Analytics: same shape as IngestParams so the same Search
-    # Attributes (VersionTag, Model, Env, …) propagate to Temporal.
-    version_tag: str = "unspecified"
-    env: str = ""
-
-
-class ReasoningParams(_Frozen):
-    """Input to the ``agent_reasoning_step`` activity."""
-
-    messages: list[SerializedMessage]
-    tools: list[ToolSpec]
-
-
-class AgentDecision(_Frozen):
-    """Output of ``agent_reasoning_step``.
-
-    ``tool_name == "submit_answer"`` is the sentinel the workflow
-    treats as terminal — no tool_execution is invoked, control
-    drops straight to synthesize_answer.
-    """
-
-    tool_name: str
-    tool_kwargs: dict[str, Any] = Field(default_factory=dict)
-    tool_call_id: str = ""        # so we can build the matching TOOL message
-    raw_text: str = ""             # for Temporal-history debug
-    finished_no_call: bool = False  # LLM gave up on tool calling
-
-
-class ToolCallParams(_Frozen):
-    """Input to the ``tool_execution`` activity."""
-
-    tool_name: str
-    tool_kwargs: dict[str, Any] = Field(default_factory=dict)
-    # Only populated for ``filter_by_metadata`` (which filters the
-    # accumulator) — empty for retrieval tools to keep payloads small.
-    accumulated_sources: list[SerializedNode] = Field(default_factory=list)
-
-
-class ToolCallResult(_Frozen):
-    """Output of ``tool_execution``."""
-
-    tool_name: str
-    observation: str  # JSON-string (or raw text for read_full_document)
-    sources_added: list[SerializedNode] = Field(default_factory=list)
-    duration_ms: int = 0
-    error: str = ""  # non-empty if the tool failed, empty on success
-
-
-Relevance = Literal["relevant", "partial", "irrelevant"]
-
-
-class DistillParams(_Frozen):
-    """Input to the ``distill_observation`` activity.
-
-    Carries the raw (large) tool observation plus the user query so the
-    distiller can extract only query-relevant facts and grade relevance.
-    """
-
-    query: str
-    tool_name: str
-    observation: str
-
-
-class DistillResult(_Frozen):
-    """Output of ``distill_observation``.
-
-    ``distilled`` is the compact, query-focused text that goes into the
-    agent's reasoning history (bounding context growth).  ``relevance``
-    is advisory only — recorded in step stats and reflected in the
-    history note; it does NOT drop sources from the accumulator (full
-    sources always reach the synthesizer to avoid fact loss).
-    """
-
-    distilled: str
-    relevance: Relevance = "partial"
+#
+# R7b cutover: the legacy ReAct ``SearchWorkflow`` and its exclusive
+# contracts were removed — ``SearchParams``, ``ReasoningParams``,
+# ``AgentDecision``, ``ToolCallParams``/``ToolCallResult``,
+# ``DistillParams``/``DistillResult``, ``ToolSpec``,
+# ``SerializedMessage``/``SerializedToolCall`` and the ``Relevance``
+# alias.  Everything below is used by the plan-execute / GraphRAG path.
 
 
 class CoverageParams(_Frozen):

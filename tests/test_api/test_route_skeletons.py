@@ -1,63 +1,54 @@
-"""Route skeleton tests — confirm the three search endpoints exist
-and the unfilled ones (agent, selfrag) return 503 with a clear
-message."""
+"""Route skeleton tests — confirm the search endpoints are registered.
+
+R7b cutover: the sole search surface is now
+``/api/v1/search/{local,global,drift,auto}``.  The legacy ReAct
+endpoints (``/api/v1/search``, ``/agent``, ``/selfrag``) and the
+judge-based ``/api/v1/legacy/agent`` baseline were removed and now
+return 404."""
 
 from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.config import settings
-
 
 @pytest.mark.asyncio
-async def test_search_route_registered() -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/search/local",
+        "/api/v1/search/global",
+        "/api/v1/search/drift",
+        "/api/v1/search/auto",
+    ],
+)
+async def test_new_search_routes_registered(path: str) -> None:
+    """The plan-execute / GraphRAG endpoints are wired; without an API
+    key (or with a bad body) they short-circuit at auth / validation —
+    never 404."""
     from src.api.main import app
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/v1/search", json={"query": "hello"},
-        )
+        resp = await ac.post(path, json={"query": "hello"})
     assert resp.status_code in (401, 422)
 
 
 @pytest.mark.asyncio
-async def test_agent_route_registered() -> None:
-    """R7: handler is wired; without a real Milvus/LLM the call
-    will fail downstream (500) but the route is no longer 503."""
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/search",
+        "/api/v1/agent",
+        "/api/v1/selfrag",
+        "/api/v1/legacy/agent",
+    ],
+)
+async def test_legacy_search_routes_removed(path: str) -> None:
+    """R7b: the legacy ReAct + judge-based routes are gone → 404."""
     from src.api.main import app
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/v1/agent", json={"query": "hello"},
-        )
-    assert resp.status_code in (401, 422)
-
-
-@pytest.mark.asyncio
-async def test_selfrag_route_registered() -> None:
-    """R8: handler is wired; without auth the route returns 401."""
-    from src.api.main import app
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/v1/selfrag", json={"query": "hello"},
-        )
-    assert resp.status_code in (401, 422)
-
-
-@pytest.mark.asyncio
-async def test_legacy_route_404_by_default() -> None:
-    """R10: legacy /api/v1/legacy/agent is mounted only when
-    AGENT_ENABLE_LEGACY_AGENT=true.  Default off → 404."""
-    from src.api.main import app
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/v1/legacy/agent", json={"query": "hello"},
-        )
+        resp = await ac.post(path, json={"query": "hello"})
     assert resp.status_code == 404
