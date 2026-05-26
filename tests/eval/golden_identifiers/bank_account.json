@@ -1,0 +1,6 @@
+{
+  "name": "bank_account",
+  "description": "20-digit settlement account validated by its (7,1,3) control key against the BIC last-3. The корсчёт fails that key and must be rejected.",
+  "text": "Расчётный счёт 40702810200000012345 в банке с БИК 044525225. Корсчёт 30101810400000000225.",
+  "expected": { "BankAccount": ["40702810200000012345"], "BIC": ["044525225"] }
+}

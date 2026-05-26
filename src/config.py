@@ -261,6 +261,12 @@ class IngestionSettings(BaseSettings):
     # structure — typically better retrieval precision on documents
     # with heterogeneous sections.  See docs/DEPLOYMENT.md.
     semantic_chunking: bool = False
+    # GLiNER span-NER model used by the OPT-IN ``gliner`` /
+    # ``gliner+llm`` extractor modes (see
+    # ``src/graph/index.py:build_kg_extractor``).  The ``gliner`` extra
+    # must be installed for those modes; the default extraction path
+    # (``lightrag``) never touches this.
+    gliner_model: str = "urchade/gliner_multi-v2.1"
 
 
 class WikibaseSettings(BaseSettings):
@@ -308,6 +314,12 @@ class AgentSettings(BaseSettings):
     er_enabled: bool = True
     # Pairs per LLM-judge call when ER routes borderline candidates.
     er_judge_batch_size: int = Field(default=10, ge=1, le=50)
+    # Persistent ER verdict cache: when on, borderline LLM-judge
+    # verdicts are stored in Neo4j (`:ERVerdict`, order-insensitive
+    # name/label key) so recurring pairs across re-ingests / hub-heavy
+    # docs skip the LLM.  OPTIONAL + FAIL-SAFE: any Neo4j error or a
+    # missing store falls back to pure LLM judging.
+    er_verdict_cache_enabled: bool = True
     # Process-wide concurrency cap for LLM calls (search-side).
     # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
     # graph_search's LLMSynonymRetriever, judge) share this gate.
@@ -345,6 +357,13 @@ class AgentSettings(BaseSettings):
     # `/api/v1/legacy/agent` only when this flag is true.  Default
     # off — production traffic should go through /agent or /selfrag.
     enable_legacy_agent: bool = False
+    # Canonical entity linking (Task 6): when enabled, ingest resolves
+    # each mention to an existing Wikibase QID via exact-alias →
+    # embedding-kNN → optional LLM verify before deciding to mint a new
+    # item (see `src/graph/canonical_linker.py`).  Default OFF — the
+    # linker + alias storage ship as building blocks and are NOT yet
+    # wired into the ingest activity.
+    canonical_linker_enabled: bool = False
 
 
 class MetricsSettings(BaseSettings):

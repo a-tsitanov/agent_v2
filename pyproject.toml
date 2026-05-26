@@ -65,6 +65,11 @@ dependencies = [
 # rule-based normalisation when this isn't installed.
 postal = ["postal>=1.1,<2"]
 
+# GLiNER span-NER model + deps — heavy (transformers/torch). Kept
+# optional; only needed for the opt-in ``gliner`` / ``gliner+llm``
+# extractor modes. The default ``lightrag`` path never imports it.
+gliner = ["gliner>=0.2.13"]
+
 dev = [
     "pytest>=8,<10",
     "pytest-asyncio>=0.24,<2",

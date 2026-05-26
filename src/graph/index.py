@@ -54,7 +54,7 @@ def _parse_triplets_strip_thinking(response: str, **kwargs):
 KGExtractor = TransformComponent
 
 
-ExtractorMode = Literal["lightrag", "simple", "schema"]
+ExtractorMode = Literal["lightrag", "simple", "schema", "gliner", "gliner+llm"]
 
 
 class NoOpKGExtractor(TransformComponent):
@@ -142,6 +142,27 @@ def build_kg_extractor(
             num_workers=num_workers,
             gleaning_passes=gleaning_passes,
         )
+    if mode == "gliner":
+        from src.config import settings
+        from src.graph.gliner_extract import GLiNERExtractor
+
+        return GLiNERExtractor(model_name=settings.ingestion.gliner_model)
+    if mode == "gliner+llm":
+        # Placeholder: LLM relation/description enrichment is TODO. For now
+        # this aliases plain "gliner" (span detection only) so the pipeline
+        # can A/B GLiNER without a code switch; compose with LightRAG in the
+        # ingest activity until a relations-only LightRAG mode lands.
+        from loguru import logger
+
+        from src.config import settings
+        from src.graph.gliner_extract import GLiNERExtractor
+
+        logger.warning(
+            "build_kg_extractor mode='gliner+llm' currently aliases plain "
+            "'gliner' (span detection only); no LLM relation/description "
+            "enrichment yet — relations will be empty."
+        )
+        return GLiNERExtractor(model_name=settings.ingestion.gliner_model)
     if mode == "schema":
         return SchemaLLMPathExtractor(
             llm=llm,

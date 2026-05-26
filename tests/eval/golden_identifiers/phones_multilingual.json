@@ -1,0 +1,6 @@
+{
+  "name": "phones_multilingual",
+  "description": "RU national-format + UK international phone in one English document.",
+  "text": "International inquiries can be directed to +7-495-123-4567 or via the company's London representative office at +44 20 7946 0958.",
+  "expected": { "PhoneNumber": ["+74951234567", "+442079460958"] }
+}

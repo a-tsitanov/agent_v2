@@ -1,0 +1,6 @@
+{
+  "name": "kpp_iban_card",
+  "description": "KPP, IBAN (mod-97) and a Luhn-valid card number.",
+  "text": "КПП 770801001. IBAN: DE89370400440532013000. Карта 4111 1111 1111 1111.",
+  "expected": { "KPP": ["770801001"], "IBAN": ["DE89370400440532013000"], "CreditCard": ["4111111111111111"] }
+}

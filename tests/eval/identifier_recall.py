@@ -54,6 +54,10 @@ RECALL_THRESHOLDS: dict[str, float] = {
     "ContractNumber": 0.85,
     "Amount": 0.85,
     "PostalAddress": 0.75,
+    "BankAccount": 0.95,
+    "KPP": 0.95,
+    "IBAN": 0.95,
+    "CreditCard": 0.95,
 }
 PRECISION_THRESHOLD: float = 0.90
 

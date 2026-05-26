@@ -137,7 +137,12 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
                 language="Russian",
                 judge_batch=settings.agent.er_judge_batch_size,
                 name_token_min_overlap=0.1,
+                verdict_cache_enabled=settings.agent.er_verdict_cache_enabled,
             ),
+            # Reuse the Neo4j handle as the persistent verdict-cache
+            # store (it exposes `structured_query`).  Cache stays
+            # inactive when `er_verdict_cache_enabled` is off.
+            er_store=graph_store,
         )
         activity.heartbeat({
             "stage": "resolved",
