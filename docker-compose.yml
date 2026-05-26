@@ -72,7 +72,15 @@ services:
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-changeme}
       NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
-      NEO4J_PLUGINS: '["apoc"]'
+      # graph-data-science (GDS) added for community detection (Plan #2 R6:
+      # CommunityBuildWorkflow runs gds.leiden). Leiden ships in the open
+      # GDS library, so Community GDS on Neo4j Enterprise is sufficient.
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+      # GDS + APOC procedures must be allow-listed to be callable.
+      NEO4J_dbms_security_procedures_unrestricted: "gds.*,apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "gds.*,apoc.*"
+      # Leiden on a large KG is memory-hungry; bump heap/pagecache if
+      # CommunityBuildWorkflow OOMs on big graphs.
       NEO4J_server_memory_heap_initial__size: "512m"
       NEO4J_server_memory_heap_max__size: "1G"
       NEO4J_server_memory_pagecache_size: "512m"
