@@ -66,9 +66,9 @@ class GLiNERExtractor(TransformComponent):
     ) -> None:
         types = entity_types or _default_entity_types()
         if model is None and model_name is not None:  # pragma: no cover
-            from gliner import GLiNER
+            from src.graph.gliner_extract import _load_gliner
 
-            model = GLiNER.from_pretrained(model_name)
+            model = _load_gliner(model_name)
         super().__init__(model=model, entity_types=types, threshold=threshold)
 
     # ── TransformComponent contract ─────────────────────────────────
@@ -110,6 +110,32 @@ class GLiNERExtractor(TransformComponent):
         return self.__call__(nodes, **kwargs)
 
 
+def _load_gliner(model_name: str):  # pragma: no cover
+    """Load a real GLiNER model, honouring the offline HF cache.
+
+    ``configure_hf()`` runs first (sets HF cache dir / offline env vars
+    BEFORE gliner imports transformers + loads weights).  When
+    ``settings.hf.offline`` we also pass ``local_files_only=True`` to
+    ``from_pretrained`` as belt-and-suspenders; if a given gliner build
+    rejects that kwarg we fall back to a plain call (the env var still
+    forces offline).
+    """
+    from src.config import settings
+    from src.retrieval.hf_offline import configure_hf
+
+    configure_hf()
+    from gliner import GLiNER
+
+    if settings.hf.offline:
+        try:
+            return GLiNER.from_pretrained(model_name, local_files_only=True)
+        except TypeError:
+            # Older gliner builds without the kwarg — env var still
+            # forces offline.
+            return GLiNER.from_pretrained(model_name)
+    return GLiNER.from_pretrained(model_name)
+
+
 def gliner_ner_callable(model_name: str | None = None):  # pragma: no cover
     """Build a plain ``(text, types) -> list[(name, label)]`` callable
     backed by a real GLiNER model.
@@ -120,9 +146,7 @@ def gliner_ner_callable(model_name: str | None = None):  # pragma: no cover
     from src.config import settings
 
     name = model_name or settings.ingestion.gliner_model
-    from gliner import GLiNER
-
-    model = GLiNER.from_pretrained(name)
+    model = _load_gliner(name)
 
     def _run(text: str, types: list[str]):
         spans = model.predict_entities(text, types, threshold=0.5)
@@ -131,4 +155,4 @@ def gliner_ner_callable(model_name: str | None = None):  # pragma: no cover
     return _run
 
 
-__all__ = ["GLiNERExtractor", "gliner_ner_callable"]
+__all__ = ["GLiNERExtractor", "_load_gliner", "gliner_ner_callable"]
