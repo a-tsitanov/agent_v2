@@ -31,6 +31,26 @@ def test_settings_defaults_load() -> None:
     assert settings.agent.max_rounds >= 1
 
 
+def test_merge_queue_defaults() -> None:
+    """Dedicated merge queue (decouples GraphBuildWorkflow's merge stage
+    from a burst of extract_kg on kb-ingest-llm)."""
+    from src.config import TemporalSettings
+
+    s = TemporalSettings()
+    assert s.merge_task_queue == "kb-ingest-merge"
+    assert s.merge_activity_concurrency == 1
+
+
+def test_merge_queue_env_override(monkeypatch) -> None:
+    from src.config import TemporalSettings
+
+    monkeypatch.setenv("TEMPORAL_MERGE_TASK_QUEUE", "custom-merge")
+    monkeypatch.setenv("TEMPORAL_MERGE_ACTIVITY_CONCURRENCY", "3")
+    fresh = TemporalSettings()
+    assert fresh.merge_task_queue == "custom-merge"
+    assert fresh.merge_activity_concurrency == 3
+
+
 def test_api_keys_parses_csv() -> None:
     from src.config import ApiSettings
 

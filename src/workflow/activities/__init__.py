@@ -1,12 +1,22 @@
 """Activity functions invoked by `DocumentIngestWorkflow`.
 
-Activities are split into two pools by GPU/LLM pressure:
+LLM-bound activities are split across TWO dedicated queues so a burst
+of extract_kg can't starve a document's merge (head-of-line blocking on
+a single FIFO queue with concurrency 1):
 
-* ``LLM_ACTIVITIES`` — talk to the project LLM (LightRAG extraction
-  and cross-chunk merge / ER).  Run on the dedicated
-  ``settings.temporal.llm_task_queue`` queue with concurrency
-  capped at ``settings.temporal.llm_activity_concurrency`` (default 1)
-  so simultaneous workflows can't dogpile the local GPU.
+* ``EXTRACT_ACTIVITIES`` — ``extract_kg`` only.  Runs on
+  ``settings.temporal.llm_task_queue`` (``kb-ingest-llm``), capped at
+  ``settings.temporal.llm_activity_concurrency`` (default 1).
+
+* ``MERGE_ACTIVITIES`` — ``merge_and_resolve`` + ``build_property_graph``
+  (the GraphBuildWorkflow stage).  Runs on its OWN
+  ``settings.temporal.merge_task_queue`` (``kb-ingest-merge``), capped at
+  ``settings.temporal.merge_activity_concurrency`` (default 1).  Giving
+  merge its own lane lets it interleave with extract instead of queueing
+  behind a flood of extracts → up to ~2 concurrent LLM tasks in flight.
+
+* ``LLM_ACTIVITIES`` — the union of the two LLM lanes; kept as an alias
+  for tests + small single-pool deployments.
 
 * ``MAIN_ACTIVITIES`` — IO-bound or embedding-only.  Run on the main
   ``settings.temporal.task_queue`` queue with normal concurrency.
@@ -27,16 +37,24 @@ from src.workflow.activities.parse_and_chunk import parse_and_chunk
 from src.workflow.activities.push_wikibase import push_wikibase
 from src.workflow.activities.synthesize_answer import synthesize_answer
 
-LLM_ACTIVITIES = [
+# extract_kg lives alone on kb-ingest-llm so its burst can't push a
+# document's merge to the back of the queue.
+EXTRACT_ACTIVITIES = [
     extract_kg,
+]
+
+# merge_and_resolve + build_property_graph are the GraphBuildWorkflow
+# stage; they run together on kb-ingest-merge.  build_property_graph is
+# ALSO registered in MAIN_ACTIVITIES (Neo4j-write, not LLM-bound) so a
+# single-pool deployment can still claim it locally.
+MERGE_ACTIVITIES = [
     merge_and_resolve,
-    # build_property_graph is registered on BOTH queues so the
-    # GraphBuildWorkflow child (running on kb-ingest-llm) can claim it
-    # locally without a cross-queue dispatch override.  The Neo4j-write
-    # itself isn't LLM-bound, so the LLM concurrency cap doesn't
-    # starve it under normal load.
     build_property_graph,
 ]
+
+# Union alias — kept for tests + small single-pool deployments that host
+# every LLM activity on one worker.
+LLM_ACTIVITIES = EXTRACT_ACTIVITIES + MERGE_ACTIVITIES
 
 MAIN_ACTIVITIES = [
     fetch_source,
@@ -64,8 +82,10 @@ ALL_ACTIVITIES = MAIN_ACTIVITIES + LLM_ACTIVITIES + SEARCH_ACTIVITIES
 
 __all__ = [
     "ALL_ACTIVITIES",
+    "EXTRACT_ACTIVITIES",
     "LLM_ACTIVITIES",
     "MAIN_ACTIVITIES",
+    "MERGE_ACTIVITIES",
     "SEARCH_ACTIVITIES",
     "build_property_graph",
     "coverage_check",

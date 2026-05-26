@@ -4,7 +4,7 @@ Run with::
 
     uv run python -m src.workflow.worker
 
-Starts two worker pools in the same process against the same
+Starts several worker pools in the same process against the same
 Temporal client:
 
 * **main** — polls ``settings.temporal.task_queue`` with normal
@@ -13,13 +13,21 @@ Temporal client:
   inject_canonical, build_property_graph, finalize, mark_failed).
 
 * **llm**  — polls ``settings.temporal.llm_task_queue`` with
-  ``llm_activity_concurrency`` (default 1) so the GPU isn't asked
-  to serve more than one extract_kg / merge_and_resolve at a time.
+  ``llm_activity_concurrency`` (default 1).  Hosts ONLY ``extract_kg``
+  (``EXTRACT_ACTIVITIES``) so a burst of extracts has its own lane.
 
-For a multi-GPU deployment, point ``TEMPORAL_LLM_ACTIVITY_CONCURRENCY``
-at the right number; for a multi-machine deployment, run two
-processes — one with `MAIN_ACTIVITIES` only, one with
-`LLM_ACTIVITIES` on the GPU box.
+* **merge** — polls ``settings.temporal.merge_task_queue`` with
+  ``merge_activity_concurrency`` (default 1).  Hosts
+  ``GraphBuildWorkflow`` + ``MERGE_ACTIVITIES`` (merge_and_resolve +
+  build_property_graph).  A separate lane from extract so a flood of
+  extract_kg can no longer starve a document's merge (head-of-line
+  blocking) — up to ~2 concurrent LLM tasks in flight.
+
+For a multi-GPU deployment, point the per-queue
+``TEMPORAL_*_ACTIVITY_CONCURRENCY`` vars at the right numbers; for a
+multi-machine deployment, run separate processes — one with
+`MAIN_ACTIVITIES`, and the LLM lanes (`EXTRACT_ACTIVITIES` /
+`MERGE_ACTIVITIES`) on the GPU box.
 """
 
 from __future__ import annotations
@@ -34,8 +42,9 @@ from temporalio.worker import Worker
 
 from src.config import settings
 from src.workflow.activities import (
-    LLM_ACTIVITIES,
+    EXTRACT_ACTIVITIES,
     MAIN_ACTIVITIES,
+    MERGE_ACTIVITIES,
     SEARCH_ACTIVITIES,
     synthesize_answer,
 )
@@ -91,12 +100,15 @@ async def _run() -> None:
     )
     logger.info(
         "temporal worker  target={t}  main_queue={mq}  main_concurrency={mc}  "
-        "llm_queue={lq}  llm_concurrency={lc}",
+        "llm_queue={lq}  llm_concurrency={lc}  "
+        "merge_queue={mgq}  merge_concurrency={mgc}",
         t=settings.temporal.target,
         mq=settings.temporal.task_queue,
         mc=settings.temporal.activity_concurrency,
         lq=settings.temporal.llm_task_queue,
         lc=settings.temporal.llm_activity_concurrency,
+        mgq=settings.temporal.merge_task_queue,
+        mgc=settings.temporal.merge_activity_concurrency,
     )
 
     main_worker = Worker(
@@ -106,16 +118,28 @@ async def _run() -> None:
         activities=MAIN_ACTIVITIES,
         max_concurrent_activities=settings.temporal.activity_concurrency,
     )
-    # GraphBuildWorkflow runs on the LLM queue alongside merge_and_resolve
-    # + build_property_graph activities so the GPU-cap (concurrency=1)
-    # serialises the heavy work — child workflow dispatch itself is
-    # lightweight, the activities inside are the real LLM load.
+    # extract_kg gets its OWN lane (kb-ingest-llm).  GraphBuildWorkflow
+    # and its merge activities moved OFF this queue (see merge_worker)
+    # so a burst of extracts no longer parks behind the queue ahead of a
+    # document's merge.  Concurrency-1 still serialises extract on the GPU.
     llm_worker = Worker(
         client,
         task_queue=settings.temporal.llm_task_queue,
-        workflows=[GraphBuildWorkflow],
-        activities=LLM_ACTIVITIES,
+        activities=EXTRACT_ACTIVITIES,
         max_concurrent_activities=settings.temporal.llm_activity_concurrency,
+    )
+    # Merge lane (kb-ingest-merge): hosts GraphBuildWorkflow + its
+    # merge_and_resolve / build_property_graph activities on a SEPARATE
+    # queue + concurrency cap so merge interleaves with extract instead
+    # of queueing behind a flood of extract_kg (head-of-line blocking).
+    # With both lanes at concurrency 1 that's up to ~2 LLM tasks in
+    # flight — the GPU/proxy is sized for that.
+    merge_worker = Worker(
+        client,
+        task_queue=settings.temporal.merge_task_queue,
+        workflows=[GraphBuildWorkflow],
+        activities=MERGE_ACTIVITIES,
+        max_concurrent_activities=settings.temporal.merge_activity_concurrency,
     )
     # Search workflows live on their own queue so concurrent search
     # sessions don't fight ingest for GPU budget.  Cap independently
@@ -188,8 +212,8 @@ async def _run() -> None:
     )
 
     await asyncio.gather(
-        main_worker.run(), llm_worker.run(), search_worker.run(),
-        large_worker.run(), graph_build_worker.run(),
+        main_worker.run(), llm_worker.run(), merge_worker.run(),
+        search_worker.run(), large_worker.run(), graph_build_worker.run(),
     )
 
 

@@ -18,9 +18,14 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from src.config import settings
-from src.workflow.activities import LLM_ACTIVITIES, MAIN_ACTIVITIES
+from src.workflow.activities import (
+    EXTRACT_ACTIVITIES,
+    MAIN_ACTIVITIES,
+    MERGE_ACTIVITIES,
+)
 from src.workflow.contracts import IngestParams
 from src.workflow.document_ingest import DocumentIngestWorkflow
+from src.workflow.graph_build import GraphBuildWorkflow
 
 
 def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -66,8 +71,12 @@ async def test_full_pipeline_happy_path(monkeypatch):
     )
     queue = f"kb-ingest-it-{doc_id}"
     llm_queue = f"{queue}-llm"
+    merge_queue = f"{queue}-merge"
     monkeypatch.setattr(
         settings.temporal, "llm_task_queue", llm_queue, raising=False,
+    )
+    monkeypatch.setattr(
+        settings.temporal, "merge_task_queue", merge_queue, raising=False,
     )
     main_worker = Worker(
         client, task_queue=queue,
@@ -75,12 +84,20 @@ async def test_full_pipeline_happy_path(monkeypatch):
         activities=MAIN_ACTIVITIES,
         max_concurrent_activities=2,
     )
+    # extract lane
     llm_worker = Worker(
         client, task_queue=llm_queue,
-        activities=LLM_ACTIVITIES,
+        activities=EXTRACT_ACTIVITIES,
         max_concurrent_activities=1,
     )
-    async with main_worker, llm_worker:
+    # merge lane: hosts the GraphBuildWorkflow child + its activities
+    merge_worker = Worker(
+        client, task_queue=merge_queue,
+        workflows=[GraphBuildWorkflow],
+        activities=MERGE_ACTIVITIES,
+        max_concurrent_activities=1,
+    )
+    async with main_worker, llm_worker, merge_worker:
         params = IngestParams(doc_id=str(doc_id), path=str(fixture))
         result = await client.execute_workflow(
             DocumentIngestWorkflow.run, params,

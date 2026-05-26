@@ -7,10 +7,41 @@ own task queue so GPU / LLM pressure can be capped independently.
 | Queue (config field) | Default | Hosts | Concurrency cap |
 | --- | --- | --- | --- |
 | `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding activities | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
-| `llm_task_queue` | `kb-ingest-llm` | `GraphBuildWorkflow` + `extract_kg` / `merge_and_resolve` / `build_property_graph` | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (1) |
+| `llm_task_queue` | `kb-ingest-llm` | `extract_kg` ONLY (the extract lane) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (1) |
+| `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (the merge lane) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (1) |
 | `search_task_queue` | `kb-search-small` | `SearchWorkflow` (legacy ReAct) **and** `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` (R2 plan-execute) + their activities (plan / retrieve / coverage_check / **rerank_sources**) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
 | `large_task_queue` | `kb-search-large` | `synthesize_answer` ONLY (final large-tier synthesis, Search R5) — activities-only Worker, no workflows | `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) |
 | `graph_build_task_queue` | `kb-graph-build` | `CommunityBuildWorkflow` + `detect_communities_activity` / `summarize_community_activity` (OFFLINE GDS-Leiden community build, Search R6) | `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY` (2) |
+
+## Dedicated merge queue: `kb-ingest-merge`
+
+`extract_kg` and the merge stage (`GraphBuildWorkflow` →
+`merge_and_resolve` + `build_property_graph`) used to share the single
+`kb-ingest-llm` queue at concurrency 1. When many documents ingest at
+once, a burst of `extract_kg` tasks fills that FIFO queue and a
+document's merge — enqueued *behind* all the pending extracts — starves
+(head-of-line blocking). The vector half completes fast but the graph
+half waits out the whole extract backlog.
+
+**Fix**: merge gets its own queue + Worker pool (`kb-ingest-merge`). The
+parent `DocumentIngestWorkflow` starts the `GraphBuildWorkflow` child on
+`merge_task_queue`; its `merge_and_resolve` / `build_property_graph`
+activities carry NO `task_queue` override, so they inherit the child's
+queue and ride the merge lane automatically. `extract_kg` stays pinned
+to `kb-ingest-llm`. Now extract and merge poll independent queues and
+interleave instead of serialising through one FIFO.
+
+**Tradeoff — ~2 concurrent LLM tasks**: with both lanes capped at
+concurrency 1, up to two LLM tasks can be in flight at once (one extract
++ one merge). This was confirmed acceptable — the GPU/proxy is sized for
+~2 concurrent LLM calls. Operators on a tighter budget should keep both
+caps at 1 (the default); raising either multiplies the in-flight LLM
+load. `build_property_graph` remains registered in `MAIN_ACTIVITIES`
+too (Neo4j-write, not GPU-bound) so single-pool deployments still work.
+
+**Operator action on upgrade**: set `TEMPORAL_MERGE_TASK_QUEUE` /
+`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` if non-default, and restart the
+worker so it polls the new `kb-ingest-merge` queue.
 
 ## Offline graph-community build queue: `kb-graph-build` (Search R6)
 

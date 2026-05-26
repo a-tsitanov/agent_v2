@@ -215,6 +215,16 @@ class TemporalSettings(BaseSettings):
     llm_task_queue: str = "kb-ingest-llm"
     llm_activity_concurrency: int = 1
 
+    # Merge stage (GraphBuildWorkflow → merge_and_resolve +
+    # build_property_graph) runs on its OWN queue so it interleaves with
+    # extract_kg instead of queueing behind a burst of extracts on
+    # kb-ingest-llm (head-of-line blocking starved merge under load).
+    # Default 1 + llm_activity_concurrency=1 → up to ~2 concurrent LLM
+    # tasks in flight (one extract lane + one merge lane); the GPU/proxy
+    # is sized for that.  Raise on multi-GPU hosts.
+    merge_task_queue: str = "kb-ingest-merge"
+    merge_activity_concurrency: int = 1
+
     # Search-side activities (plan_subquestions, retrieve_subquestion,
     # coverage_check, rerank_sources, synthesize_answer) live on their own
     # task queue so operators can control GPU split between ingest and

@@ -73,11 +73,13 @@ class GraphBuildWorkflow:
         log.info("← merge_and_resolve  uri=%s", merged.merged_entities_uri)
 
         workflow.upsert_memo({"stage": "build_property_graph"})
-        # Activity defaults to the child workflow's task queue
-        # (kb-ingest-llm).  ``build_property_graph`` is registered on
-        # BOTH workers (see src/workflow/activities/__init__.py), so
-        # either pool can claim it — Neo4j-write activity isn't
-        # GPU-bound and won't be starved by the LLM concurrency cap.
+        # No task_queue override: this activity (and merge_and_resolve
+        # above) inherits the child workflow's queue, which the parent
+        # starts on ``merge_task_queue`` (kb-ingest-merge).  So the whole
+        # merge stage rides the merge lane, separate from extract_kg on
+        # kb-ingest-llm.  ``build_property_graph`` is also in
+        # MAIN_ACTIVITIES (Neo4j-write, not GPU-bound) for single-pool
+        # deployments.
         built: GraphBuilt = await workflow.execute_activity(
             "build_property_graph", merged,
             result_type=GraphBuilt,

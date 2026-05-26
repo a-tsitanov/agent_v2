@@ -8,6 +8,37 @@ with a section in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely (Added / Changed / Fixed / Notes per stage).
 
+## [Ingest Merge Queue] — 2026-05-26 — Dedicated kb-ingest-merge queue
+
+### Added
+- `TemporalSettings.merge_task_queue` (`kb-ingest-merge`) +
+  `merge_activity_concurrency` (1), env `TEMPORAL_MERGE_TASK_QUEUE` /
+  `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY`.
+- `merge_worker` Worker pool in `src/workflow/worker.py` polling
+  `merge_task_queue`, hosting `GraphBuildWorkflow` + `MERGE_ACTIVITIES`.
+- Activity-list split in `src/workflow/activities/__init__.py`:
+  `EXTRACT_ACTIVITIES = [extract_kg]`,
+  `MERGE_ACTIVITIES = [merge_and_resolve, build_property_graph]`.
+
+### Changed
+- `GraphBuildWorkflow` + its `merge_and_resolve` / `build_property_graph`
+  activities moved OFF `kb-ingest-llm` onto `kb-ingest-merge`: the
+  parent now starts the child workflow on `merge_task_queue`, and the
+  child's activities inherit that queue (no `task_queue` override). So a
+  flood of `extract_kg` no longer starves a document's merge
+  (head-of-line blocking on the single FIFO LLM queue).
+- `llm_worker` (`kb-ingest-llm`) now hosts ONLY `extract_kg` and no
+  longer registers `GraphBuildWorkflow`.
+- `LLM_ACTIVITIES` is now an alias for `EXTRACT_ACTIVITIES +
+  MERGE_ACTIVITIES` (kept for tests / single-pool deployments).
+
+### Notes
+- Up to ~2 concurrent LLM tasks now (one extract lane + one merge lane,
+  each capped at 1). Confirmed acceptable — GPU/proxy is sized for ~2.
+- Operator action on upgrade: restart the worker so it polls the new
+  `kb-ingest-merge` queue; set the `TEMPORAL_MERGE_*` env vars if
+  non-default.
+
 ## [Offline Models] — 2026-05-26 — Offline HF model loading + pre-download script
 
 ### Added

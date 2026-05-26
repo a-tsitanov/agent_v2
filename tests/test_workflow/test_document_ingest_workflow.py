@@ -133,16 +133,21 @@ HAPPY_ACTIVITIES = [
 
 @pytest.fixture(autouse=True)
 def _collapse_llm_queue(monkeypatch):
-    """Workflow routes extract_kg + merge_and_resolve to
-    `settings.temporal.llm_task_queue`.  In tests we collapse that
-    onto the per-test main queue so a single Worker can host every
-    stub.  Live two-queue routing is exercised by
-    `test_workflow_local.py`."""
+    """Workflow routes extract_kg to `settings.temporal.llm_task_queue`
+    and the GraphBuildWorkflow child (merge_and_resolve +
+    build_property_graph) to `settings.temporal.merge_task_queue`.  In
+    tests we collapse BOTH onto the per-test main queue so a single
+    Worker can host every stub.  Live multi-queue routing is exercised
+    by `test_workflow_local.py`."""
     # Each test sets its own queue name; we patch right before the
-    # Worker is created, but make sure the default is at least a
-    # known value so the workflow can resolve it deterministically.
+    # Worker is created, but make sure the defaults are at least a
+    # known value so the workflow can resolve them deterministically.
     monkeypatch.setattr(
         settings.temporal, "llm_task_queue", "wf-test-llm-fallback",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings.temporal, "merge_task_queue", "wf-test-merge-fallback",
         raising=False,
     )
     yield
@@ -153,6 +158,7 @@ async def test_happy_path_completed(monkeypatch):
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    monkeypatch.setattr(settings.temporal, "merge_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow, GraphBuildWorkflow],
@@ -182,6 +188,7 @@ async def test_graph_failure_downgrades_to_vector_only(monkeypatch):
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    monkeypatch.setattr(settings.temporal, "merge_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow, GraphBuildWorkflow], activities=activities,
@@ -215,6 +222,7 @@ async def test_graph_failure_via_child_downgrades(monkeypatch):
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    monkeypatch.setattr(settings.temporal, "merge_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow, GraphBuildWorkflow],
@@ -249,6 +257,7 @@ async def test_vector_failure_runs_mark_failed_and_raises(monkeypatch):
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    monkeypatch.setattr(settings.temporal, "merge_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow, GraphBuildWorkflow], activities=activities,
@@ -301,6 +310,7 @@ async def test_wikibase_status_propagates_to_result(monkeypatch):
     client = await _connect()
     queue = f"wf-test-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "llm_task_queue", queue, raising=False)
+    monkeypatch.setattr(settings.temporal, "merge_task_queue", queue, raising=False)
     async with Worker(
         client, task_queue=queue,
         workflows=[DocumentIngestWorkflow, GraphBuildWorkflow], activities=activities,

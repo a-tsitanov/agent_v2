@@ -174,7 +174,7 @@ class DocumentIngestWorkflow:
 
                 workflow.upsert_memo({"stage": "graph_build_child"})
                 log.info("→ GraphBuildWorkflow (child, queue=%s)",
-                         settings.temporal.llm_task_queue)
+                         settings.temporal.merge_task_queue)
                 # merge_and_resolve + build_property_graph now run as
                 # a Temporal child workflow so they get independent
                 # retry / visibility / scheduling.  Parent awaits — keeps
@@ -185,7 +185,7 @@ class DocumentIngestWorkflow:
                 gb_result = await workflow.execute_child_workflow(
                     GraphBuildWorkflow.run, kg,
                     id=f"graph-{params.doc_id}",
-                    task_queue=settings.temporal.llm_task_queue,
+                    task_queue=settings.temporal.merge_task_queue,
                     parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
                     id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
                 )
