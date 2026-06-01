@@ -5,16 +5,15 @@ graph_retriever / chunk_repository explicitly, returns a ``ToolResult``
 with both an aggregate-friendly ``sources`` list and a JSON-string
 ``observation`` that an LLM can read directly.
 
-Three consumers expected:
+Consumers:
 
-1. ``src/retrieval/react_agent.py`` — wraps each function in a
-   FunctionTool with a closure over ``accumulated_sources``.  Backward
-   compat — current ReAct loop unchanged.
-2. ``src/workflow/activities/tool_execution.py`` (Stage 1 of the
-   search-mcp plan) — dispatches ``ToolCallParams`` to the matching
-   function; sources are serialised back through the workflow boundary.
-3. ``src/mcp/tools_server.py`` (Stage 4) — exposes each function as
-   its own MCP tool for external clients (Claude Desktop / OpenWebUI).
+1. The plan-execute search activities (via ``src/workflow/_search_deps.py``)
+   call these functions to retrieve sources behind the orchestrator.
+2. ``src/mcp/tools_server.py`` — exposes each function as its own MCP
+   tool for external clients (Claude Desktop / OpenWebUI).
+
+(The legacy ReAct ``react_agent.py`` and ``tool_execution.py`` consumers
+were removed in the R7b search cutover.)
 
 Pure functions = no closure-captured mutable state.  LLM calls inside
 ``graph_search`` / ``find_*`` (via ``LLMSynonymRetriever``) hit the
@@ -32,8 +31,6 @@ from typing import Any, Protocol
 from llama_index.core.schema import NodeWithScore, TextNode
 from loguru import logger
 from pydantic import BaseModel
-
-from src.retrieval._common import deduplicate_nodes
 
 
 # ── protocols ────────────────────────────────────────────────────────
@@ -503,10 +500,3 @@ async def dispatch(
             accumulated_sources or [], **tool_kwargs,
         )
     raise ValueError(f"unknown tool: {tool_name}")
-
-
-def deduplicate_sources(
-    sources: list[NodeWithScore],
-) -> list[NodeWithScore]:
-    """Re-export from _common for callers that only import this module."""
-    return deduplicate_nodes(sources)
