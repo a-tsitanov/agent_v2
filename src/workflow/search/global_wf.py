@@ -53,6 +53,18 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.search._retry import FAST_RETRY
 
 
+def _coerce_global_params(
+    params: GlobalSearchParams | dict,
+) -> GlobalSearchParams:
+    """Belt-and-suspenders: a misconfigured data converter (or an older
+    temporalio whose default converter can't rebuild Pydantic v2 models)
+    can hand workflow args back as a plain ``dict`` instead of the typed
+    model.  Coerce so ``params.drift_mode`` never raises ``AttributeError``."""
+    if isinstance(params, dict):
+        return GlobalSearchParams(**params)
+    return params
+
+
 def build_map_specs(
     communities: list[CommunitySummaryRef], *, query: str,
 ) -> list[MapPartialParams]:
@@ -138,6 +150,9 @@ class GlobalSearchWorkflow:
     ) -> SearchOutcome:
         log = workflow.logger
         t_start = workflow.now()
+        params = _coerce_global_params(params)
+        if drift_seed and isinstance(drift_seed[0], dict):
+            drift_seed = [SerializedNode(**n) for n in drift_seed]
         mode: SearchMode = "drift" if params.drift_mode else "global"
         log.info(
             "global_search start  mode=%s  query=%s  max_comm=%d",

@@ -202,3 +202,15 @@ def test_build_reduce_call_pins_large_queue_and_tier():
     assert params.mode == "simple"
     assert params.query == "каковы темы?"
     assert [n.chunk_id for n in params.accumulated] == ["community:1"]
+
+
+def test_coerce_params_accepts_dict():
+    from src.workflow.search.global_wf import _coerce_global_params
+    from src.workflow.contracts import GlobalSearchParams
+
+    out = _coerce_global_params({"query": "q", "drift_mode": True})
+    assert isinstance(out, GlobalSearchParams)
+    assert out.drift_mode is True
+    # passthrough for already-typed input
+    typed = GlobalSearchParams(query="q")
+    assert _coerce_global_params(typed) is typed
