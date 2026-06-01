@@ -23,11 +23,10 @@ GraphStatus = Literal["completed", "vector_only"]
 WikibaseStatus = Literal["ok", "skipped", "failed"]
 # "local" is the R2 plan-execute path (SearchOrchestratorWorkflow);
 # "global"/"drift" are the R7a GraphRAG routing modes (GlobalSearchWorkflow).
-# "simple" is no longer a user-facing mode after the R7b legacy cutover,
-# but is retained as the SynthesizeParams branch selector the orchestrator
-# passes for plain (non-reflective) synthesis.  "agent"/"selfrag" are kept
-# only for backward-compatible synthesize_answer branch selection.
-SearchMode = Literal["simple", "agent", "selfrag", "local", "global", "drift"]
+# "simple" is not a user-facing mode — it's the SynthesizeParams branch
+# selector the orchestrator passes for plain synthesis.  (The legacy
+# "agent"/"selfrag" modes were removed with the R7b cutover.)
+SearchMode = Literal["simple", "local", "global", "drift"]
 
 
 class _Frozen(BaseModel):

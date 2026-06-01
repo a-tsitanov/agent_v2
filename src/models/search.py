@@ -1,13 +1,10 @@
 """Pydantic shapes for the search API.
 
-Three search endpoints share most of the response shape:
-  * ``SearchRequest`` — plain hybrid retrieve + synthesize.
-  * ``AgentSearchRequest`` — ReAct agent (R7).
-  * ``SelfRAGSearchRequest`` — ReAct + reflective synthesis (R8).
-
-Telemetry models (`AgenticRoundStat`, `AgenticStepStat`,
-`ReflectiveCitation`, `ReflectiveUncertainty`) attach to
-``SearchResponse`` when the endpoint produced them.
+The sole search surface after the R7b cutover is
+``/api/v1/search/{local,global,drift,auto}`` (``src/api/routes/search_v2.py``),
+which reuses ``SearchRequest`` / ``SearchResponse`` for every mode. The
+legacy ReAct/Self-RAG request shapes and their telemetry models were
+removed with those routes.
 """
 
 from __future__ import annotations
@@ -16,11 +13,12 @@ from pydantic import BaseModel, Field
 
 
 class SearchRequest(BaseModel):
-    """`/api/v1/search` — hybrid retrieve + single synthesize.
+    """Search request shared by all ``/api/v1/search/*`` endpoints.
 
-    No agentic flags here.  Agentic dispatch lives on dedicated
-    routes: `/api/v1/agent` for ReAct (R7) and `/api/v1/selfrag`
-    for ReAct + reflective synthesis (R8).
+    The mode is selected by the endpoint (local / global / drift / auto),
+    not by a field here — only ``query`` and ``top_k`` are consumed by the
+    plan-execute / GraphRAG flows; the remaining fields are retained for
+    backward-compatible clients.
     """
 
     query: str
@@ -38,27 +36,6 @@ class SearchRequest(BaseModel):
     include_references: bool = False
 
 
-class AgentSearchRequest(BaseModel):
-    """`/api/v1/agent` — ReAct agent with tool calls (R7)."""
-
-    query: str
-    department: str | None = None
-    top_k: int = 10
-    user_id: str | None = None
-    doc_type_filter: str | None = None
-    created_after: int | None = None
-    created_before: int | None = None
-    response_type: str = "Multiple Paragraphs"
-    include_references: bool = False
-    max_iterations: int = Field(8, ge=1, le=20)
-
-
-class SelfRAGSearchRequest(AgentSearchRequest):
-    """`/api/v1/selfrag` — ReAct + reflective synthesis (R8)."""
-
-    max_refinements: int = Field(3, ge=0, le=10)
-
-
 class SourceCitation(BaseModel):
     doc_id: str
     chunk_id: str
@@ -69,82 +46,6 @@ class SourceCitation(BaseModel):
     doc_type: str = ""
 
 
-class AgenticRoundStat(BaseModel):
-    """Per-round telemetry from the legacy judge-based loop.
-
-    ``sufficient=None`` when judge was skipped (early-exit on
-    no-new-info).  Kept for `agentic_search` (mounted as a baseline
-    on `/api/v1/legacy/agent` when AGENT_ENABLE_LEGACY_AGENT=true).
-    """
-
-    round: int
-    query: str
-    new_sources: int = 0
-    new_entities: int = 0
-    new_relations: int = 0
-    sufficient: bool | None = None
-    judge_reason: str = ""
-
-
-class AgenticStepStat(BaseModel):
-    """Per-step telemetry for ReAct agent (R7).
-
-    Replaces ``AgenticRoundStat`` for tool-call based loops —
-    one entry per LLM-decision step rather than per retrieval round.
-    """
-
-    step: int
-    tool_name: str
-    tool_args: dict
-    observation_summary: str = ""
-    reasoning_excerpt: str = ""
-
-
-class ReflectiveCitation(BaseModel):
-    """A claim in the answer with its supporting chunk_id."""
-
-    claim: str
-    chunk_id: str
-
-
-class ReflectiveUncertainty(BaseModel):
-    """A part of the answer the model could not support from context."""
-
-    topic: str
-    reason: str
-
-
-class ReflectiveAnswerDetail(BaseModel):
-    """Structured view of a reflective synthesis (R8)."""
-
-    citations: list[ReflectiveCitation] = Field(default_factory=list)
-    uncertainties: list[ReflectiveUncertainty] = Field(default_factory=list)
-    refinement_rounds: int = 0
-
-
-class JudgeOutput(BaseModel):
-    """Structured output of the LLM judge (R2).
-
-    Returned by `LLMJudge.via_structured` via
-    `llm.astructured_predict(JudgeOutput, prompt)`.
-    """
-
-    sufficient: bool = Field(
-        ..., description="True if the retrieved context is enough to answer."
-    )
-    follow_up_query: str = Field(
-        default="",
-        description=(
-            "Concise follow-up search query if context is insufficient; "
-            "empty string when sufficient."
-        ),
-    )
-    reason: str = Field(
-        default="",
-        description="One-sentence rationale.",
-    )
-
-
 class SearchResponse(BaseModel):
     query: str
     answer: str
@@ -152,27 +53,9 @@ class SearchResponse(BaseModel):
     sources: list[SourceCitation] = Field(default_factory=list)
     latency_ms: float = 0.0
 
-    # legacy judge-based loop telemetry — only populated by the
-    # `/api/v1/legacy/agent` route (gated by AGENT_ENABLE_LEGACY_AGENT).
-    agentic_rounds: int | None = None
-    follow_up_queries: list[str] | None = None
-    agentic_round_stats: list[AgenticRoundStat] | None = None
-
-    # ReAct (R7) and Self-RAG (R8) telemetry
-    agentic_step_stats: list[AgenticStepStat] | None = None
-    answer_detail: ReflectiveAnswerDetail | None = None
-
 
 __all__ = [
-    "AgenticRoundStat",
-    "AgenticStepStat",
-    "AgentSearchRequest",
-    "JudgeOutput",
-    "ReflectiveAnswerDetail",
-    "ReflectiveCitation",
-    "ReflectiveUncertainty",
     "SearchRequest",
     "SearchResponse",
-    "SelfRAGSearchRequest",
     "SourceCitation",
 ]

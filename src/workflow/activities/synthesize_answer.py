@@ -1,27 +1,21 @@
 """``synthesize_answer`` activity — final answer composition.
 
-Modes:
-* ``simple`` / ``agent`` — plain ResponseSynthesizer compaction over
-  accumulated context.  Prepends the Russian-output instruction we
-  use in route handlers so the answer language matches the graph
-  normalisation regardless of source-language chunks.
-* ``selfrag``            — Self-RAG-inspired reflective loop with
-  inline ``[NEED:...]`` markers driving additional retrieval rounds.
+Plain ResponseSynthesizer compaction over the accumulated context.
+Prepends the Russian-output instruction we use in route handlers so the
+answer language matches the graph normalisation regardless of source-
+language chunks.
+
+(The Self-RAG reflective branch was removed with the R7b cutover — no
+search path sets ``mode="selfrag"`` anymore.)
 """
 
 from __future__ import annotations
 
 from temporalio import activity
 
-from src.retrieval.reflective_synth import reflective_synthesize
-from src.workflow._search_deps import (
-    get_retriever, get_search_llm, get_synthesis_synthesizer, get_synthesizer,
-)
+from src.workflow._search_deps import get_synthesis_synthesizer, get_synthesizer
 from src.workflow._search_serde import serialized_to_node
-from src.workflow.contracts import (
-    ReflectiveCitationDict, ReflectiveUncertaintyDict,
-    SynthesizeParams, SynthesizeResult,
-)
+from src.workflow.contracts import SynthesizeParams, SynthesizeResult
 
 
 def _ru_query(query: str) -> str:
@@ -43,38 +37,9 @@ async def synthesize_answer(params: SynthesizeParams) -> SynthesizeResult:
     nodes = [serialized_to_node(n) for n in params.accumulated]
     query = _ru_query(params.query)
 
-    if params.mode == "selfrag":
-        llm = await get_search_llm()
-        retriever = await get_retriever()
-        activity.heartbeat({"stage": "reflective_synth"})
-        answer = await reflective_synthesize(
-            llm=llm, query=query,
-            context_nodes=nodes,
-            retriever=retriever,
-            max_refinements=params.max_refinements,
-        )
-        activity.logger.info(
-            "synthesize_answer (reflective)  rounds=%d  citations=%d  "
-            "uncertainties=%d",
-            answer.refinement_rounds, len(answer.citations),
-            len(answer.uncertainties),
-        )
-        return SynthesizeResult(
-            text=answer.text,
-            citations=[
-                ReflectiveCitationDict(claim=c.claim, chunk_id=c.chunk_id)
-                for c in answer.citations
-            ],
-            uncertainties=[
-                ReflectiveUncertaintyDict(topic=u.topic, reason=u.reason)
-                for u in answer.uncertainties
-            ],
-            refinement_rounds=answer.refinement_rounds,
-        )
-
-    # mode == "simple" or "agent" — plain ResponseSynthesizer.
-    # R2 plan-execute flow opts into the large synthesis tier; legacy
-    # paths keep the small search-tier synthesizer (use_synthesis_llm=False).
+    # R2 plan-execute flow opts into the large synthesis tier
+    # (build_synthesis_llm); other paths keep the small search-tier
+    # synthesizer (use_synthesis_llm=False).
     synthesizer = (
         await get_synthesis_synthesizer()
         if params.use_synthesis_llm
