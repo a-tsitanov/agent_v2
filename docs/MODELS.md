@@ -159,6 +159,35 @@ never clobber HuggingFace's own `HF_HOME` / `HF_HUB_OFFLINE` — the app
 derives and sets those itself).  An operator-set `HF_HOME` is left
 untouched, so manual overrides win.
 
+### Alternative: flat `--local-dir` (no blobs/symlinks)
+
+The HF cache stores files content-addressed: `models--org--name/blobs/<sha>`
+(real files) + `snapshots/<rev>/file → ../../blobs/<sha>` (symlinks). That
+layout is standard (independent of `huggingface-hub` / `hf-xet` version),
+but the **symlinks break** when the cache is copied to an air-gapped host
+(`scp` / `docker COPY` / `tar` without dereference). To avoid that, download
+into a **flat** directory of real files instead:
+
+```bash
+python -m scripts.download_models --local-dir /data/models
+# → /data/models/gliner_multi-v2.1/  and  /data/models/bge-reranker-v2-m3/
+```
+
+`--local-dir` uses `huggingface_hub.snapshot_download(local_dir=...)` (hub
+≥0.23 → real files, no blobs/symlinks; only a small `.cache/huggingface/`
+metadata subdir remains, safe to drop). Copy the folder anywhere, then point
+the model configs at the local paths and load offline:
+
+```env
+HF_OFFLINE=true
+HF_RERANK_MODEL=/data/models/bge-reranker-v2-m3
+INGESTION_GLINER_MODEL=/data/models/gliner_multi-v2.1
+```
+
+`SentenceTransformerRerank` (reranker) and `GLiNER.from_pretrained` both
+accept a local directory path; with `HF_OFFLINE=true`, `configure_hf()` sets
+`HF_HUB_OFFLINE=1` so the loaders never touch the network.
+
 ## Capability flags
 
 `src/retrieval/llm.py:build_llm` consults the env var

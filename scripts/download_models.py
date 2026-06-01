@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from huggingface_hub import snapshot_download  # noqa: E402
 from loguru import logger  # noqa: E402
 
 from src.config import settings  # noqa: E402
@@ -51,6 +52,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--cache-dir",
         default=None,
         help="HF cache dir override (default: settings.hf.cache_dir or HF default).",
+    )
+    parser.add_argument(
+        "--local-dir",
+        default=None,
+        help="Write FLAT real files here (no blobs/symlinks) instead of the HF "
+             "cache — portable for air-gapped copy.  Load with local_files_only.",
     )
     return parser
 
@@ -74,6 +81,18 @@ def _force_online(cache_dir: str | None) -> None:
     if cache_dir:
         for name in ("HF_HOME", "SENTENCE_TRANSFORMERS_HOME", "TRANSFORMERS_CACHE"):
             os.environ[name] = cache_dir
+
+
+def _snapshot(repo_id: str, local_dir: str) -> None:  # pragma: no cover
+    """Download a repo into a FLAT local dir — real files, no blobs/symlinks.
+
+    Unlike the HF cache (``models--org--name/blobs/<sha>`` + ``snapshots/``
+    symlinks), ``snapshot_download(local_dir=...)`` materialises real files
+    in the repo's structure (hub >=0.23).  Portable: copy/tar/docker-COPY
+    the folder to an air-gapped host without symlinks breaking."""
+    dest = Path(local_dir) / repo_id.split("/")[-1]
+    snapshot_download(repo_id=repo_id, local_dir=str(dest))
+    logger.info("download_models: {r} -> {d}", r=repo_id, d=dest)
 
 
 def _download_gliner(model_name: str) -> None:  # pragma: no cover
@@ -109,6 +128,20 @@ def main(argv: list[str] | None = None) -> int:
     want_reranker = args.models in ("all", "reranker")
 
     try:
+        if args.local_dir:
+            # FLAT mode: real files, no blobs/symlinks — portable for
+            # air-gapped copy.  Load by path with local_files_only=True.
+            if want_gliner:
+                _snapshot(gliner_model, args.local_dir)
+            if want_reranker:
+                _snapshot(rerank_model, args.local_dir)
+            logger.info(
+                "download_models: flat models in {d}. Point HF_RERANK_MODEL / "
+                "gliner_model at <dir>/<model-leaf>, load local_files_only=True.",
+                d=args.local_dir,
+            )
+            return 0
+
         if want_gliner:
             _download_gliner(gliner_model)
             logger.info("download_models: GLiNER ready ({m})", m=gliner_model)
