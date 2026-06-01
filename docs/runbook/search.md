@@ -1,5 +1,13 @@
 # Search subsystem runbook
 
+> **⚠️ УСТАРЕЛО (pre-R7b).** Этот runbook описывает удалённые endpoint'ы
+> `/api/v1/search`, `/agent`, `/selfrag` и legacy `SearchWorkflow`, которых
+> больше нет (R7b cutover). Текущая поверхность — `/api/v1/search/{local,
+> global,drift,auto}`. Практическая памятка по ней:
+> [`docs/runbook/search-usage.md`](search-usage.md); архитектура —
+> [`docs/SEARCH.md`](../SEARCH.md). Текст ниже сохранён для исторического
+> контекста.
+
 Self-contained гид по трём search-endpoint'ам kb-llamaindex: **`/api/v1/search`**, **`/api/v1/agent`**, **`/api/v1/selfrag`**. Linear reading guide — каждый раздел опирается на предыдущий. Со ссылками на конкретные файлы/строки и code-выдержками.
 
 > **⚠️ Обновлено (2026-05-22, `feature/search-mcp`):** Под капотом все три endpoint'а теперь стартуют **Temporal `SearchWorkflow`** на queue `kb-search-llm` и `await handle.result()` (durable + cancellable + queue-capped GPU защита). Атомарные tool-функции вытащены в [`src/retrieval/atomic_tools.py`](../../src/retrieval/atomic_tools.py) — реюзаются workflow-activity `tool_execution`, ReAct loop'ом (legacy `agentic_react_search`), и MCP-серверами. LLM теперь обёрнут в `BoundedLLM` semaphore (см. [§ 10](#10-configuration-knobs)). UI/контракты route handler'ов **не менялись** — `SearchResponse` тот же.  Подробности развёрнутые: [`mcp.md`](mcp.md).
