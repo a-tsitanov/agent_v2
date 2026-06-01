@@ -80,6 +80,18 @@ def build_synthesize_call(
     return settings.temporal.large_task_queue, params
 
 
+def cap_synth_sources(
+    sources: list[SerializedNode], top_n: int,
+) -> list[SerializedNode]:
+    """Bound the pool fed to synthesis.  Rerank already trims to top_n;
+    on the FAIL-OPEN fallback the workflow passes the raw merged pool —
+    cap it here too so a flaky reranker can never blow up the synthesis
+    prompt (and the 5-min start_to_close).  ``top_n<=0`` ⇒ no cap."""
+    if top_n <= 0:
+        return sources
+    return sources[:top_n]
+
+
 @workflow.defn
 class SearchOrchestratorWorkflow:
     """Plan-execute-synthesize search session (local mode)."""
@@ -257,8 +269,14 @@ class SearchOrchestratorWorkflow:
                     len(merged), len(synth_sources),
                 )
         except Exception as exc:
+            # Fail-open, but still BOUND the pool: an unranked merged pool
+            # can be large enough to blow past synthesize's start_to_close.
+            synth_sources = cap_synth_sources(
+                merged, settings.temporal.rerank_top_n,
+            )
             log.warning(
-                "orchestrator  rerank err=%s — fall back to merged pool", exc,
+                "orchestrator  rerank err=%s — fall back to capped merged "
+                "pool (%d sources)", exc, len(synth_sources),
             )
 
         # ── 4. synthesize once (large model, dedicated large queue) ──
