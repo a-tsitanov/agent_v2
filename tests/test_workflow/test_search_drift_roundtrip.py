@@ -17,7 +17,7 @@ import pytest
 from temporalio import activity
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from src.config import settings
 from src.workflow.contracts import (
@@ -70,6 +70,12 @@ async def test_global_drift_decodes_params_not_dict(monkeypatch):
             activities=[
                 _map_communities, _map_community_partial, _synthesize_answer,
             ],
+            # Bypass the workflow sandbox: we're testing arg DECODING through
+            # the pydantic converter, not sandbox safety.  The sandbox
+            # re-imports modules and is sensitive to global state left by
+            # earlier tests in a full-suite run — unsandboxed keeps this
+            # regression guard deterministic regardless of test order.
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             outcome = await env.client.execute_workflow(
                 GlobalSearchWorkflow.run,

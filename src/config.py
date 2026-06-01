@@ -24,8 +24,15 @@ LLMTier = Literal["small", "large"]
 # Logical workloads.  Each role maps to a tier via ``_DEFAULT_ROLE_TIERS``
 # (overridable per role through ``LITELLM_ROLE_TIERS``).
 LLMRole = Literal[
-    "extraction", "judge", "search",
-    "route", "plan", "retrieve", "distill", "coverage", "synthesis",
+    "extraction",
+    "judge",
+    "search",
+    "route",
+    "plan",
+    "retrieve",
+    "distill",
+    "coverage",
+    "synthesis",
 ]
 
 # Declarative role→tier map.  Everything runs on the small/local model
@@ -50,9 +57,7 @@ _DEFAULT_ROLE_TIERS: dict[str, LLMTier] = {
 class ApiSettings(BaseSettings):
     """FastAPI surface — host, port, auth keys, CORS, log level."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="API_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="API_", env_file=".env", extra="ignore")
 
     host: str = "0.0.0.0"
     port: int = 8000
@@ -73,9 +78,7 @@ class ApiSettings(BaseSettings):
 
 
 class MilvusSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="MILVUS_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="MILVUS_", env_file=".env", extra="ignore")
 
     host: str = "localhost"
     port: int = 19530
@@ -89,9 +92,7 @@ class MilvusSettings(BaseSettings):
 
 
 class Neo4jSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="NEO4J_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="NEO4J_", env_file=".env", extra="ignore")
 
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
@@ -101,9 +102,7 @@ class Neo4jSettings(BaseSettings):
 
 
 class PostgresSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="POSTGRES_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="POSTGRES_", env_file=".env", extra="ignore")
 
     host: str = "localhost"
     port: int = 5432
@@ -129,9 +128,7 @@ class LiteLLMSettings(BaseSettings):
     abstractions instead of direct LangChain.
     """
 
-    model_config = SettingsConfigDict(
-        env_prefix="LITELLM_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="LITELLM_", env_file=".env", extra="ignore")
 
     base_url: str = "http://localhost:4000"
     api_key: SecretStr = SecretStr("sk-litellm-stub")
@@ -143,14 +140,12 @@ class LiteLLMSettings(BaseSettings):
     #   * large — final user-facing synthesis only.  Default gpt-4o-mini.
     # Escalate a single role to large via
     # ``LITELLM_ROLE_TIERS='{"plan":"large"}'``.  See docs/MODELS.md.
-    model_small: str = "gemma4:e4b"
+    model_small: str = "gpt-4o-mini"
     model_large: str = "gpt-4o-mini"
     # Provided overrides are MERGED onto ``_DEFAULT_ROLE_TIERS`` so an
     # operator can escalate one role (e.g. ``{"plan": "large"}``) without
     # having to re-declare every other role's tier.
-    role_tiers: dict[str, LLMTier] = Field(
-        default_factory=lambda: dict(_DEFAULT_ROLE_TIERS)
-    )
+    role_tiers: dict[str, LLMTier] = Field(default_factory=lambda: dict(_DEFAULT_ROLE_TIERS))
     # DEPRECATED alias.  Kept (defaulting to "") only so the legacy
     # ``build_llm()`` no-role path and any unmigrated reader resolves to
     # a model.  Empty ⇒ callers fall back to ``model_small`` via
@@ -283,9 +278,7 @@ class MinioSettings(BaseSettings):
     by default — only the bucket is separate.
     """
 
-    model_config = SettingsConfigDict(
-        env_prefix="MINIO_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="MINIO_", env_file=".env", extra="ignore")
 
     endpoint: str = "localhost:9000"
     access_key: SecretStr = SecretStr("minioadmin")
@@ -299,9 +292,7 @@ class MinioSettings(BaseSettings):
 
 
 class IngestionSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="INGESTION_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="INGESTION_", env_file=".env", extra="ignore")
 
     chunk_size: int = 512
     chunk_overlap: int = 50
@@ -382,13 +373,16 @@ class HFSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", extra="ignore",
+        env_prefix="",
+        env_file=".env",
+        extra="ignore",
     )
 
     offline: bool = Field(default=False, validation_alias="HF_OFFLINE")
     cache_dir: str | None = Field(default=None, validation_alias="HF_CACHE_DIR")
     rerank_model: str = Field(
-        default="BAAI/bge-reranker-v2-m3", validation_alias="HF_RERANK_MODEL",
+        default="BAAI/bge-reranker-v2-m3",
+        validation_alias="HF_RERANK_MODEL",
     )
 
 
@@ -404,7 +398,9 @@ class WikibaseSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="WIKIBASE_", env_file=".env", extra="ignore",
+        env_prefix="WIKIBASE_",
+        env_file=".env",
+        extra="ignore",
     )
 
     enabled: bool = False
@@ -418,9 +414,7 @@ class WikibaseSettings(BaseSettings):
 class AgentSettings(BaseSettings):
     """Knobs for the agentic search endpoints (`/agent`, `/selfrag`)."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="AGENT_", env_file=".env", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="AGENT_", env_file=".env", extra="ignore")
 
     # Legacy judge-based loop (kept for R9 baseline eval).
     max_rounds: int = Field(default=3, ge=1, le=10)
@@ -524,7 +518,9 @@ class MetricsSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="METRICS_", env_file=".env", extra="ignore",
+        env_prefix="METRICS_",
+        env_file=".env",
+        extra="ignore",
     )
 
     enabled: bool = True
@@ -540,7 +536,9 @@ class AnalyticsSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="ANALYTICS_", env_file=".env", extra="ignore",
+        env_prefix="ANALYTICS_",
+        env_file=".env",
+        extra="ignore",
     )
 
     default_version_tag: str = "unspecified"
