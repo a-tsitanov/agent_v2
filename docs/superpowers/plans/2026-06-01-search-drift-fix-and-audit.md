@@ -680,6 +680,17 @@ git commit -m "feat(models): --local-dir flat HF download (no blobs/symlinks) fo
 
 ## Приложение: диагностика «synthesize_answer завис»
 
+> **ПОДТВЕРЖДЁННАЯ ПЕРВОПРИЧИНА (2026-06-02):** self-deadlock в
+> `src/workflow/_search_deps.py`. `get_synthesizer` и
+> `get_synthesis_synthesizer` захватывали нереентрантный модульный
+> `_lock` и внутри секции звали `get_search_llm`/`get_synthesis_llm`,
+> которые снова делают `async with _lock` → корутина ждёт лок, который сама
+> держит. На холодном воркере `synthesize_answer` (всегда
+> `use_synthesis_llm=True`) вис на этом → heartbeat `init` → нет прогресса →
+> `start_to_close` 5 мин → timeout. Исправлено: LLM резолвится ДО взятия
+> `_lock` (коммит `ca10cca`, тест `test_search_deps_lock.py`). Версии ниже
+> (контекст/таймауты/очередь) — вторичные факторы.
+
 Control-flow оркестратора (`orchestrator.py`): `plan → retrieve(children) → merge → coverage-gate →
 rerank_sources (FAIL-OPEN, очередь kb-search-small) → synthesize_answer (PINNED на kb-search-large)`.
 Ключевые факты:
