@@ -132,9 +132,12 @@ async def get_chunk_repository():
 
 
 async def get_synthesizer():
+    # Resolve the LLM BEFORE taking _lock: get_search_llm acquires _lock
+    # itself, and asyncio.Lock is non-reentrant — calling it while holding
+    # _lock would self-deadlock (the cold-worker synthesize hang).
+    llm = await get_search_llm()
     async with _lock:
         if _state["synthesizer"] is None:
-            llm = await get_search_llm()
             _state["synthesizer"] = await _build_synthesizer_once(llm)
     return _state["synthesizer"]
 
@@ -155,9 +158,11 @@ async def get_synthesis_llm() -> LLM:
 
 async def get_synthesis_synthesizer():
     """ResponseSynthesizer bound to the large tier (R2)."""
+    # Resolve the LLM BEFORE taking _lock (get_synthesis_llm acquires _lock
+    # itself; asyncio.Lock is non-reentrant — nesting self-deadlocks).
+    llm = await get_synthesis_llm()
     async with _lock:
         if _state["synthesis_synthesizer"] is None:
-            llm = await get_synthesis_llm()
             _state["synthesis_synthesizer"] = await _build_synthesizer_once(llm)
     return _state["synthesis_synthesizer"]
 
