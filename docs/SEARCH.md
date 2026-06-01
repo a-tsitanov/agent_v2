@@ -194,10 +194,12 @@ schedules synthesis on a dedicated large-tier queue.
   `src/retrieval/reranker.py` (`BAAI/bge-reranker-v2-m3`), process-cached
   via `_search_deps.get_reranker`; `top_n` from
   `TEMPORAL_RERANK_TOP_N` (default 5).
-- **FAIL-OPEN**: any rerank error → fall back to the unranked merged
-  pool (never block the answer). The displayed `SearchOutcome.sources`
-  stays the FULL merged pool (citations unchanged); only the synthesis
-  context is trimmed to the reranked top-N.
+- **FAIL-OPEN**: any rerank error → fall back to the merged pool CAPPED
+  to `rerank_top_n` via the pure `cap_synth_sources` helper (never block
+  the answer, but never feed synthesis an unbounded pool either — an
+  uncapped fallback could blow past `synthesize_answer`'s start_to_close
+  timeout). The displayed `SearchOutcome.sources` stays the FULL merged
+  pool (citations unchanged); only the synthesis context is trimmed.
 - **Large-tier queue**: synthesis is pinned to `kb-search-large` via
   `execute_activity("synthesize_answer", …, task_queue=large_task_queue)`
   with `use_synthesis_llm=True` (large `build_synthesis_llm`). A separate
@@ -209,6 +211,15 @@ schedules synthesis on a dedicated large-tier queue.
   (`use_synthesis_llm=False`, no rerank) belonged to the removed legacy
   `SearchWorkflow`; the orchestrator always synthesizes large-tier with
   rerank.
+- **Module status (post-cutover cleanup)**: `retrieval/reranker.py` is
+  ACTIVE (above). `retrieval/hybrid.py` is NOT wired — a BM25+dense
+  experiment candidate (benchmark via `tests/eval/` before integrating).
+  Removed as dead post-R7b: `retrieval/{agent,judge,react_agent,
+  query_engine,reflective_synth}.py`, the DI `ApiProvider`, and the
+  legacy request/telemetry models in `models/search.py`. The reflective
+  (Self-RAG) synthesis path was unreachable and removed; to bring it
+  back, re-add as an opt-in `OrchestratorParams.reflective` flag and
+  benchmark before defaulting on.
 
 ### Config knobs (R2)
 - `AGENT_MAX_SUBQUERIES` (`AgentSettings.max_subqueries`, default 5) —

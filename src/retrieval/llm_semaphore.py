@@ -19,10 +19,9 @@ Why composition not subclass:
     ``__getattr__`` fallback for methods we haven't explicitly bound.
 
 The wrapper is created once at DI bootstrap time (``src/di/providers.py``)
-and injected wherever an ``LLM`` is needed downstream.  All current
-LLM call-sites (``react_agent``, ``reflective_synth``, ``judge``,
-``GraphRetriever``'s ``LLMSynonymRetriever``) get rate-limited
-transparently.
+and injected wherever an ``LLM`` is needed downstream, so LLM call-sites
+(e.g. the search synthesizer and ``GraphRetriever``'s
+``LLMSynonymRetriever``) get rate-limited transparently.
 """
 
 from __future__ import annotations

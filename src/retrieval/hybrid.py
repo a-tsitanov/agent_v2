@@ -1,8 +1,8 @@
 """Hybrid retrieval — BM25 + dense vector + RRF fusion.
 
-The agent loop (``src/retrieval/agent.py``) doesn't change in
-Stage 5 — only the retriever passed in.  This isolates the upgrade
-to a single seam and makes A/B benchmarks straightforward
+NOT wired into the active search path — kept as an experiment candidate
+(the production retriever is dense-only via ``_search_deps``).  Isolated
+to a single seam so A/B benchmarks stay straightforward
 (``run_eval --retriever vector`` vs ``--retriever hybrid``).
 
 Reranker is exposed as a separate factory because:
