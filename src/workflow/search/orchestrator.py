@@ -94,6 +94,17 @@ def cap_synth_sources(
     return sources[:top_n]
 
 
+def distinct_doc_ids(sources: list[SerializedNode]) -> list[str]:
+    """Distinct, order-preserving doc_ids from a source pool's metadata.
+    Skips sources without a doc_id (e.g. community partials)."""
+    seen: list[str] = []
+    for s in sources:
+        d = s.metadata.get("doc_id")
+        if d and d not in seen:
+            seen.append(str(d))
+    return seen
+
+
 @workflow.defn
 class SearchOrchestratorWorkflow:
     """Plan-execute-synthesize search session (local mode)."""
@@ -310,6 +321,7 @@ class SearchOrchestratorWorkflow:
             mode="local",
             answer=synth.text,
             sources=merged,
+            documents=distinct_doc_ids(merged),
             step_stats=step_stats,
             citations=list(synth.citations),
             uncertainties=list(synth.uncertainties),
