@@ -168,7 +168,7 @@ async def map_community_partial(params: MapPartialParams) -> MapPartialResult:
         text = (getattr(resp, "text", None) or str(resp)).strip()
     except Exception as exc:
         activity.logger.warning(
-            "map_community_partial  cid=%d  llm err=%s",
+            "map_community_partial  cid=%s  llm err=%s",
             params.community_id, exc,
         )
         return MapPartialResult(community_id=params.community_id, score=0.0)

@@ -155,7 +155,7 @@ async def summarize_community_activity(
         rows = list(rows or [])
     except Exception as exc:  # noqa: BLE001
         activity.logger.warning(
-            "summarize_community_activity  cid=%d  context fetch err=%s",
+            "summarize_community_activity  cid=%s  context fetch err=%s",
             params.community_id, exc,
         )
         rows = [{"name": m, "description": "", "rel_types": []} for m in params.members]
@@ -168,7 +168,7 @@ async def summarize_community_activity(
         summary = (getattr(resp, "text", None) or str(resp)).strip()
     except Exception as exc:  # noqa: BLE001
         activity.logger.warning(
-            "summarize_community_activity  cid=%d  llm err=%s",
+            "summarize_community_activity  cid=%s  llm err=%s",
             params.community_id, exc,
         )
         return SummarizeCommunityResult(
@@ -195,12 +195,12 @@ async def summarize_community_activity(
         persisted = True
     except Exception as exc:  # noqa: BLE001
         activity.logger.warning(
-            "summarize_community_activity  cid=%d  persist err=%s",
+            "summarize_community_activity  cid=%s  persist err=%s",
             params.community_id, exc,
         )
 
     activity.logger.info(
-        "summarize_community_activity  cid=%d  chars=%d  persisted=%s",
+        "summarize_community_activity  cid=%s  chars=%d  persisted=%s",
         params.community_id, len(summary), persisted,
     )
     return SummarizeCommunityResult(
