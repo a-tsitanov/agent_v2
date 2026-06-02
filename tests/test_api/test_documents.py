@@ -62,3 +62,21 @@ async def test_download_unknown_doc_404():
 async def test_download_requires_api_key():
     resp = await _get(f"/api/v1/documents/{_DOC_ID}")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_download_sanitizes_filename_header():
+    storage = MagicMock()
+    # crafted filename with a quote and a space
+    storage.stat_object.return_value = ('e"vil report.pdf', 5, "application/pdf")
+    storage.stream_object.return_value = iter([b"hello"])
+    with patch("src.storage.postgres.AsyncPostgres.get",
+               new=AsyncMock(return_value=_row(f"s3://b/{_DOC_ID}/x.pdf"))), \
+         patch("src.api.routes.documents.build_minio_storage",
+               return_value=storage):
+        resp = await _get(f"/api/v1/documents/{_DOC_ID}", headers=_key())
+    assert resp.status_code == 200, resp.text
+    cd = resp.headers["content-disposition"]
+    # raw unescaped double-quote from the filename must NOT leak into the header
+    assert 'e"vil' not in cd
+    assert "filename*=UTF-8''" in cd

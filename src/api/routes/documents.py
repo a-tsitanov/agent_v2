@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -49,15 +50,31 @@ async def download_document(doc_id: str, pg: FromDishka[AsyncPostgres]):
         storage = build_minio_storage()
         filename, size, content_type = storage.stat_object(path)
     except S3Error as exc:
+        if getattr(exc, "code", "") == "NoSuchKey":
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                "document source not available") from exc
+        logger.exception("document download storage error doc_id={d}", d=doc_id)
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "document source not available") from exc
+            status.HTTP_503_SERVICE_UNAVAILABLE, "storage unavailable") from exc
     except Exception as exc:  # MinIO unreachable, transport errors, etc.
         logger.exception("document download storage error doc_id={d}", d=doc_id)
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "storage unavailable") from exc
 
+    # RFC 6266: sanitize the (client-supplied) filename — strip quotes/
+    # backslashes/CR/LF for the ASCII fallback and percent-encode the
+    # UTF-8 form so a crafted filename can't corrupt or inject headers.
+    ascii_name = (
+        filename.encode("ascii", "ignore").decode()
+        .replace('"', "").replace("\\", "").replace("\r", "").replace("\n", "")
+    ) or "document"
+    disposition = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
     headers = {
-        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Disposition": disposition,
         "Content-Length": str(size),
     }
     return StreamingResponse(
