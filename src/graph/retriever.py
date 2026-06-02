@@ -93,6 +93,18 @@ RETURN
 """
 
 
+_FIND_BY_NAME_CYPHER = """
+CALL db.index.fulltext.queryNodes('entity_name_fulltext', $lucene)
+YIELD node, score
+WHERE node:`__Entity__`
+RETURN node.name AS name,
+       [l IN labels(node) WHERE l <> '__Entity__' AND l <> '__Node__'] AS labels,
+       coalesce(node.description, '') AS description
+ORDER BY score DESC
+LIMIT $limit
+"""
+
+
 # Lucene special chars that must be backslash-escaped inside a query term.
 _LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/&|])')
 
@@ -133,6 +145,7 @@ class GraphRetriever:
         self._graph_store = getattr(
             pg_index, "property_graph_store", None,
         )
+        self._similarity_top_k = similarity_top_k
 
     async def aretrieve(self, query: str) -> RoundGraphData:
         nodes = await self._retriever.aretrieve(query)
@@ -222,6 +235,44 @@ class GraphRetriever:
                 return RoundGraphData()
 
         return self._map_walk_rows(rows)
+
+    async def afind_entities_by_name(
+        self, query: str, *, limit: int | None = None,
+    ) -> RoundGraphData:
+        """Full-text lookup of entities by (partial) name.
+
+        Complements ``aretrieve`` (exact-synonym + vector): catches
+        "Иванов" → "Иванов Иван Иванович" on large graphs via the
+        ``entity_name_fulltext`` index.  Best-effort — empty on a missing
+        store / missing index / any error / blank query (never raises)."""
+        if self._graph_store is None:
+            return RoundGraphData()
+        lucene = build_fulltext_query(query)
+        if not lucene:
+            return RoundGraphData()
+        cap = limit if limit is not None else self._similarity_top_k
+        try:
+            rows = await asyncio.to_thread(
+                self._graph_store.structured_query,
+                _FIND_BY_NAME_CYPHER,
+                {"lucene": lucene, "limit": int(cap)},
+            )
+        except Exception as exc:  # broad by design — index/store missing, fail-open
+            logger.warning("find_entities_by_name failed: {e}", e=exc)
+            return RoundGraphData()
+        out = RoundGraphData()
+        for row in rows or []:
+            name = (row or {}).get("name")
+            if not name:
+                continue
+            labels = list(row.get("labels") or [])
+            out.entities.append({
+                "entity_name": name,
+                "entity_type": labels[0] if labels else "",
+                "description": row.get("description") or "",
+            })
+        out.entities = _dedupe_entities(out.entities)
+        return out
 
     @staticmethod
     def _map_walk_rows(rows: list[dict] | None) -> RoundGraphData:
