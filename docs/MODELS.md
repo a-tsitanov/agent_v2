@@ -32,7 +32,7 @@ except `synthesis` which is `large`.**
 |---|---|---|
 | `extraction` | small | `extract_kg`, `parse_and_chunk` (translator), CLI ingest |
 | `judge` | small | `merge_and_resolve` (cross-chunk merge + ER pair-wise yes/no) |
-| `search` | small | `/api/v1/agent`, `/selfrag`, `/legacy/agent` reasoning (via DI) |
+| `search` | small | search-side LLM (graph synonym retrieval, MCP-2 tools); shared BoundedLLM semaphore |
 | `route` | small | query routing (search refactor) |
 | `plan` | small | multi-step planning (search refactor) |
 | `retrieve` | small | retrieval-side LLM calls (search refactor) |

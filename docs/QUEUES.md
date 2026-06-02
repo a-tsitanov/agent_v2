@@ -9,7 +9,7 @@ own task queue so GPU / LLM pressure can be capped independently.
 | `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding activities | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
 | `llm_task_queue` | `kb-ingest-llm` | `extract_kg` ONLY (the extract lane) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (1) |
 | `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (the merge lane) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (1) |
-| `search_task_queue` | `kb-search-small` | `SearchWorkflow` (legacy ReAct) **and** `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` (R2 plan-execute) + their activities (plan / retrieve / coverage_check / **rerank_sources**) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
+| `search_task_queue` | `kb-search-small` | `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` + `GlobalSearchWorkflow` + `DriftSearchWorkflow` + `AutoSearchWorkflow` + their activities (plan / retrieve / coverage_check / rerank_sources / route / map_communities / documents_for_communities) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
 | `large_task_queue` | `kb-search-large` | `synthesize_answer` ONLY (final large-tier synthesis, Search R5) — activities-only Worker, no workflows | `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) |
 | `graph_build_task_queue` | `kb-graph-build` | `CommunityBuildWorkflow` + `detect_communities_activity` / `summarize_community_activity` (OFFLINE GDS-Leiden community build, Search R6) | `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY` (2) |
 
@@ -109,9 +109,10 @@ synthesis LLM, so it doesn't warrant the low-concurrency queue.
 
 **Operator action on upgrade**: set `TEMPORAL_LARGE_TASK_QUEUE` /
 `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` if non-default, and restart the
-worker so it polls the new queue. The legacy ReAct `SearchWorkflow`
-synthesis path is UNCHANGED — it still synthesizes on the small tier on
-`kb-search-small` (`use_synthesis_llm=False`).
+worker so it polls the new queue. (The legacy ReAct `SearchWorkflow` that
+once synthesized on the small tier was removed in the R7b cutover; the
+plan-execute orchestrator always synthesizes large-tier on
+`kb-search-large`.)
 
 ## Search queue rename: `kb-search-llm` → `kb-search-small` (Search R2)
 
@@ -129,9 +130,12 @@ new queue name. In-flight workflows on the old queue drain on the old
 worker; new submissions go to `kb-search-small`.
 
 ### Activities registered on `kb-search-small`
-- Legacy (`SEARCH_ACTIVITIES`): `agent_reasoning_step`, `tool_execution`,
-  `distill_observation`, `coverage_check`, `synthesize_answer`.
-- R2 (`SEARCH_V2_ACTIVITIES`): `plan_subquestions`, `retrieve_subquestion`.
+- Shared (`SEARCH_ACTIVITIES`): `coverage_check`, `synthesize_answer`.
+  (The legacy ReAct activities `agent_reasoning_step`, `tool_execution`,
+  `distill_observation` were removed in the R7b cutover.)
+- Search-v2 (`SEARCH_V2_ACTIVITIES`): `plan_subquestions`,
+  `retrieve_subquestion`, `rerank_sources`, `route_query`,
+  `map_communities`, `map_community_partial`, `documents_for_communities`.
 
 The orchestrator reuses `synthesize_answer` for the final answer, so no
 synthesis activity is duplicated.

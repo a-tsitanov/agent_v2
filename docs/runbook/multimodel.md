@@ -45,7 +45,7 @@
 | `LITELLM_LLM_MODEL` | `gpt-4o-mini` | Глобальный fallback. Если per-role env не задана — используется эта. |
 | `LITELLM_EXTRACTION_MODEL` | `""` (fallback) | `extract_kg`, `parse_and_chunk` (translator), CLI `python -m src.ingestion.run` |
 | `LITELLM_JUDGE_MODEL` | `""` (fallback) | `merge_and_resolve` — ER LLM-judge + cross-chunk merge summary |
-| `LITELLM_SEARCH_MODEL` | `""` (fallback) | DI-injected LLM → `/api/v1/agent`, `/selfrag`, `/legacy/agent` |
+| `LITELLM_SEARCH_MODEL` | `""` (fallback) | search-side LLM (graph synonym retrieval, MCP-2 atomic tools) |
 
 Полная таблица в [`docs/MODELS.md` § "Per-role LLMs"](../MODELS.md#per-role-llms).
 

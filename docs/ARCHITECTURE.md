@@ -8,8 +8,8 @@ parallel search endpoints with increasing levels of agentic
 sophistication.
 
 This document is the **single map** of the system — every other
-doc (`DEPLOYMENT.md`, `QUERY.md`, `MODELS.md`) drills into a
-specific layer.
+doc (`DEPLOYMENT.md`, `SEARCH.md`, `runbook/search-usage.md`,
+`MODELS.md`) drills into a specific layer.
 
 > ⚠️ **Note (2026-05-19):** Section 3 «Ingestion data flow» below
 > describes the **taskiq-era** pipeline; the current implementation
@@ -220,58 +220,48 @@ Set `INGESTION_TRANSLATE_TO_RUSSIAN=false` to drop ~514 calls
 
 ---
 
-## 4. Query data flow (three endpoints)
+## 4. Query data flow (`/api/v1/search/{local,global,drift,auto}`)
 
-Detail in `docs/QUERY.md`.  Summary:
+Architecture detail in `docs/SEARCH.md`; usage + tuning in
+`docs/runbook/search-usage.md`.  All four modes share
+`SearchRequest`/`SearchResponse` and run as Temporal workflows.  The
+legacy ReAct/Self-RAG routes (`/search`, `/agent`, `/selfrag`,
+`/legacy/agent`) and the monolithic `SearchWorkflow` were REMOVED in the
+R7b cutover.
 
 ```
-                            ┌──────────────────┐
-POST /api/v1/search ──────► │ Dense retriever  │──► top-k chunks
-                            │ (Milvus, k=10)   │
-                            └────────┬─────────┘
-                                     ▼
-                            ┌──────────────────┐
-                            │ Synthesizer (LLM)│──► Russian answer
-                            │ (single call)    │
-                            └──────────────────┘
+POST /api/v1/search/local ──► SearchOrchestratorWorkflow (plan-execute):
+  plan_subquestions (small)
+    → fan-out N× SubQueryRetrievalWorkflow in parallel, each running
+        vector_search + graph_search + find_entity_by_name (+ auto-seeded
+        bounded graph_walk)
+    → merge/dedup by chunk_id
+    → coverage gate (one extra sub-question on a named gap)
+    → rerank (bge cross-encoder, top-N)
+    → synthesize_answer (large tier, single call)
+  ⇒ SearchResponse { answer, mode, sources[], documents[], latency_ms }
 
-POST /api/v1/agent ──► ReAct agent loop (max 8 iterations):
-  ┌────────────────────────────────────────────────────┐
-  │ LLM with function calls.  Tools:                   │
-  │ - vector_search(query, top_k)                      │
-  │ - graph_search(query)                              │
-  │ - find_entity_by_id(name, entity_type)             │
-  │ - find_neighbours(entity_name, hops)               │
-  │ - filter_by_metadata(doc_id, department, doc_type) │
-  │ - get_chunks_by_doc_id(doc_id, limit, offset)  NEW │
-  │ - read_full_document(doc_id, max_chars)        NEW │
-  │ - submit_answer(query_recap, gathered_source_ids)  │
-  │      ↓                                             │
-  │   plain ResponseSynthesizer over accumulated nodes │
-  └────────────────────────────────────────────────────┘
+POST /api/v1/search/global ──► GlobalSearchWorkflow: map-reduce over the
+  GDS-Leiden community summaries (small-tier MAP per community → large REDUCE).
 
-POST /api/v1/selfrag ──► same ReAct outer loop, but
-  submit_answer triggers `reflective_synthesize` instead:
-  - LLM drafts answer with inline markers:
-      [NEED:что не хватает]  → trigger extra retrieve + redraft
-      [SUPPORTED:chunk_id]   → claim grounded in this chunk
-      [UNCERTAIN:причина]    → known gap, no hallucination
-  - parser collects markers
-  - re-retrieve for NEED → next draft
-  - max_refinements=3
+POST /api/v1/search/drift  ──► local pass, then global expansion seeded with
+  the local sources (documents[] = union of both).
 
-POST /api/v1/legacy/agent ──► judge-based loop (gated):
-  Only mounted when AGENT_ENABLE_LEGACY_AGENT=true.  Kept as
-  a baseline for the answer-quality eval (R9).
+POST /api/v1/search/auto   ──► route_query (small) classifies → dispatches to
+  local / global / drift; fail-safe → local.
+
+POST /api/v1/admin/communities/rebuild ──► offline CommunityBuildWorkflow
+  (GDS Leiden + per-community summaries) on the kb-graph-build queue.
+
+GET  /api/v1/documents/{doc_id} ──► stream the original uploaded file from MinIO.
 ```
 
 ### Russian-only output
 
-Both the reflective synthesizer (`src/retrieval/reflective_synth.py:_SYSTEM_PROMPT`)
-and the ReAct agent (`src/retrieval/react_agent.py:_SYSTEM_PROMPT`)
-hard-code Russian output.  Plain `/search` wraps the user query
-with a Russian-output instruction before passing it to LlamaIndex's
-default synthesizer (`src/api/routes/search.py`).
+The `synthesize_answer` activity
+(`src/workflow/activities/synthesize_answer.py`) wraps the query with a
+Russian-output instruction before synthesis, so the answer language
+matches the graph normalisation regardless of source-language chunks.
 
 ---
 
@@ -281,10 +271,10 @@ default synthesizer (`src/api/routes/search.py`).
 |---|---|---|
 | **API** | `src/api/main.py`, `src/api/routes/*.py` | HTTP surface, auth via `X-API-Key`, request validation. Routes are thin — business logic lives in retrieval modules. |
 | **DI** | `src/di/providers.py` | Long-lived singletons. Two containers: API and worker. See section 6. |
-| **Ingestion** | `src/ingestion/{pipeline,tasks,identifier_transform,translate_transform,run}.py` | Parse → chunk → identifier-canon → translate-to-RU → vector index + KG. Async via taskiq. |
-| **Retrieval** | `src/retrieval/{vector_index,hybrid,query_engine,agent,react_agent,reflective_synth,judge,llm,_common}.py` | Plain / agentic / reflective search. Self-contained — no API dependencies. |
-| **Graph** | `src/graph/{schema,store,index,retriever,lightrag_extract,lightrag_parse,lightrag_prompts,merge}.py` | Universal entity / relation taxonomy, LightRAG-style extraction prompts + parser, cross-chunk merger, Neo4j wiring. |
-| **Storage** | `src/storage/{postgres,chunk_repository}.py` | Document-status table operations. Doc-id keyed access to chunks (Milvus) + source files (FS). |
+| **Ingestion** | `src/ingestion/{pipeline,identifier_transform,translate_transform,embeddings,run}.py` | Parse → chunk → identifier-canon → translate-to-RU → vector index + KG. Orchestrated by Temporal (`DocumentIngestWorkflow`). |
+| **Retrieval** | `src/retrieval/{vector_index,hybrid,atomic_tools,reranker,query_planner,llm,llm_semaphore,hf_offline,_common}.py` | Retrieval primitives (vector/graph atomic tools), bge reranker, query planner, LiteLLM tiers. Self-contained — no API dependencies. |
+| **Graph** | `src/graph/{schema,store,index,retriever,communities,entity_resolution,canonical_linker,lightrag_extract,lightrag_parse,lightrag_prompts,merge}.py` | Entity/relation taxonomy, LightRAG extraction + parser, cross-chunk merge, entity resolution, GDS-Leiden communities, Neo4j wiring. |
+| **Storage** | `src/storage/{postgres,chunk_repository,minio}.py` | Document-status table; doc-id keyed access to chunks (Milvus) + original files (MinIO). |
 | **Observability** | `src/observability/trace.py` | Per-request `Trace` bound via ContextVar. `record_event(...)` collects tool/llm/refinement events. |
 | **Models** | `src/models/search.py` | Pydantic shapes shared API ↔ services. |
 

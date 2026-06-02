@@ -232,31 +232,29 @@ uploads via the API, polls until done.
 ## 9. Smoke-test search
 
 ```bash
-# Plain hybrid retrieve + single synth
-curl -fsS -X POST http://localhost:8000/api/v1/search \
+# Local — plan-execute (the default mode)
+curl -fsS -X POST http://localhost:8000/api/v1/search/local \
   -H "X-API-Key: dev-local-key" \
   -H "Content-Type: application/json" \
-  -d '{"query":"какие риски развития рака кожи?"}' \
+  -d '{"query":"какие риски развития рака кожи?","top_k":10}' \
   | python3 -m json.tool
 
-# ReAct agent
-curl -fsS -X POST http://localhost:8000/api/v1/agent \
+# Auto — router picks local/global/drift
+curl -fsS -X POST http://localhost:8000/api/v1/search/auto \
   -H "X-API-Key: dev-local-key" \
   -H "Content-Type: application/json" \
-  -d '{"query":"какие риски развития рака кожи?"}' \
+  -d '{"query":"какие риски развития рака кожи?","top_k":10}' \
   | python3 -m json.tool
 
-# Reflective Self-RAG
-curl -fsS -X POST http://localhost:8000/api/v1/selfrag \
-  -H "X-API-Key: dev-local-key" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"какие риски развития рака кожи?"}' \
-  | python3 -m json.tool
+# Global/drift need community summaries first (offline):
+curl -fsS -X POST http://localhost:8000/api/v1/admin/communities/rebuild \
+  -H "X-API-Key: dev-local-key"
 ```
 
-Expected: Russian answer + `sources[].content` containing the
-original-language chunk text.  Latency: ~5-20 s on `/search`,
-~20-90 s on `/agent`, ~30-120 s on `/selfrag` (model-bound).
+Expected: Russian answer + `sources[].content` (original-language chunk
+text) + `documents[]` (download links to the source files used). Latency
+is model-bound (the large synthesis tier dominates). Endpoints + tuning:
+`docs/runbook/search-usage.md`.
 
 ---
 
@@ -377,7 +375,7 @@ Beyond local dev:
 | Need | Open this |
 |---|---|
 | Understand the whole picture | `docs/ARCHITECTURE.md` |
-| Trace one query end-to-end | `docs/QUERY.md` |
+| Trace one query end-to-end | `docs/SEARCH.md` (architecture) · `docs/runbook/search-usage.md` (usage) |
 | Swap the LLM / embedding model | `docs/MODELS.md` |
 | Diagnose KG extraction | `scripts/diag_kg.py`, `scripts/diag_kg_medical.py`, `scripts/diag_kg_lightrag.py` |
 | Inspect ingest pipeline state | `docker exec kb-llamaindex-postgres-1 psql -U postgres -d kb_llamaindex -c "SELECT id, status, error FROM documents ORDER BY created_at DESC LIMIT 10;"` |

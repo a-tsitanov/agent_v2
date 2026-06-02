@@ -3,8 +3,8 @@
 Краткий практический гид по текущей поверхности поиска (после R7b cutover):
 `POST /api/v1/search/{local,global,drift,auto}` + admin-триггер
 `POST /api/v1/admin/communities/rebuild`. Архитектурные детали — в
-[`docs/SEARCH.md`](../SEARCH.md). (Старый `docs/runbook/search.md` описывает
-удалённые `/search`,`/agent`,`/selfrag` — **устарел**, не использовать.)
+[`docs/SEARCH.md`](../SEARCH.md). (Легаси `/search`,`/agent`,`/selfrag`
+удалены в R7b cutover.)
 
 Все запросы: заголовок `X-API-Key`, тело `{"query": "...", "top_k": 10}`,
 ответ `{query, answer, mode, sources[], latency_ms}`.

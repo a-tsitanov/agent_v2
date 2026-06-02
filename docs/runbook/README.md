@@ -6,8 +6,8 @@ Operator-facing руководства по эксплуатации kb-llamaind
 
 | Runbook | Тема | Когда читать |
 |---|---|---|
-| [`mcp.md`](mcp.md) | Два MCP-сервера: MCP-1 (`kb_search` через Temporal SearchWorkflow) и MCP-2 (6 atomic retrieval tools прямо в процессе). Stdio + HTTP/SSE транспорты, auth, tuning, troubleshooting | Подключаешь OpenWebUI / Claude Desktop / Cursor / Continue; настраиваешь concurrency cap'ы для GPU-защиты |
-| [`search.md`](search.md) | Search-подсистема: `/search`, `/agent` (ReAct), `/selfrag` (reflective) + hybrid retriever + reranker + graph retriever + trace observability | Чтобы понять как отвечает API на user-query; tuning knobs для качества/latency; отладка когда `/selfrag` крутит лишние раунды или `/agent` зацикливается |
+| [`mcp.md`](mcp.md) | Два MCP-сервера: MCP-1 (`kb_search` через Temporal `SearchOrchestratorWorkflow`) и MCP-2 (atomic retrieval tools прямо в процессе). Stdio + HTTP/SSE транспорты, auth, tuning, troubleshooting | Подключаешь OpenWebUI / Claude Desktop / Cursor / Continue; настраиваешь concurrency cap'ы для GPU-защиты |
+| [`search-usage.md`](search-usage.md) | Search: `/api/v1/search/{local,global,drift,auto}` — когда какой режим, параметры/тюнинг, примеры, диагностика зависшего синтеза | Чтобы понять как отвечает API на user-query + tuning (архитектура — в [`../SEARCH.md`](../SEARCH.md)) |
 | [`multimodel.md`](multimodel.md) | Per-role LLM + GraphBuildWorkflow child + per-activity model в `ingest_metrics` | Перед первым сабмитом с разными моделями по ролям; при отладке `graph_status="vector_only"` |
 | [`analytics.md`](analytics.md) | Grafana dashboards + Prometheus + Postgres `ingest_metrics` + version-tag механика | Чтобы понять что показывает каждый дашборд + retention правила |
 | [`wikibase.md`](wikibase.md) | Самохостящийся Wikibase: bootstrap, push_wikibase activity, SPARQL/wdqs | Включение wikibase-фичи + смена `WIKIBASE_*` env |
@@ -19,7 +19,7 @@ Operator-facing руководства по эксплуатации kb-llamaind
 | [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | Top-level data flow + storage components + layer responsibilities |
 | [`../MODELS.md`](../MODELS.md) | Model selection guidance, capability flags, escalation path |
 | [`../DEPLOYMENT.md`](../DEPLOYMENT.md) | Deploy-сценарии |
-| [`../QUERY.md`](../QUERY.md) | Подробности retrieval / search endpoints |
+| [`../SEARCH.md`](../SEARCH.md) | Search-подсистема: архитектура R7b (`/search/{local,global,drift,auto}`), workflows, очереди |
 | [`../architecture.html`](../architecture.html) | Визуальная карта системы (открывается в браузере) |
 | [`../architecture.d2`](../architecture.d2) / [`../architecture.svg`](../architecture.svg) | D2-источник + рендер |
 
@@ -42,5 +42,5 @@ Operator-facing руководства по эксплуатации kb-llamaind
 | `feature/wikibase-population` | Wikibase push activity, base classes, identifier folding | [`wikibase.md`](wikibase.md) |
 | `feature/analytics-grafana` | Prometheus + Grafana + `ingest_metrics` + version_tag | [`analytics.md`](analytics.md) |
 | `feature/multimodel-and-child` | Per-role LLM (extraction/judge/search) + `GraphBuildWorkflow` child + per-activity model + LiteLLM model validator | [`multimodel.md`](multimodel.md) |
-| (doc sprint) | Глубокий разбор search-подсистемы (три endpoint'а, hybrid retriever, reranker, ReAct/Self-RAG loops, tools, prompts, trace events, tuning matrix, troubleshooting) | [`search.md`](search.md) |
+| `R7b cutover` | Legacy ReAct `/search`,`/agent`,`/selfrag` + `SearchWorkflow` УДАЛЕНЫ. Единственная поверхность — `/search/{local,global,drift,auto}` (plan-execute + GraphRAG global/drift/auto) | [`search-usage.md`](search-usage.md) · [`../SEARCH.md`](../SEARCH.md) |
 | `feature/search-mcp` | Search → Temporal `SearchWorkflow` (`kb-search-llm` queue, configurable cap). `atomic_tools.py` (7 pure functions) + `BoundedLLM` (process-wide GPU semaphore). Два MCP-сервера: MCP-1 `kb_search` через workflow + progress streaming, MCP-2 atomic tools прямо in-process | [`mcp.md`](mcp.md) |

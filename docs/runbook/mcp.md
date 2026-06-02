@@ -2,10 +2,19 @@
 
 Гид по двум MCP-серверам (Model Context Protocol) которые экспозируют kb-llamaindex как tool-source для внешних LLM-клиентов (OpenWebUI, Claude Desktop, Cursor, Continue, …).
 
+> **⚠️ ОБНОВЛЕНО (R7b cutover) — MCP-1 раздел частично устарел.** MCP-1
+> `kb_search` теперь submit'ит **`SearchOrchestratorWorkflow`** (plan-execute,
+> local mode) на очередь `kb-search-small`, а НЕ удалённый `SearchWorkflow`.
+> Сигнатура — фактически `kb_search(query)` (параметры `mode` /
+> `max_iterations` и режимы `simple`/`agent`/`selfrag` УДАЛЕНЫ; ReAct/Self-RAG
+> больше нет). Текущая модель поиска: [`search-usage.md`](search-usage.md) +
+> [`../SEARCH.md`](../SEARCH.md). Раздел MCP-2 (atomic tools) ниже актуален.
+> (Полная переработка MCP-1 прозы — TODO.)
+
 > **Цель архитектуры:** дать оператору два режима интеграции — "получить готовый ответ" (MCP-1) или "взять примитивы и собрать loop своим LLM" (MCP-2). Защита GPU реализована на двух уровнях: Temporal-queue для MCP-1, BoundedLLM-семафор для MCP-2.
 
 Связанные runbook'и:
-- [`search.md`](search.md) — детали ReAct loop'а, hybrid retriever'а, reflective synth'а
+- [`search-usage.md`](search-usage.md) — текущие режимы `/search/{local,global,drift,auto}`, параметры, тюнинг
 - [`multimodel.md`](multimodel.md) — откуда берётся search-role LLM
 - [`analytics.md`](analytics.md) — Grafana для search-workflow latency
 
@@ -15,7 +24,7 @@
 
 | Server | Tool surface | Транспорт | Идёт через | Кто типично подключается |
 |---|---|---|---|---|
-| **MCP-1** (`src/mcp/search_server.py`) | 1 tool: `kb_search(query, mode, max_iterations, max_refinements)` | stdio + HTTP/SSE | **Temporal SearchWorkflow** | OpenWebUI как готовый ассистент; non-LLM-developer clients |
+| **MCP-1** (`src/mcp/search_server.py`) | 1 tool: `kb_search(query)` | stdio + HTTP/SSE | **Temporal `SearchOrchestratorWorkflow`** (plan-execute, local) | OpenWebUI как готовый ассистент; non-LLM-developer clients |
 | **MCP-2** (`src/mcp/tools_server.py`) | 6 tools: `vector_search`, `graph_search`, `find_entity_by_id`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` | stdio + HTTP/SSE | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
 
 Оба сервера запускаются одной командой; параметр `--transport stdio|sse` переключает режим.
