@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import functools
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterator
 
 from loguru import logger
 from minio import Minio
@@ -89,6 +89,31 @@ class MinioStorage:
         local.parent.mkdir(parents=True, exist_ok=True)
         self._client.fget_object(bucket, key, str(local))
         return local
+
+    def stat_object(self, s3_uri: str) -> tuple[str, int, str]:
+        """Return (filename, size_bytes, content_type) for an s3:// object.
+
+        filename is the last path segment of the key.  Raises ``S3Error``
+        (NoSuchKey) when the object is missing — the caller maps that to 404."""
+        bucket, key = self.parse_s3_uri(s3_uri)
+        info = self._client.stat_object(bucket, key)
+        filename = key.rsplit("/", 1)[-1] or key
+        content_type = info.content_type or "application/octet-stream"
+        return filename, info.size, content_type
+
+    def stream_object(
+        self, s3_uri: str, *, chunk_size: int = 1 << 20,
+    ) -> Iterator[bytes]:
+        """Yield the object's bytes in chunks, releasing the HTTP
+        connection in a finally block (minio's get_object response must
+        be closed + released or the pool leaks)."""
+        bucket, key = self.parse_s3_uri(s3_uri)
+        resp = self._client.get_object(bucket, key)
+        try:
+            yield from resp.stream(chunk_size)
+        finally:
+            resp.close()
+            resp.release_conn()
 
     # ── parsing helpers ────────────────────────────────────────────
 
