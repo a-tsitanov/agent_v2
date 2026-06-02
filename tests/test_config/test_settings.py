@@ -142,3 +142,8 @@ def test_effective_base_prefers_deprecated_alias(monkeypatch):
 
     monkeypatch.setenv("LITELLM_LLM_MODEL", "legacy-model")
     assert LiteLLMSettings().effective_base == "legacy-model"
+
+
+def test_agent_graph_similarity_top_k_default():
+    from src.config import settings
+    assert settings.agent.graph_similarity_top_k == 20

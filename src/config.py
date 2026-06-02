@@ -472,6 +472,10 @@ class AgentSettings(BaseSettings):
     # (the tool clamps it to GRAPH_WALK_MAX_HOPS).
     graph_walk_enabled: bool = True
     graph_walk_hops: int = Field(default=2, ge=1, le=3)
+    # Graph retriever candidate count (VectorContextRetriever top_k). Raised
+    # from the LlamaIndex default so a named entity isn't ranked out of the
+    # result set on a large graph.
+    graph_similarity_top_k: int = Field(default=20, ge=1, le=100)
     # Canonical entity linking (Task 6): when enabled, ingest resolves
     # each mention to an existing Wikibase QID via exact-alias →
     # embedding-kNN → optional LLM verify before deciding to mint a new

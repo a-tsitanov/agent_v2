@@ -86,6 +86,10 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
         graph_store.upsert_relations(relations)
         activity.heartbeat({"stage": "relations_upserted", "count": len(relations)})
 
+    from src.graph.index import ensure_entity_fulltext_index
+    ensure_entity_fulltext_index(graph_store)
+    activity.heartbeat({"stage": "fulltext_index_ensured"})
+
     logger.info(
         "build_property_graph done  doc={d}  e={e}  r={r}",
         d=merged.kg.parsed.ctx.doc_id, e=len(entities), r=len(relations),
