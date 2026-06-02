@@ -147,7 +147,10 @@ class DocumentIngestWorkflow:
                 injected = await workflow.execute_activity(
                     "inject_canonical", parsed,
                     result_type=Injected,
-                    start_to_close_timeout=timedelta(minutes=10),
+                    # embedding kNN + optional LLM verify — give the LLM
+                    # path a 1h single-attempt ceiling (matches the other
+                    # LLM activities) so a slow proxy isn't killed early.
+                    start_to_close_timeout=timedelta(hours=1),
                     schedule_to_close_timeout=timedelta(hours=12),
                     retry_policy=_FAST_FOREVER,
                 )

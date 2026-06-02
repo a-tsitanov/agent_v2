@@ -18,3 +18,14 @@ FAST_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=30),
     maximum_attempts=3,
 )
+
+# Timeouts for activities that make an LLM call (planner, retrieve,
+# coverage, route, per-community MAP partial, community summary, final
+# synthesis).  A loaded local LLM / proxy can legitimately take many
+# minutes on a long generation; a tight start-to-close lets Temporal kill
+# a slow-but-healthy call and retry into the same slowness.  Floor the
+# single-attempt ceiling at 1h; schedule-to-close leaves room for the
+# 3 FAST_RETRY attempts.  Non-LLM activities (rerank cross-encoder, graph
+# reads, GDS) keep their own tighter timeouts.
+LLM_START_TO_CLOSE = timedelta(hours=1)
+LLM_SCHEDULE_TO_CLOSE = timedelta(hours=3)

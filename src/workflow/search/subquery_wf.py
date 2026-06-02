@@ -12,8 +12,6 @@ Run as a child workflow, one per sub-question, by
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
@@ -24,7 +22,9 @@ with workflow.unsafe.imports_passed_through():
         SubQueryResult,
     )
     from src.workflow.search._merge import dedup_by_chunk_id
-    from src.workflow.search._retry import FAST_RETRY
+    from src.workflow.search._retry import (
+        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+    )
 
 
 @workflow.defn
@@ -43,8 +43,8 @@ class SubQueryRetrievalWorkflow:
                 top_k=params.top_k,
             ),
             result_type=RetrieveResult,
-            start_to_close_timeout=timedelta(minutes=3),
-            schedule_to_close_timeout=timedelta(minutes=10),
+            start_to_close_timeout=LLM_START_TO_CLOSE,
+            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
             retry_policy=FAST_RETRY,
         )
 

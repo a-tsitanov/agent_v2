@@ -23,8 +23,6 @@ helper so the route→workflow mapping is unit-testable outside Temporal.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
@@ -36,7 +34,9 @@ with workflow.unsafe.imports_passed_through():
         RouteResult,
         SearchOutcome,
     )
-    from src.workflow.search._retry import FAST_RETRY
+    from src.workflow.search._retry import (
+        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+    )
 
 from src.workflow.search.global_wf import GlobalSearchWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
@@ -118,8 +118,8 @@ class AutoSearchWorkflow:
             "route_query",
             RouteParams(query=local_params.query),
             result_type=RouteResult,
-            start_to_close_timeout=timedelta(minutes=2),
-            schedule_to_close_timeout=timedelta(minutes=10),
+            start_to_close_timeout=LLM_START_TO_CLOSE,
+            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
             retry_policy=FAST_RETRY,
         )
         target = dispatch_for_route(route_res.route)

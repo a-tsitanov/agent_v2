@@ -47,7 +47,9 @@ with workflow.unsafe.imports_passed_through():
         should_run_coverage_round,
     )
     from src.workflow.search._merge import merge_subquery_sources
-    from src.workflow.search._retry import FAST_RETRY
+    from src.workflow.search._retry import (
+        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+    )
 
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 
@@ -123,8 +125,8 @@ class SearchOrchestratorWorkflow:
             "plan_subquestions",
             PlanParams(query=params.query, max_subqueries=params.max_subqueries),
             result_type=PlanResult,
-            start_to_close_timeout=timedelta(minutes=2),
-            schedule_to_close_timeout=timedelta(minutes=10),
+            start_to_close_timeout=LLM_START_TO_CLOSE,
+            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
             retry_policy=FAST_RETRY,
         )
         subquestions = plan.subquestions or [params.query]
@@ -296,8 +298,8 @@ class SearchOrchestratorWorkflow:
             synth_params,
             task_queue=synth_queue,
             result_type=SynthesizeResult,
-            start_to_close_timeout=timedelta(minutes=5),
-            schedule_to_close_timeout=timedelta(minutes=15),
+            start_to_close_timeout=LLM_START_TO_CLOSE,
+            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
             retry_policy=FAST_RETRY,
         )
 

@@ -50,7 +50,9 @@ with workflow.unsafe.imports_passed_through():
         SynthesizeResult,
     )
     from src.workflow.search._merge import merge_subquery_sources
-    from src.workflow.search._retry import FAST_RETRY
+    from src.workflow.search._retry import (
+        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+    )
 
 
 def _coerce_global_params(
@@ -187,8 +189,8 @@ class GlobalSearchWorkflow:
                     "map_community_partial",
                     spec,
                     result_type=MapPartialResult,
-                    start_to_close_timeout=timedelta(minutes=3),
-                    schedule_to_close_timeout=timedelta(minutes=10),
+                    start_to_close_timeout=LLM_START_TO_CLOSE,
+                    schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
                     retry_policy=FAST_RETRY,
                 )
 
@@ -236,8 +238,8 @@ class GlobalSearchWorkflow:
             reduce_params,
             task_queue=reduce_queue,
             result_type=SynthesizeResult,
-            start_to_close_timeout=timedelta(minutes=5),
-            schedule_to_close_timeout=timedelta(minutes=15),
+            start_to_close_timeout=LLM_START_TO_CLOSE,
+            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
             retry_policy=FAST_RETRY,
         )
 

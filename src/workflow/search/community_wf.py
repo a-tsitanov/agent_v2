@@ -39,7 +39,9 @@ with workflow.unsafe.imports_passed_through():
         SummarizeCommunityParams,
         SummarizeCommunityResult,
     )
-    from src.workflow.search._retry import FAST_RETRY
+    from src.workflow.search._retry import (
+        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+    )
 
 
 def build_summarize_specs(
@@ -109,8 +111,8 @@ class CommunityBuildWorkflow:
                     "summarize_community_activity",
                     spec,
                     result_type=SummarizeCommunityResult,
-                    start_to_close_timeout=timedelta(minutes=5),
-                    schedule_to_close_timeout=timedelta(minutes=15),
+                    start_to_close_timeout=LLM_START_TO_CLOSE,
+                    schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
                     retry_policy=FAST_RETRY,
                 )
 
