@@ -371,6 +371,7 @@ class SearchOutcome(_Frozen):
     mode: SearchMode
     answer: str
     sources: list[SerializedNode] = Field(default_factory=list)
+    documents: list[str] = Field(default_factory=list)
     step_stats: list[AgenticStepStatDict] = Field(default_factory=list)
     citations: list[ReflectiveCitationDict] = Field(default_factory=list)
     uncertainties: list[ReflectiveUncertaintyDict] = Field(default_factory=list)

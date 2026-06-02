@@ -46,15 +46,22 @@ class SourceCitation(BaseModel):
     doc_type: str = ""
 
 
+class DocumentRef(BaseModel):
+    doc_id: str
+    url: str
+
+
 class SearchResponse(BaseModel):
     query: str
     answer: str
     mode: str
     sources: list[SourceCitation] = Field(default_factory=list)
+    documents: list[DocumentRef] = Field(default_factory=list)
     latency_ms: float = 0.0
 
 
 __all__ = [
+    "DocumentRef",
     "SearchRequest",
     "SearchResponse",
     "SourceCitation",

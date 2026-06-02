@@ -22,7 +22,7 @@ from temporalio.common import WorkflowIDReusePolicy
 
 from src.api.auth import require_api_key
 from src.config import settings
-from src.models.search import SearchRequest, SearchResponse, SourceCitation
+from src.models.search import DocumentRef, SearchRequest, SearchResponse, SourceCitation
 from src.observability.trace import trace_request
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import (
@@ -61,6 +61,11 @@ def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSea
     )
 
 
+def to_document_refs(doc_ids: list[str]) -> list[DocumentRef]:
+    """doc_id list → relative download links (preserves order)."""
+    return [DocumentRef(doc_id=d, url=f"/api/v1/documents/{d}") for d in doc_ids]
+
+
 def _outcome_to_response(outcome: SearchOutcome) -> SearchResponse:
     """Map the workflow's ``SearchOutcome`` onto the shared response shape
     (identical projection across local/global/drift/auto)."""
@@ -78,6 +83,7 @@ def _outcome_to_response(outcome: SearchOutcome) -> SearchResponse:
             )
             for n in outcome.sources
         ],
+        documents=to_document_refs(outcome.documents),
         latency_ms=outcome.latency_ms,
     )
 
