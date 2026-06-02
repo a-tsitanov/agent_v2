@@ -273,22 +273,32 @@ def build_property_graph_index(
     embed_model: BaseEmbedding,
     extractor: SchemaLLMPathExtractor,
     nodes: list | None = None,
+    llm: LLM | None = None,
 ) -> PropertyGraphIndex:
     """Compose a PropertyGraphIndex from store + embed + extractor.
 
     Pass ``nodes`` to build from chunks (used in Stage 8 worker);
     omit to attach to an existing populated store.
+
+    ``llm`` is threaded onto the index so the default retriever's
+    ``LLMSynonymRetriever`` uses the project (LiteLLM) model.  Without it
+    the index's ``llm`` is unset and ``as_retriever()`` falls back to
+    LlamaIndex's global ``Settings.llm`` (OpenAI), which crashes a
+    local-only deploy that has no ``OPENAI_API_KEY``.  Omit for the ingest
+    path (NoOp extractor, no retrieval) — only the retrieval paths need it.
     """
     if nodes is None:
         return PropertyGraphIndex.from_existing(
             property_graph_store=graph_store,
             embed_model=embed_model,
             kg_extractors=[extractor],
+            llm=llm,
         )
     return PropertyGraphIndex(
         nodes=nodes,
         property_graph_store=graph_store,
         embed_model=embed_model,
         kg_extractors=[extractor],
+        llm=llm,
         show_progress=False,
     )

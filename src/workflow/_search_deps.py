@@ -64,6 +64,7 @@ async def _build_graph_retriever_once(embed_model, llm):
         pg = build_property_graph_index(
             graph_store=gs, embed_model=embed_model,
             extractor=build_kg_extractor(llm), nodes=None,
+            llm=llm,  # local LiteLLM model for the retriever's synonym step
         )
         # Existing-graph coverage: create the entity-name full-text index
         # once at bootstrap (idempotent, fail-open).

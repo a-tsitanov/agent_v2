@@ -143,3 +143,27 @@ def test_ensure_entity_fulltext_index_idempotent_cypher_and_failopen():
 
     # Fail-open: returns False, never raises.
     assert ensure_entity_fulltext_index(_BoomStore()) is False
+
+
+def test_build_property_graph_index_threads_llm(monkeypatch):
+    # The index's llm must be the project (LiteLLM) model so the default
+    # retriever's LLMSynonymRetriever doesn't fall back to Settings.llm
+    # (OpenAI) — which crashes a local-only deploy with no OPENAI_API_KEY.
+    import src.graph.index as idx
+
+    captured: dict = {}
+
+    class _FakePGI:
+        @classmethod
+        def from_existing(cls, **kw):
+            captured.update(kw)
+            return "idx"
+
+    monkeypatch.setattr(idx, "PropertyGraphIndex", _FakePGI)
+    sentinel = object()
+    out = idx.build_property_graph_index(
+        graph_store=object(), embed_model=object(),
+        extractor=object(), nodes=None, llm=sentinel,
+    )
+    assert out == "idx"
+    assert captured["llm"] is sentinel

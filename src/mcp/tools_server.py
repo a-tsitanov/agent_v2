@@ -95,6 +95,7 @@ async def _init() -> None:
             pg = build_property_graph_index(
                 graph_store=gs, embed_model=embed,
                 extractor=build_kg_extractor(llm), nodes=None,
+                llm=llm,  # local LiteLLM model for the retriever's synonym step
             )
             _deps["graph"] = GraphRetriever(pg)
         except Exception as exc:  # noqa: BLE001
