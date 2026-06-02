@@ -38,6 +38,8 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
         AgenticStepStatDict,
         CommunitySummaryRef,
+        DocumentsForCommunitiesParams,
+        DocumentsForCommunitiesResult,
         GlobalSearchParams,
         MapCommunitiesParams,
         MapCommunitiesResult,
@@ -82,6 +84,12 @@ def build_map_specs(
         )
         for c in communities
     ]
+
+
+def surviving_community_ids(partials: list[MapPartialResult]) -> list[int]:
+    """Community ids of partials that contributed to REDUCE (non-empty,
+    score>0) — the communities behind the answer."""
+    return [p.community_id for p in partials if p.partial and p.score > 0.0]
 
 
 def partials_to_sources(
@@ -226,6 +234,16 @@ class GlobalSearchWorkflow:
             if p.partial and p.score > 0.0
         ]
 
+        docs_res: DocumentsForCommunitiesResult = await workflow.execute_activity(
+            "documents_for_communities",
+            DocumentsForCommunitiesParams(
+                community_ids=surviving_community_ids(partials)),
+            result_type=DocumentsForCommunitiesResult,
+            start_to_close_timeout=timedelta(minutes=2),
+            schedule_to_close_timeout=timedelta(minutes=10),
+            retry_policy=FAST_RETRY,
+        )
+
         # ── 3. REDUCE: single large-tier synthesis (pinned large queue) ─
         self._state["phase"] = "reduce"
         reduce_queue, reduce_params = build_reduce_call(
@@ -255,4 +273,5 @@ class GlobalSearchWorkflow:
             uncertainties=list(synth.uncertainties),
             refinement_rounds=synth.refinement_rounds,
             latency_ms=latency_ms,
+            documents=list(docs_res.doc_ids),
         )

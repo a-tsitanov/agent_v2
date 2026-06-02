@@ -10,6 +10,7 @@ from src.workflow.search.activities.community import (
     detect_communities_activity,
     summarize_community_activity,
 )
+from src.workflow.search.activities.documents import documents_for_communities
 from src.workflow.search.activities.global_search import (
     map_communities,
     map_community_partial,
@@ -28,6 +29,7 @@ SEARCH_V2_ACTIVITIES = [
     route_query,
     map_communities,
     map_community_partial,
+    documents_for_communities,
 ]
 
 # Offline graph-community build (Search R6) — registered ONLY on the
@@ -42,6 +44,7 @@ __all__ = [
     "GRAPH_BUILD_ACTIVITIES",
     "SEARCH_V2_ACTIVITIES",
     "detect_communities_activity",
+    "documents_for_communities",
     "map_communities",
     "map_community_partial",
     "plan_subquestions",

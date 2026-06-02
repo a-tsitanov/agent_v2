@@ -523,6 +523,19 @@ class MapPartialResult(_Frozen):
     score: float = 0.0
 
 
+class DocumentsForCommunitiesParams(_Frozen):
+    """Input to ``documents_for_communities`` — community ids to resolve
+    back to their source documents."""
+
+    community_ids: list[int] = Field(default_factory=list)
+
+
+class DocumentsForCommunitiesResult(_Frozen):
+    """Output — distinct source doc_ids behind the given communities."""
+
+    doc_ids: list[str] = Field(default_factory=list)
+
+
 class GlobalSearchParams(_Frozen):
     """Workflow input for ``GlobalSearchWorkflow`` — what the
     ``/search/global`` route (and the drift path) submit."""
