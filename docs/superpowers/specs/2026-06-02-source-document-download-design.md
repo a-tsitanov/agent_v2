@@ -5,9 +5,14 @@
 
 ## Goal
 
-Let an operator download the **original uploaded file** of an ingested
-document for manual reading, on demand, keyed by the `doc_id` that
-search responses already expose in `sources[]`.
+Two related capabilities:
+
+1. **Download** the **original uploaded file** of an ingested document for
+   manual reading, on demand, keyed by `doc_id`.
+2. **Discover** — the search response returns links to *all documents used
+   for that search*, so the operator can jump straight from an answer to
+   the source files (for `global`, the documents the contributing
+   community clusters are built from).
 
 ## Context (verified)
 
@@ -104,6 +109,79 @@ stubbed Postgres/MinIO via dependency overrides / monkeypatch):
 - **401** — no/invalid API key.
 - **(unit)** `parse_s3_uri` + `stat_object`/`stream_object` against a stub
   minio client (filename extraction, chunking, connection release).
+
+## Addition: document links in the search response
+
+Return the set of documents used for a search so the operator can click
+straight through to the download endpoint.
+
+### Response shape
+
+`SearchResponse` (and the internal `SearchOutcome`) gain:
+
+```python
+class DocumentRef(BaseModel):
+    doc_id: str
+    url: str          # relative: f"/api/v1/documents/{doc_id}"
+
+# SearchResponse
+documents: list[DocumentRef] = []   # distinct, deduped
+```
+
+`filename` is intentionally omitted (the download endpoint reveals it) —
+the link is what's needed, and filling names would add an N-lookup per
+search. `url` is **relative** (the client knows its own base).
+
+### Derivation per mode
+
+- **local** — distinct `doc_id` from `outcome.sources[].metadata["doc_id"]`
+  (chunk-level doc_id is already present; `sources` is the full merged
+  pool, i.e. every document used in retrieval).
+- **global** — `sources` are community partials with no `doc_id`. A new
+  activity maps the surviving partials' `community_id`s → source
+  documents via the graph:
+  ```cypher
+  MATCH (c:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(comm:Community)
+  WHERE comm.id IN $ids
+  RETURN DISTINCT c.doc_id AS doc_id
+  ```
+  `community_id`s = the partials that survived into REDUCE
+  (`score > 0`). Result is attached to `SearchOutcome`.
+- **drift** — union of the local docs and the global community docs.
+
+### Layers touched
+
+- `src/workflow/contracts.py` — `SearchOutcome` gains
+  `documents: list[str]` (doc_ids); a new `DocumentsForCommunitiesParams`
+  / result for the activity.
+- `src/models/search.py` — `DocumentRef` + `SearchResponse.documents`.
+- `src/workflow/search/orchestrator.py` — collect distinct doc_ids from
+  the merged pool onto `SearchOutcome.documents` (local).
+- `src/workflow/search/global_wf.py` — after MAP, call the new activity
+  with surviving `community_id`s; attach result.
+- `src/workflow/search/router_wf.py` (drift) — union local + global docs.
+- New activity `documents_for_communities` (graph access) registered on
+  the search queue. **Fail-open**: any graph error → empty list (never
+  block the answer).
+- `src/api/routes/search_v2.py` — `_outcome_to_response` maps
+  `outcome.documents` → `SearchResponse.documents` with the relative url.
+
+### Live-Cypher caveat
+
+The exact `c.doc_id` property name on the `:Chunk` node and the
+`MENTIONS` / `IN_COMMUNITY` traversal must be **verified against the live
+Neo4j store** (same caution as the GDS Cypher in `communities.py`).
+Isolate the query as a module constant so the fix is one place.
+
+### Tests
+
+- **local** — outcome with sources carrying doc_ids → response
+  `documents` has the distinct relative urls; duplicates across sources
+  are deduped.
+- **global** — stub the `documents_for_communities` activity → response
+  `documents` populated; activity error → empty `documents`, answer still
+  returned.
+- pure helper that turns a doc_id list into `DocumentRef`s (url format).
 
 ## Out of scope (separate tasks if needed)
 
