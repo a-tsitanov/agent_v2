@@ -60,6 +60,15 @@ def dispatch_for_route(route: RouteLabel) -> str:
     }.get(route, LOCAL_WF)
 
 
+def merge_doc_ids(local: list[str], glob: list[str]) -> list[str]:
+    """Union of two doc_id lists, order-preserving, deduped."""
+    out = list(local)
+    for d in glob:
+        if d not in out:
+            out.append(d)
+    return out
+
+
 @workflow.defn
 class DriftSearchWorkflow:
     """Drift mode — local pass, then global community expansion."""
@@ -92,7 +101,9 @@ class DriftSearchWorkflow:
             id=f"{workflow.info().workflow_id}-global",
             result_type=SearchOutcome,
         )
-        return outcome
+        return outcome.model_copy(update={
+            "documents": merge_doc_ids(list(local.documents), list(outcome.documents)),
+        })
 
 
 @workflow.defn

@@ -22,3 +22,9 @@ def test_dispatch_known_routes():
 
 def test_dispatch_unknown_falls_back_to_local():
     assert dispatch_for_route("???") == LOCAL_WF  # type: ignore[arg-type]
+
+
+def test_merge_doc_ids_unions_in_order():
+    from src.workflow.search.router_wf import merge_doc_ids
+
+    assert merge_doc_ids(["d1", "d2"], ["d2", "d3"]) == ["d1", "d2", "d3"]
