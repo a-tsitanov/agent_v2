@@ -30,8 +30,6 @@ LLMRole = Literal[
     "route",
     "plan",
     "retrieve",
-    "distill",
-    "coverage",
     "synthesis",
 ]
 
@@ -45,8 +43,6 @@ _DEFAULT_ROLE_TIERS: dict[str, LLMTier] = {
     "route": "small",
     "plan": "small",
     "retrieve": "small",
-    "distill": "small",
-    "coverage": "small",
     "synthesis": "large",
 }
 
@@ -416,12 +412,7 @@ class AgentSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="AGENT_", env_file=".env", extra="ignore")
 
-    # Legacy judge-based loop (kept for R9 baseline eval).
-    max_rounds: int = Field(default=3, ge=1, le=10)
     top_k: int = 10
-    # ReAct loop (R7): how many tool-call iterations before forcing
-    # `submit_answer`.
-    max_iterations: int = Field(default=8, ge=1, le=20)
     # Plan-execute flow (R2): max sub-questions the planner may emit —
     # bounds the parallel SubQueryRetrievalWorkflow fan-out (and planner
     # LLM cost) regardless of what the small model returns.
@@ -447,19 +438,6 @@ class AgentSettings(BaseSettings):
     # Bump up when LLM proxy / OpenAI quotas allow; default 8 leaves
     # headroom for ingest's serial llm_activity_concurrency.
     llm_max_concurrent: int = Field(default=8, ge=1, le=64)
-    # Reflective synthesis (R8): how many draft → critique → retrieve
-    # → redraft rounds the synthesizer attempts.
-    max_refinements: int = Field(default=3, ge=0, le=10)
-    # Observation distillation (R11): between tool_execution and the
-    # next reasoning step, large tool observations are passed through a
-    # one-shot LLM that extracts only query-relevant facts and grades
-    # relevance.  Bounds reasoning-context growth on big corpora.  The
-    # relevance verdict is advisory (history note + stats); full nodes
-    # ALWAYS reach the synthesizer, so distillation never loses facts.
-    distill_enabled: bool = True
-    # Only distil observations larger than this (chars) — small ones
-    # aren't worth the extra LLM call.
-    distill_min_chars: int = Field(default=1500, ge=0)
     # Hard cap (chars) on any single observation written into the
     # reasoning history — backstop even when distillation is off or the
     # distilled text is still long.
@@ -469,17 +447,12 @@ class AgentSettings(BaseSettings):
     # question; if not, the named gap is fed back and one more retrieval
     # round runs.  Adds the gap-detection plain `agent` mode lacks.
     coverage_check_enabled: bool = True
-    # How many times the coverage check may bounce the agent back before
-    # submit_answer is accepted unconditionally (caps extra LLM calls +
-    # guarantees termination alongside max_iterations).
-    max_coverage_checks: int = Field(default=1, ge=0, le=5)
     # Plan-execute flow (R4): after the orchestrator merges all
     # sub-question sources, it runs ONE coverage_check (reusing
     # ``coverage_check_enabled`` above).  On a named gap it issues the
     # gap as ONE extra SubQueryRetrievalWorkflow, re-merges, then
     # synthesizes.  Bounds the number of such extra rounds (and the
-    # extra LLM + retrieval cost) — distinct from the ReAct loop's
-    # ``max_coverage_checks`` so the two paths tune independently.
+    # extra LLM + retrieval cost).
     max_coverage_rounds: int = Field(default=1, ge=0, le=3)
     # GraphRAG global search (R7a, decision C): the routing modes
     # local|global|drift map-reduce over the community summaries built in

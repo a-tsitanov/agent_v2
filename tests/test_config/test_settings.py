@@ -28,7 +28,7 @@ def test_settings_defaults_load() -> None:
     assert settings.litellm.embedding_dim > 0
     assert settings.temporal.target.endswith(":7233")
     assert settings.ingestion.chunk_size > 0
-    assert settings.agent.max_rounds >= 1
+    assert settings.agent.max_subqueries >= 1
 
 
 def test_merge_queue_defaults() -> None:

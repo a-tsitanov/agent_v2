@@ -1,18 +1,16 @@
-"""``coverage_check`` activity — pre-submit completeness gate.
+"""``coverage_check`` activity — pre-synthesis completeness gate.
 
-When the agent decides to finish (``submit_answer``), the workflow
-first asks this activity whether the evidence gathered so far actually
-covers the *whole* question — including every part of a multi-part
-query.  If not, the workflow injects the named gap back into the
-reasoning history and runs one more retrieval round instead of
-finishing early.
+After the orchestrator merges all sub-question sources, it asks this
+activity whether the evidence gathered so far actually covers the
+*whole* question — including every part of a multi-part query.  If not,
+the orchestrator issues the named gap as one extra
+SubQueryRetrievalWorkflow, re-merges, then synthesizes.
 
-This adds the gap-detection that plain ``agent`` mode otherwise lacks
-(``selfrag`` gets it from reflective synthesis).  Bounded by
-``max_coverage_checks`` in the workflow so it can't loop forever.
+Bounded by ``max_coverage_rounds`` in the orchestrator so it can't loop
+forever.
 
 Fail-open: any error or unparseable output → ``complete=True`` so a
-flaky check never traps the agent short of an answer.
+flaky check never blocks the answer.
 """
 
 from __future__ import annotations
