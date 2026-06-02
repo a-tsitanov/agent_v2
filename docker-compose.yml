@@ -190,12 +190,31 @@ services:
       POSTGRES_SEEDS: postgres
       DBNAME: temporal
       VISIBILITY_DBNAME: temporal_visibility
+      # History shard count — the single biggest throughput knob. IMMUTABLE
+      # after the cluster's first init (persisted in the DB), so this only
+      # takes effect on a FRESH cluster (empty temporal/temporal_visibility
+      # DBs). 512 is the Temporal-recommended prod floor; the auto-setup
+      # image otherwise defaults to 4 (dev-scale). Override for a small dev
+      # box with TEMPORAL_NUM_HISTORY_SHARDS=4.
+      NUM_HISTORY_SHARDS: ${TEMPORAL_NUM_HISTORY_SHARDS:-512}
     ports:
       - "7233:7233"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # ── PROD HARDENING (decisions, NOT auto-applied — they're not reversible
+    #    in place) ───────────────────────────────────────────────────────
+    # * `auto-setup` runs schema-setup + namespace registration on every
+    #   boot — it's the quickstart image. A hardened prod runs
+    #   `temporalio/server` and migrates schema ONCE via `temporal-sql-tool`
+    #   (the admin-tools image), instead of re-running setup each start.
+    # * Temporal shares the app `postgres` instance here (separate DBs). It
+    #   is history-write-heavy; for prod give it its OWN Postgres so it
+    #   doesn't contend with application IO/connections.
+    # * Bumping this image (1.25.2 → newer) implies a Temporal schema
+    #   upgrade — run it against a DB copy first; never bump in place on a
+    #   prod cluster with live data.
 
   temporal-ui:
     image: temporalio/ui:2.31.2
