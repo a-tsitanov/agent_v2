@@ -1,0 +1,46 @@
+meta {
+  name: Auto Search
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/search/auto
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Сравни подходы к лечению BCC в разных документах",
+    "top_k": 10
+  }
+}
+
+docs {
+  # POST /api/v1/search/auto
+
+  **Auto search** — `route_query` (small tier) classifies the question,
+  then dispatches to local / global / drift as a child workflow.
+  Fail-safe: a flaky/ambiguous router defaults to **local**, so auto
+  never breaks.
+
+  ## When to use
+  You don't know the mode up front / mixed traffic / programmatic
+  clients that can't classify. Costs one extra small-LLM call for the
+  routing decision.
+
+  ## Request body
+  - **query** *(required)*. **top_k** *(default 10)*.
+
+  ## Response 200 — `SearchResponse`; `mode` is set to the **chosen**
+  route (`local` | `global` | `drift`).
+
+  ## Errors
+  - `401` — auth. `500` — workflow raised.
+}

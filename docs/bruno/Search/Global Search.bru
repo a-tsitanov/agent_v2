@@ -1,0 +1,55 @@
+meta {
+  name: Global Search
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/search/global
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Какие основные категории заболеваний встречаются во всех документах?",
+    "top_k": 10
+  }
+}
+
+docs {
+  # POST /api/v1/search/global
+
+  **GraphRAG global search** — map-reduce over the community summaries
+  built offline. Small-tier MAP per community → large-tier REDUCE
+  synthesis. Answers corpus-level / thematic questions no single chunk
+  covers.
+
+  ## Prerequisite
+  Requires community summaries to exist — run **Admin → Rebuild
+  Communities** (`POST /api/v1/admin/communities/rebuild`) first, or the
+  overview comes back empty.
+
+  ## When to use
+  Aggregating / thematic questions: «обобщи», «основные темы / категории
+  во всех документах», «что в целом».
+
+  ## Request body
+  - **query** *(required)*. **top_k** — accepted but barely used (retrieval
+    is over community summaries, not chunks).
+
+  ## Response 200 — `SearchResponse` with `"mode": "global"`.
+
+  ## Tuning (server-side env)
+  `AGENT_GLOBAL_MAX_COMMUNITIES` (how many communities enter MAP),
+  `AGENT_GLOBAL_MAP_PARALLELISM` (MAP concurrency). Freshness depends on
+  the last rebuild.
+
+  ## Errors
+  - `401` — auth. `500` — workflow raised.
+}

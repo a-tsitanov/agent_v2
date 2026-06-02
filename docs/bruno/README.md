@@ -29,12 +29,19 @@ docs/bruno/
 │   ├── Upload Document.bru          # POST /api/v1/ingest (multipart)
 │   └── Get Job Status.bru           # GET /api/v1/ingest/{job_id}
 ├── Search/
-│   ├── Hybrid Search.bru            # POST /api/v1/search
-│   ├── ReAct Agent.bru              # POST /api/v1/agent
-│   ├── Self-RAG.bru                 # POST /api/v1/selfrag
-│   └── Legacy Agent.bru             # POST /api/v1/legacy/agent
+│   ├── Local Search.bru             # POST /api/v1/search/local
+│   ├── Global Search.bru            # POST /api/v1/search/global
+│   ├── Drift Search.bru             # POST /api/v1/search/drift
+│   └── Auto Search.bru              # POST /api/v1/search/auto
+├── Admin/
+│   └── Rebuild Communities.bru      # POST /api/v1/admin/communities/rebuild
 └── README.md
 ```
+
+> The legacy `/api/v1/search`, `/agent`, `/selfrag`, `/legacy/agent`
+> endpoints were removed in the R7b cutover. The sole search surface is
+> now `/api/v1/search/{local,global,drift,auto}` — usage + tuning memo:
+> `docs/runbook/search-usage.md`.
 
 ## Environment variables
 
@@ -65,7 +72,10 @@ from `vars` in the active environment.
    response.
 3. **Get Job Status** → set the `jobId` request var to the value
    above; poll until status is `completed` (or `vector_only`).
-4. **Search / ReAct Agent / Self-RAG** → query the corpus.
+4. **Search → Local** → query the corpus (default mode). Use **Auto**
+   to let the router pick the mode.
+5. *(optional, for Global/Drift)* **Admin → Rebuild Communities** once,
+   then use **Global** / **Drift** for corpus-level questions.
 
 ## Notes
 
@@ -76,9 +86,12 @@ from `vars` in the active environment.
 - The synthesizer always forces a Russian-language answer (corpus
   is normalised to Russian); English questions are fine but the
   reply will be Russian.
-- `POST /api/v1/legacy/agent` is mounted only when
-  `AGENT_ENABLE_LEGACY_AGENT=true`. Otherwise the request returns
-  404.
+- **Global** and **Drift** map-reduce over community summaries — run
+  **Admin → Rebuild Communities** first (needs Neo4j + GDS; the build is
+  offline and runs for minutes).
+- All four search modes share the `SearchRequest` shape; only `query`
+  and `top_k` are consumed — the mode is chosen by the endpoint, not a
+  body field.
 
 ## Updating the collection
 

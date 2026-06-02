@@ -1,0 +1,54 @@
+meta {
+  name: Drift Search
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/search/drift
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Что известно про препарат Цисплатин и в каких ещё схемах лечения он упоминается?",
+    "top_k": 10
+  }
+}
+
+docs {
+  # POST /api/v1/search/drift
+
+  **Drift search** — a local plan-execute pass first (concrete chunk
+  evidence), then a global community expansion seeded with those local
+  sources. Local evidence leads; community context broadens it; one
+  large-tier REDUCE produces the final answer. Bounded: exactly one
+  local pass + one global pass.
+
+  ## Prerequisite
+  Like global, the expansion uses community summaries — run **Rebuild
+  Communities** first for the broadening to add anything.
+
+  ## When to use
+  Need BOTH a concrete fact AND surrounding context: «расскажи про X и
+  как он связан с остальным». Costlier than local (two passes).
+
+  ## Request body
+  - **query** *(required)*. **top_k** *(default 10)* — chunks for the
+    local pass.
+
+  ## Response 200 — `SearchResponse` with `"mode": "drift"`.
+
+  ## Tuning (server-side env)
+  Combines local + global knobs; `TEMPORAL_RERANK_TOP_N` and
+  `AGENT_GLOBAL_MAX_COMMUNITIES` together bound the final REDUCE context.
+
+  ## Errors
+  - `401` — auth. `500` — workflow raised.
+}

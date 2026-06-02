@@ -1,0 +1,45 @@
+meta {
+  name: Rebuild Communities
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/admin/communities/rebuild
+  body: none
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+docs {
+  # POST /api/v1/admin/communities/rebuild
+
+  Starts the **offline** `CommunityBuildWorkflow` on the dedicated
+  `kb-graph-build` queue: GDS Leiden community detection over the
+  `__Entity__` graph + a small-tier summary per community, persisted on
+  `:Community` nodes. Fully decoupled from the query hot path.
+
+  **Prerequisite for `/search/global` and `/search/drift`** — they
+  map-reduce over the summaries this builds.
+
+  ## Behaviour
+  Fire-and-forget: returns the workflow id immediately; the build runs
+  for minutes. Idempotent — re-running refreshes membership / summaries
+  on existing `:Community` nodes.
+
+  ## Response 202
+  ```json
+  { "workflow_id": "community-build-…", "status": "started" }
+  ```
+
+  ## Requires
+  - Neo4j Enterprise with the GDS plugin + `gds.*` allow-listed.
+  - Enough Neo4j heap (Leiden is memory-hungry — see
+    `NEO4J_HEAP_MAX` in docker-compose; default 4G).
+
+  ## Errors
+  - `401` — auth. `500` — failed to start (body carries the message).
+}

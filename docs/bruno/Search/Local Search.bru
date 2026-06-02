@@ -1,0 +1,62 @@
+meta {
+  name: Local Search
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/search/local
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Какой диагноз и какие препараты назначены пациенту Иванову И.И.?",
+    "top_k": 10
+  }
+}
+
+docs {
+  # POST /api/v1/search/local
+
+  **Plan-execute-synthesize** (the default search). Decomposes the
+  question into sub-questions, retrieves each in parallel, merges +
+  dedups, runs a bounded coverage gate, reranks, then synthesizes once
+  on the large-tier model. No ReAct loop.
+
+  ## When to use
+  Concrete facts answerable from a few chunks: «кто/что/когда/сколько у X»,
+  lookups of a specific entity / document / value / definition. Default
+  for most queries.
+
+  ## Request body
+  - **query** *(required)* — the question (answer is forced Russian).
+  - **top_k** *(default 10)* — chunks pulled per sub-question.
+
+  ## Response 200 — `SearchResponse`
+  ```json
+  {
+    "query": "...",
+    "answer": "...",
+    "mode": "local",
+    "sources": [
+      { "doc_id": "...", "chunk_id": "...", "content": "...", "score": 0.42 }
+    ],
+    "latency_ms": 4213.0
+  }
+  ```
+
+  ## Tuning (server-side env, needs API/worker restart)
+  `AGENT_MAX_SUBQUERIES` (fan-out), `AGENT_COVERAGE_CHECK_ENABLED` /
+  `AGENT_MAX_COVERAGE_ROUNDS` (gap-filling), `TEMPORAL_RERANK_TOP_N`
+  (synthesis context size).
+
+  ## Errors
+  - `401` — auth. `500` — workflow raised (body carries the message).
+}
