@@ -389,7 +389,7 @@ async def test_dispatch_vector_search_missing_retriever_raises():
 def test_tool_descriptions_cover_all_tools():
     expected = {
         "vector_search", "graph_search", "graph_walk",
-        "find_entity_by_id", "find_neighbours", "filter_by_metadata",
-        "get_chunks_by_doc_id", "read_full_document",
+        "find_entity_by_id", "find_entity_by_name", "find_neighbours",
+        "filter_by_metadata", "get_chunks_by_doc_id", "read_full_document",
     }
     assert set(atomic_tools.TOOL_DESCRIPTIONS) == expected
