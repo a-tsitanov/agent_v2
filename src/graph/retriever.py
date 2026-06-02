@@ -18,6 +18,7 @@ Implementation thin over LlamaIndex's PG retriever:
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 
 from llama_index.core import PropertyGraphIndex
@@ -90,6 +91,23 @@ RETURN
     [rel IN r | {{src: startNode(rel).name, tgt: endNode(rel).name,
                   label: type(rel)}}] AS rels
 """
+
+
+# Lucene special chars that must be backslash-escaped inside a query term.
+_LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/&|])')
+
+
+def build_fulltext_query(query: str) -> str:
+    """Build a Lucene OR-of-tokens query for the ``entity_name_fulltext``
+    index: whitespace-split the input, escape Lucene special chars in each
+    token, join with ``OR``.  Returns ``""`` for blank input so the caller
+    short-circuits to empty results (never issues a bare/invalid query)."""
+    tokens: list[str] = []
+    for raw in (query or "").split():
+        esc = _LUCENE_SPECIAL.sub(r"\\\1", raw).strip()
+        if esc:
+            tokens.append(esc)
+    return " OR ".join(tokens)
 
 
 class GraphRetriever:
