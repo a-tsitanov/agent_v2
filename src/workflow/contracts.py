@@ -388,7 +388,7 @@ class CommunityRef(_Frozen):
     ``__Entity__.name`` primary key used everywhere else in the graph).
     """
 
-    community_id: int
+    community_id: str
     level: int = 0
     members: list[str] = Field(default_factory=list)
 
@@ -421,7 +421,7 @@ class SummarizeCommunityParams(_Frozen):
     community's members (+ their inter-member relations) via the small
     tier and persist on ``:Community.summary``."""
 
-    community_id: int
+    community_id: str
     level: int = 0
     members: list[str] = Field(default_factory=list)
 
@@ -430,7 +430,7 @@ class SummarizeCommunityResult(_Frozen):
     """Output of ``summarize_community_activity`` — the summary text and
     whether it was persisted.  ``summary`` is empty on any error."""
 
-    community_id: int
+    community_id: str
     summary: str = ""
     persisted: bool = False
 
@@ -478,7 +478,7 @@ class CommunitySummaryRef(_Frozen):
     """One community's stored summary — the unit the global MAP step
     produces a partial answer over.  Read from ``:Community.summary``."""
 
-    community_id: int
+    community_id: str
     level: int = 0
     summary: str = ""
 
@@ -509,7 +509,7 @@ class MapPartialParams(_Frozen):
     ONE community summary against the user query (small tier)."""
 
     query: str
-    community_id: int
+    community_id: str
     summary: str = ""
 
 
@@ -518,7 +518,7 @@ class MapPartialResult(_Frozen):
     answer + a self-rated relevance score (0..1) used to drop irrelevant
     communities before REDUCE.  Fail-safe: empty partial on any error."""
 
-    community_id: int
+    community_id: str
     partial: str = ""
     score: float = 0.0
 
@@ -527,7 +527,7 @@ class DocumentsForCommunitiesParams(_Frozen):
     """Input to ``documents_for_communities`` — community ids to resolve
     back to their source documents."""
 
-    community_ids: list[int] = Field(default_factory=list)
+    community_ids: list[str] = Field(default_factory=list)
 
 
 class DocumentsForCommunitiesResult(_Frozen):

@@ -86,7 +86,7 @@ def build_map_specs(
     ]
 
 
-def surviving_community_ids(partials: list[MapPartialResult]) -> list[int]:
+def surviving_community_ids(partials: list[MapPartialResult]) -> list[str]:
     """Community ids of partials that contributed to REDUCE (non-empty,
     score>0) — the communities behind the answer."""
     return [p.community_id for p in partials if p.partial and p.score > 0.0]

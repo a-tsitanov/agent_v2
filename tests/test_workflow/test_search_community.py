@@ -72,10 +72,10 @@ async def test_summarize_produces_summary_and_persists(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
 
     out = await summarize_community_activity(SummarizeCommunityParams(
-        community_id=2, level=0, members=["Ромашка", "СтройИнвест"],
+        community_id="2", level=0, members=["Ромашка", "СтройИнвест"],
     ))
 
-    assert out.community_id == 2
+    assert out.community_id == "2"
     assert out.summary == "Группа строительных компаний."
     assert out.persisted is True
     # The member names made it into the prompt.
@@ -98,7 +98,7 @@ async def test_summarize_failsafe_on_llm_error(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _BoomLLM())
 
     out = await summarize_community_activity(SummarizeCommunityParams(
-        community_id=1, members=["A", "B"],
+        community_id="1", members=["A", "B"],
     ))
     assert out.summary == ""
     assert out.persisted is False
@@ -116,7 +116,7 @@ async def test_summarize_empty_members_skips_llm(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_summary_llm", _llm)
 
     out = await summarize_community_activity(
-        SummarizeCommunityParams(community_id=1, members=[]),
+        SummarizeCommunityParams(community_id="1", members=[]),
     )
     assert out.persisted is False
     assert called["llm"] is False
@@ -127,11 +127,11 @@ async def test_summarize_empty_members_skips_llm(monkeypatch):
 
 def test_build_summarize_specs_maps_each_community():
     detect = DetectCommunitiesResult(communities=[
-        CommunityRef(community_id=1, level=0, members=["A", "B", "C"]),
-        CommunityRef(community_id=2, level=0, members=["D", "E", "F"]),
+        CommunityRef(community_id="1", level=0, members=["A", "B", "C"]),
+        CommunityRef(community_id="2", level=0, members=["D", "E", "F"]),
     ])
     specs = build_summarize_specs(detect)
-    assert [s.community_id for s in specs] == [1, 2]
+    assert [s.community_id for s in specs] == ["1", "2"]
     assert all(isinstance(s, SummarizeCommunityParams) for s in specs)
     assert specs[0].members == ["A", "B", "C"]
 

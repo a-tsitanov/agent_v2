@@ -143,7 +143,7 @@ def _group_by_community(
 ) -> list[CommunityRef]:
     """Group ``{name, communityId}`` stream rows into ``CommunityRef``s,
     dropping communities below ``min_size``.  Pure / unit-testable."""
-    buckets: dict[int, list[str]] = {}
+    buckets: dict[str, list[str]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -151,7 +151,7 @@ def _group_by_community(
         cid = row.get("communityId")
         if not name or cid is None:
             continue
-        buckets.setdefault(int(cid), []).append(str(name))
+        buckets.setdefault(str(cid), []).append(str(name))
     out: list[CommunityRef] = []
     for cid, members in buckets.items():
         if len(members) < min_size:

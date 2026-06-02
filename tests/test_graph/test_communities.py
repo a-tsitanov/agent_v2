@@ -50,9 +50,9 @@ async def test_detect_groups_members_by_community_id():
     comms = await detect_communities(store, min_size=3)
 
     by_id = {c.community_id: c for c in comms}
-    assert set(by_id) == {7, 2}
-    assert sorted(by_id[7].members) == ["Иванов", "Петров", "Сидоров"]
-    assert by_id[2].member_count == 3
+    assert set(by_id) == {"7", "2"}
+    assert sorted(by_id["7"].members) == ["Иванов", "Петров", "Сидоров"]
+    assert by_id["2"].member_count == 3
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_detect_drops_communities_below_min_size():
     ]
     store = _FakeStore(rows)
     comms = await detect_communities(store, min_size=3)
-    assert [c.community_id for c in comms] == [1]
+    assert [c.community_id for c in comms] == ["1"]
 
 
 @pytest.mark.asyncio

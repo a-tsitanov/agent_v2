@@ -52,7 +52,7 @@ def test_rank_summaries_orders_by_query_overlap_and_caps():
     ]
     refs = rank_summaries(rows, query="строительные фирмы", limit=10)
     # blank dropped; the строительные community ranks first on overlap.
-    assert [r.community_id for r in refs] == [1, 2]
+    assert [r.community_id for r in refs] == ["1", "2"]
     assert all(isinstance(r, CommunitySummaryRef) for r in refs)
 
 
@@ -101,7 +101,7 @@ async def test_map_communities_reads_summaries(monkeypatch):
     ])
     monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
     out = await map_communities(MapCommunitiesParams(query="строители", limit=10))
-    assert [c.community_id for c in out.communities] == [7]
+    assert [c.community_id for c in out.communities] == ["7"]
 
 
 @pytest.mark.asyncio
@@ -135,9 +135,9 @@ async def test_map_partial_produces_partial(monkeypatch):
         gs_mod, "_get_map_llm", lambda: _FakeLLM("Сообщество о строителях."),
     )
     out = await map_community_partial(MapPartialParams(
-        query="строители", community_id=3, summary="строительные фирмы",
+        query="строители", community_id="3", summary="строительные фирмы",
     ))
-    assert out.community_id == 3
+    assert out.community_id == "3"
     assert out.score == 1.0
     assert "строител" in out.partial.lower()
 
@@ -146,7 +146,7 @@ async def test_map_partial_produces_partial(monkeypatch):
 async def test_map_partial_self_drops_irrelevant(monkeypatch):
     monkeypatch.setattr(gs_mod, "_get_map_llm", lambda: _FakeLLM("НЕТ"))
     out = await map_community_partial(MapPartialParams(
-        query="строители", community_id=4, summary="поставщики еды",
+        query="строители", community_id="4", summary="поставщики еды",
     ))
     assert out.score == 0.0
     assert out.partial == ""
@@ -160,7 +160,7 @@ async def test_map_partial_failsafe_on_llm_error(monkeypatch):
 
     monkeypatch.setattr(gs_mod, "_get_map_llm", lambda: _Boom())
     out = await map_community_partial(MapPartialParams(
-        query="q", community_id=5, summary="x",
+        query="q", community_id="5", summary="x",
     ))
     assert out.score == 0.0
 
@@ -170,24 +170,24 @@ async def test_map_partial_failsafe_on_llm_error(monkeypatch):
 
 def test_build_map_specs_one_per_community():
     comms = [
-        CommunitySummaryRef(community_id=1, summary="a"),
-        CommunitySummaryRef(community_id=2, summary="b"),
+        CommunitySummaryRef(community_id="1", summary="a"),
+        CommunitySummaryRef(community_id="2", summary="b"),
     ]
     specs = build_map_specs(comms, query="q")
-    assert [s.community_id for s in specs] == [1, 2]
+    assert [s.community_id for s in specs] == ["1", "2"]
     assert all(isinstance(s, MapPartialParams) for s in specs)
     assert specs[0].query == "q"
 
 
 def test_partials_to_sources_drops_empty_and_zero_score():
     partials = [
-        MapPartialResult(community_id=1, partial="relevant", score=1.0),
-        MapPartialResult(community_id=2, partial="", score=0.0),
-        MapPartialResult(community_id=3, partial="dropped", score=0.0),
+        MapPartialResult(community_id="1", partial="relevant", score=1.0),
+        MapPartialResult(community_id="2", partial="", score=0.0),
+        MapPartialResult(community_id="3", partial="dropped", score=0.0),
     ]
     sources = partials_to_sources(partials)
     assert [s.chunk_id for s in sources] == ["community:1"]
-    assert sources[0].metadata["community_id"] == 1
+    assert sources[0].metadata["community_id"] == "1"
 
 
 def test_build_reduce_call_pins_large_queue_and_tier():

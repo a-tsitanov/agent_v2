@@ -27,12 +27,12 @@ async def test_documents_for_communities_returns_doc_ids(monkeypatch):
 
     class _Store:
         def structured_query(self, cypher, params):
-            assert params == {"ids": [1, 2]}
+            assert params == {"ids": ["1", "2"]}
             return [{"doc_id": "d1"}, {"doc_id": "d2"}, {"doc_id": None}]
 
     monkeypatch.setattr(mod, "_get_store", lambda: _Store())
     res = await mod.documents_for_communities(
-        DocumentsForCommunitiesParams(community_ids=[1, 2]))
+        DocumentsForCommunitiesParams(community_ids=["1", "2"]))
     assert res.doc_ids == ["d1", "d2"]
 
 
@@ -41,15 +41,15 @@ async def test_documents_for_communities_failopen(monkeypatch):
     import src.workflow.search.activities.documents as mod
     monkeypatch.setattr(mod, "_get_store", lambda: None)
     res = await mod.documents_for_communities(
-        DocumentsForCommunitiesParams(community_ids=[1]))
+        DocumentsForCommunitiesParams(community_ids=["1"]))
     assert res.doc_ids == []
 
 
 def test_surviving_community_ids():
     from src.workflow.search.global_wf import surviving_community_ids
     partials = [
-        MapPartialResult(community_id=1, partial="x", score=0.9),
-        MapPartialResult(community_id=2, partial="", score=0.0),   # dropped
-        MapPartialResult(community_id=3, partial="y", score=0.5),
+        MapPartialResult(community_id="1", partial="x", score=0.9),
+        MapPartialResult(community_id="2", partial="", score=0.0),   # dropped
+        MapPartialResult(community_id="3", partial="y", score=0.5),
     ]
-    assert surviving_community_ids(partials) == [1, 3]
+    assert surviving_community_ids(partials) == ["1", "3"]

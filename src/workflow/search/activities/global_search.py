@@ -105,7 +105,7 @@ def rank_summaries(
             continue
         overlap = len(q_tokens & _tokens(summary)) if q_tokens else 0
         ref = CommunitySummaryRef(
-            community_id=int(cid),
+            community_id=str(cid),
             level=int(row.get("level") or 0),
             summary=summary,
         )
