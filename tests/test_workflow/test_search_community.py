@@ -138,3 +138,13 @@ def test_build_summarize_specs_maps_each_community():
 
 def test_build_summarize_specs_empty():
     assert build_summarize_specs(DetectCommunitiesResult(communities=[])) == []
+
+
+def test_project_cypher_is_undirected_for_leiden():
+    # Leiden rejects a directed graph ("works only with undirected graphs").
+    # The projection MUST mark all relationship types undirected.
+    from src.graph.communities import _project_cypher
+
+    cypher = _project_cypher("g-test")
+    assert "undirectedRelationshipTypes: ['*']" in cypher
+    assert "gds.graph.project(" in cypher

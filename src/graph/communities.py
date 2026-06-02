@@ -61,6 +61,11 @@ def _new_graph_name() -> str:
 #    type up front.  Self-/dangling nodes are included via OPTIONAL MATCH
 #    so isolated entities still appear (they land in singleton communities
 #    that the min_size floor drops).
+#
+#    ``undirectedRelationshipTypes: ['*']`` (5th / configuration arg) makes
+#    EVERY projected type undirected — REQUIRED by Leiden, which rejects a
+#    directed graph ("works only with undirected graphs").  Edge direction
+#    is meaningless for community detection on a KG anyway.
 def _project_cypher(graph_name: str) -> str:
     return f"""
 MATCH (s:__Entity__)
@@ -70,7 +75,8 @@ RETURN gds.graph.project(
     s,
     t,
     {{ sourceNodeLabels: labels(s), targetNodeLabels: labels(t),
-       relationshipType: type(r) }}
+       relationshipType: type(r) }},
+    {{ undirectedRelationshipTypes: ['*'] }}
 )
 """
 

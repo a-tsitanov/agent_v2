@@ -79,11 +79,15 @@ services:
       # GDS + APOC procedures must be allow-listed to be callable.
       NEO4J_dbms_security_procedures_unrestricted: "gds.*,apoc.*"
       NEO4J_dbms_security_procedures_allowlist: "gds.*,apoc.*"
-      # Leiden on a large KG is memory-hungry; bump heap/pagecache if
-      # CommunityBuildWorkflow OOMs on big graphs.
-      NEO4J_server_memory_heap_initial__size: "512m"
-      NEO4J_server_memory_heap_max__size: "1G"
-      NEO4J_server_memory_pagecache_size: "512m"
+      # Leiden on a large KG is memory-hungry — the GDS undirected
+      # projection holds every edge in BOTH directions in JVM heap, so a
+      # 1G cap OOMs ("Java heap space") on real graphs.  Defaults bumped
+      # and made env-overridable; size to the host (Neo4j wants roughly
+      # heap_max + pagecache free RAM — ~6G for these defaults).  Drop them
+      # for a tiny dev box, raise for a large corpus.
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP_INITIAL:-1G}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP_MAX:-4G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-1G}"
     ports:
       - "7474:7474"
       - "7687:7687"
