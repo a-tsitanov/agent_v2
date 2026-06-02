@@ -51,6 +51,10 @@ class GraphRetrieverProtocol(Protocol):
         rel_filter: list[str] | None = None,
     ) -> Any: ...
 
+    async def afind_entities_by_name(
+        self, query: str, *, limit: int | None = None,
+    ) -> Any: ...
+
 
 class ChunkRepositoryProtocol(Protocol):
     async def aget_chunks_by_doc_id(
@@ -206,6 +210,28 @@ async def find_entity_by_id(
         if entity_type is None
         or (e.get("entity_type", "").lower() == entity_type.lower())
     ]
+    return ToolResult(
+        sources=[],
+        observation=json.dumps({"entities": entities}, ensure_ascii=False),
+    )
+
+
+async def find_entity_by_name(
+    graph_retriever: GraphRetrieverProtocol | None,
+    *,
+    query: str,
+    limit: int = 10,
+) -> ToolResult:
+    """Find entities whose NAME matches the query via the full-text index.
+
+    Partial-name tolerant ("Иванов" → "Иванов Иван Иванович") — complements
+    the exact ``find_entity_by_id`` and the similarity ``graph_search`` on
+    large graphs.  Returns entity rows only (no chunks); empty for a None
+    retriever."""
+    if graph_retriever is None:
+        return ToolResult(sources=[], observation=json.dumps({"entities": []}))
+    data = await graph_retriever.afind_entities_by_name(query, limit=limit)
+    entities = getattr(data, "entities", []) or []
     return ToolResult(
         sources=[],
         observation=json.dumps({"entities": entities}, ensure_ascii=False),
@@ -392,6 +418,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "INN, email, exact name). Use FIRST whenever the question "
         "contains a concrete identifier you can match verbatim."
     ),
+    "find_entity_by_name": (
+        "Find entities by (partial) NAME via full-text — tolerant of "
+        "longer stored names («Иванов» → «Иванов Иван "
+        "Иванович»). Use when you have a name/surname and exact lookup "
+        "misses."
+    ),
     "find_neighbours": (
         "List entities connected to a known one in the graph "
         "(1-2 hops). Use for 'расскажи всё про X' / 'tell me everything "
@@ -423,6 +455,7 @@ TOOL_FUNCTIONS = {
     "graph_search": graph_search,
     "graph_walk": graph_walk,
     "find_entity_by_id": find_entity_by_id,
+    "find_entity_by_name": find_entity_by_name,
     "find_neighbours": find_neighbours,
     "filter_by_metadata": filter_by_metadata,
     "get_chunks_by_doc_id": get_chunks_by_doc_id,
@@ -489,6 +522,8 @@ async def dispatch(
         return await graph_walk(graph_retriever, **tool_kwargs)
     if tool_name == "find_entity_by_id":
         return await find_entity_by_id(graph_retriever, **tool_kwargs)
+    if tool_name == "find_entity_by_name":
+        return await find_entity_by_name(graph_retriever, **tool_kwargs)
     if tool_name == "find_neighbours":
         return await find_neighbours(graph_retriever, **tool_kwargs)
     if tool_name == "get_chunks_by_doc_id":
