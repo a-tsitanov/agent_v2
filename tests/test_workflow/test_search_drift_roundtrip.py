@@ -21,6 +21,8 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from src.config import settings
 from src.workflow.contracts import (
+    DocumentsForCommunitiesParams,
+    DocumentsForCommunitiesResult,
     MapCommunitiesParams,
     MapCommunitiesResult,
     MapPartialParams,
@@ -36,6 +38,15 @@ from src.workflow.search.global_wf import GlobalSearchWorkflow
 @activity.defn(name="map_communities")
 async def _map_communities(p: MapCommunitiesParams) -> MapCommunitiesResult:
     return MapCommunitiesResult(communities=[])
+
+
+@activity.defn(name="documents_for_communities")
+async def _documents_for_communities(
+    p: DocumentsForCommunitiesParams,
+) -> DocumentsForCommunitiesResult:
+    # GlobalSearchWorkflow now resolves contributing communities → source
+    # docs; stub it (no graph) so this decode-regression test stays focused.
+    return DocumentsForCommunitiesResult(doc_ids=[])
 
 
 @activity.defn(name="map_community_partial")
@@ -69,6 +80,7 @@ async def test_global_drift_decodes_params_not_dict(monkeypatch):
             workflows=[GlobalSearchWorkflow],
             activities=[
                 _map_communities, _map_community_partial, _synthesize_answer,
+                _documents_for_communities,
             ],
             # Bypass the workflow sandbox: we're testing arg DECODING through
             # the pydantic converter, not sandbox safety.  The sandbox
