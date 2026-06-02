@@ -112,3 +112,34 @@ def test_simple_mode_custom_extract_prompt_overrides_default() -> None:
         MockLLM(), mode="simple", extract_prompt=custom,
     )
     assert "EXTRACT:" in extractor.extract_prompt.get_template()
+
+
+def test_ensure_entity_fulltext_index_idempotent_cypher_and_failopen():
+    from src.graph.index import (
+        ENTITY_FULLTEXT_INDEX_CYPHER,
+        ensure_entity_fulltext_index,
+    )
+
+    # Idempotent DDL on the entity name.
+    assert "CREATE FULLTEXT INDEX entity_name_fulltext IF NOT EXISTS" in (
+        ENTITY_FULLTEXT_INDEX_CYPHER
+    )
+    assert "ON EACH [e.name]" in ENTITY_FULLTEXT_INDEX_CYPHER
+
+    class _Store:
+        def __init__(self):
+            self.ran = None
+
+        def structured_query(self, cypher):
+            self.ran = cypher
+
+    store = _Store()
+    assert ensure_entity_fulltext_index(store) is True
+    assert store.ran == ENTITY_FULLTEXT_INDEX_CYPHER
+
+    class _BoomStore:
+        def structured_query(self, cypher):
+            raise RuntimeError("no fulltext support")
+
+    # Fail-open: returns False, never raises.
+    assert ensure_entity_fulltext_index(_BoomStore()) is False

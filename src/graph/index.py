@@ -31,6 +31,7 @@ from llama_index.core.indices.property_graph.utils import (
 )
 from llama_index.core.llms import LLM
 from llama_index.core.schema import TransformComponent
+from loguru import logger
 
 from src.graph.schema import (
     DEFAULT_VALIDATION_SCHEMA,
@@ -38,6 +39,28 @@ from src.graph.schema import (
     RelationType,
 )
 from src.retrieval._common import strip_thinking
+
+# Full-text index over entity names — backs partial-name lookup
+# (``GraphRetriever.afind_entities_by_name``).  Idempotent DDL, safe to
+# run repeatedly / concurrently.
+ENTITY_FULLTEXT_INDEX_CYPHER = (
+    "CREATE FULLTEXT INDEX entity_name_fulltext IF NOT EXISTS "
+    "FOR (e:__Entity__) ON EACH [e.name]"
+)
+
+
+def ensure_entity_fulltext_index(store) -> bool:
+    """Idempotently create the entity-name full-text index.
+
+    Returns True on success, False (logged) on any error — never raises,
+    so callers on the ingest / retriever-bootstrap paths stay fail-open
+    (a store without full-text support just keeps the old behaviour)."""
+    try:
+        store.structured_query(ENTITY_FULLTEXT_INDEX_CYPHER)
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_entity_fulltext_index failed: {e}", e=exc)
+        return False
 
 
 def _parse_triplets_strip_thinking(response: str, **kwargs):
