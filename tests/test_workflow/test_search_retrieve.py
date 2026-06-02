@@ -138,6 +138,7 @@ async def test_graph_walk_seeded_from_top_entity(_patch_deps, monkeypatch):
     rec = _DispatchRecorder({
         "vector_search": _result([_node("v1")], "[]"),
         "graph_search": _result([_node("g1")], _gs_obs(["Иванов", "Петров"])),
+        "find_entity_by_name": _result([], _gs_obs([])),
         "graph_walk": _result([_node("w1"), _node("g1")], _gs_obs(["Иванов"])),
     })
     monkeypatch.setattr(atomic_tools, "dispatch", rec)
@@ -160,6 +161,7 @@ async def test_no_graph_walk_when_flag_off(_patch_deps, monkeypatch):
     rec = _DispatchRecorder({
         "vector_search": _result([_node("v1")], "[]"),
         "graph_search": _result([_node("g1")], _gs_obs(["Иванов"])),
+        "find_entity_by_name": _result([], _gs_obs([])),
     })
     monkeypatch.setattr(retrieve_mod.atomic_tools, "dispatch", rec)
     monkeypatch.setattr(retrieve_mod.settings.agent, "graph_walk_enabled", False)
@@ -175,6 +177,7 @@ async def test_no_graph_walk_when_no_entities(_patch_deps, monkeypatch):
     rec = _DispatchRecorder({
         "vector_search": _result([_node("v1")], "[]"),
         "graph_search": _result([_node("g1")], _gs_obs([])),
+        "find_entity_by_name": _result([], _gs_obs([])),
     })
     monkeypatch.setattr(retrieve_mod.atomic_tools, "dispatch", rec)
     monkeypatch.setattr(retrieve_mod.settings.agent, "graph_walk_enabled", True)
@@ -190,6 +193,7 @@ async def test_graph_walk_failure_is_fail_open(_patch_deps, monkeypatch):
     rec = _DispatchRecorder({
         "vector_search": _result([_node("v1")], "[]"),
         "graph_search": _result([_node("g1")], _gs_obs(["Иванов"])),
+        "find_entity_by_name": _result([], _gs_obs([])),
         "graph_walk": RuntimeError("neo4j down"),
     })
     monkeypatch.setattr(retrieve_mod.atomic_tools, "dispatch", rec)
@@ -200,3 +204,11 @@ async def test_graph_walk_failure_is_fail_open(_patch_deps, monkeypatch):
 
     assert any(c[0] == "graph_walk" for c in rec.calls)
     assert {s.chunk_id for s in res.sources} == {"v1", "g1"}
+
+
+def test_pipeline_includes_find_entity_by_name():
+    from src.workflow.search.activities.retrieve import _PIPELINE, ALLOWED_TOOLS
+
+    assert "find_entity_by_name" in _PIPELINE
+    assert _PIPELINE.index("find_entity_by_name") > _PIPELINE.index("graph_search")
+    assert "find_entity_by_name" in ALLOWED_TOOLS

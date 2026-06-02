@@ -37,12 +37,17 @@ from src.workflow.contracts import RetrieveParams, RetrieveResult
 # from the TOP graph_search entity (``top_entity_name`` + the seed block
 # in the activity body), flag-gated by
 # ``settings.agent.graph_walk_enabled`` and fail-open.
-_PIPELINE = ("vector_search", "graph_search")
+_PIPELINE = ("vector_search", "graph_search", "find_entity_by_name")
 
 # Tools this deterministic activity is ALLOWED to dispatch (default
 # pipeline + the explicitly-bounded multi-hop walk available for the
 # connection-aware path). Kept as the contract surface for R3 wiring.
-ALLOWED_TOOLS = ("vector_search", "graph_search", "graph_walk")
+ALLOWED_TOOLS = (
+    "vector_search",
+    "graph_search",
+    "find_entity_by_name",
+    "graph_walk",
+)
 
 
 def top_entity_name(observation: str) -> str | None:
@@ -95,6 +100,7 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
             collected.append(n)
 
     graph_search_obs: str | None = None
+    find_name_obs: str | None = None
 
     for tool_name in _PIPELINE:
         try:
@@ -113,15 +119,19 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
             continue
         if tool_name == "graph_search":
             graph_search_obs = result.observation
+        if tool_name == "find_entity_by_name":
+            find_name_obs = result.observation
         _merge_sources(result.sources)
 
     # R3b: deterministically seed the bounded multi-hop graph_walk from
     # the TOP graph_search entity. FAIL-OPEN — any error (parse failure,
     # store error, missing seed) just skips the walk and returns the
     # vector + graph_search results unchanged; never raises.
-    if settings.agent.graph_walk_enabled and graph_search_obs is not None:
+    seed_obs = graph_search_obs if graph_search_obs is not None else find_name_obs
+    if settings.agent.graph_walk_enabled and seed_obs is not None:
         try:
-            start = top_entity_name(graph_search_obs)
+            start = top_entity_name(graph_search_obs or "") \
+                or top_entity_name(find_name_obs or "")
             if start:
                 walk = await atomic_tools.dispatch(
                     "graph_walk",
