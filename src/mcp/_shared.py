@@ -65,6 +65,33 @@ def is_valid_key(provided: str) -> bool:
     return provided in settings.api.keys_list
 
 
+def build_sse_auth() -> Any:
+    """Build a FastMCP auth provider for HTTP/SSE transports.
+
+    Returns a ``StaticTokenVerifier`` seeded with the configured API
+    keys when ``KB_MCP_REQUIRE_AUTH`` is on and keys exist; otherwise
+    ``None`` (auth disabled — stdio/desktop usage).  The verifier
+    validates the incoming ``Authorization: Bearer <key>`` header
+    against the configured key set.  Enforced only on HTTP/SSE
+    transports; stdio is unaffected.
+    """
+    require = os.environ.get(
+        "KB_MCP_REQUIRE_AUTH", "true",
+    ).lower() not in {"0", "false", "no"}
+    if not require:
+        return None
+    keys = settings.api.keys_list
+    if not keys:
+        return None
+    from fastmcp.server.auth import StaticTokenVerifier
+    return StaticTokenVerifier(
+        tokens={
+            k: {"sub": "kb-mcp-client", "client_id": "kb"}
+            for k in keys
+        },
+    )
+
+
 def log_banner(server_name: str, transport: str, host: str, port: int) -> None:
     if transport == "stdio":
         logger.info("MCP server '{n}' starting  transport=stdio", n=server_name)
