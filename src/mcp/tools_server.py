@@ -45,7 +45,7 @@ mcp = FastMCP(
         "yourself in your own LLM loop.  For an already-orchestrated "
         "answer, use the sibling MCP-1 server (kb_search) instead."
     ),
-    auth=build_sse_auth(),
+    auth=build_sse_auth(),  # evaluated at import time; see build_sse_auth docstring
 )
 
 

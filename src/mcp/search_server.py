@@ -43,7 +43,7 @@ mcp = FastMCP(
         "question, retrieves per sub-question in parallel over vector "
         "+ graph, then synthesises a Russian answer with citations."
     ),
-    auth=build_sse_auth(),
+    auth=build_sse_auth(),  # evaluated at import time; see build_sse_auth docstring
 )
 
 

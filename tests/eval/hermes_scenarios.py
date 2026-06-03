@@ -55,7 +55,10 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         name="surrounding_context",
         user_turn="Покажи раздел целиком, откуда это.",
-        history=("Какой порядок согласования отпуска?",),
+        history=(
+            "Какой порядок согласования отпуска?",
+            "Согласно регламенту [doc_id=HR-0042], отпуск согласуется … ",
+        ),
         expected_tool="get_chunks_by_doc_id",
         expected_template="factual",
     ),
@@ -77,7 +80,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         name="entity_dossier",
         user_turn="Расскажи всё, что у нас есть про Иванова И.И.",  # noqa: RUF001
         history=(),
-        expected_tool="find_neighbours",
+        expected_tool="find_neighbours",  # graph_search also acceptable per SKILL.md dossier template
         expected_template="dossier",
     ),
     Scenario(
