@@ -37,3 +37,4 @@ def test_build_sse_auth_builds_verifier_with_keys(monkeypatch):
     assert isinstance(auth, StaticTokenVerifier)
     assert "secret-key" in auth.tokens
     assert "k2" in auth.tokens
+    assert auth.tokens["secret-key"]["client_id"] == "kb"
