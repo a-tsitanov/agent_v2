@@ -1,0 +1,22 @@
+# Example snippet for ~/.hermes/config.yaml — registers the two
+# kb-llamaindex MCP servers with Hermes Agent over SSE.
+# Replace <kb-host> with the host running the SSE services and set
+# KB_API_KEY in the Hermes process environment.
+mcp_servers:
+  kbtools:
+    url: "http://<kb-host>:9002/sse"
+    headers:
+      Authorization: "Bearer ${KB_API_KEY}"
+    tools:
+      include: [vector_search, graph_search, find_entity_by_id,
+                find_neighbours, get_chunks_by_doc_id, read_full_document]
+      prompts: false
+      resources: false
+  kbsearch:
+    url: "http://<kb-host>:9001/sse"
+    headers:
+      Authorization: "Bearer ${KB_API_KEY}"
+    tools:
+      include: [kb_search]
+      prompts: false
+      resources: false
