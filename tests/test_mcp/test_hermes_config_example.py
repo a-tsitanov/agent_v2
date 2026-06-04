@@ -12,7 +12,9 @@ _CFG = Path("integrations/hermes/config.example.yaml")
 _KBTOOLS_INCLUDE = {
     "vector_search",
     "graph_search",
+    "graph_walk",
     "find_entity_by_id",
+    "find_entity_by_name",
     "find_neighbours",
     "get_chunks_by_doc_id",
     "read_full_document",

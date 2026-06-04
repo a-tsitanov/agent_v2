@@ -2,18 +2,27 @@
 # kb-llamaindex MCP servers with Hermes Agent over SSE.
 # Replace <kb-host> with the host running the SSE services and set
 # KB_API_KEY in the Hermes process environment.
+#
+# `timeout` is the client-side wait cap in milliseconds (FastMCP MCP
+# client convention). It is set to 1_800_000 ms (30 min) to match the
+# servers' per-tool `@mcp.tool(timeout=1800)` execution cap, so a long
+# graph walk or kb_search isn't aborted by the client first. Lower it
+# if your deployment never runs calls that long.
 mcp_servers:
   kbtools:
     url: "http://<kb-host>:9002/sse"
+    timeout: 1800000
     headers:
       Authorization: "Bearer ${KB_API_KEY}"
     tools:
-      include: [vector_search, graph_search, find_entity_by_id,
-                find_neighbours, get_chunks_by_doc_id, read_full_document]
+      include: [vector_search, graph_search, graph_walk,
+                find_entity_by_id, find_entity_by_name, find_neighbours,
+                get_chunks_by_doc_id, read_full_document]
       prompts: false
       resources: false
   kbsearch:
     url: "http://<kb-host>:9001/sse"
+    timeout: 1800000
     headers:
       Authorization: "Bearer ${KB_API_KEY}"
     tools:

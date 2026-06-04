@@ -1,6 +1,6 @@
 """Smoke tests for the MCP-2 atomic tools server.
 
-Verifies the 6 atomic tools are exposed with the right names and
+Verifies the 8 atomic tools are exposed with the right names and
 descriptions; deeper behaviour is already covered by the
 atomic_tools unit suite.
 """
@@ -13,7 +13,9 @@ import pytest
 _EXPECTED_TOOLS = {
     "vector_search",
     "graph_search",
+    "graph_walk",
     "find_entity_by_id",
+    "find_entity_by_name",
     "find_neighbours",
     "get_chunks_by_doc_id",
     "read_full_document",

@@ -93,13 +93,29 @@ SCENARIOS: tuple[Scenario, ...] = (
         expected_tool="find_entity_by_id",
         expected_template="factual",
     ),
+    Scenario(
+        name="fuzzy_name_lookup",
+        user_turn="Найди всех Ивановых в базе.",
+        history=(),
+        expected_tool="find_entity_by_name",
+        expected_template="what_we_know",
+    ),
+    Scenario(
+        name="connection_chain_walk",
+        user_turn="Как ООО «Ромашка» транзитивно связано с Петровым?",  # noqa: RUF001
+        history=(),
+        expected_tool="graph_walk",
+        expected_template="what_we_know",
+    ),
 )
 
 # Every tool branch the skill documents must be exercised by ≥1 scenario.
 _REQUIRED_TOOL_COVERAGE = {
     "vector_search",
     "graph_search",
+    "graph_walk",
     "find_entity_by_id",
+    "find_entity_by_name",
     "find_neighbours",
     "get_chunks_by_doc_id",
     "read_full_document",

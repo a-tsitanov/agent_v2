@@ -1,10 +1,17 @@
 """MCP-2: atomic retrieval tools.
 
-Exposes the 7 raw retrieval functions from
+Exposes 8 of the raw retrieval functions from
 ``src/retrieval/atomic_tools.py`` directly as MCP tools — no
-Temporal workflow in between.  Used when the MCP client (an LLM
-running in Claude Desktop / Cursor / OpenWebUI) wants to drive its
-own ReAct loop and just needs primitives.
+Temporal workflow in between (``filter_by_metadata`` is intentionally
+omitted; it operates on an in-process accumulator that stateless
+tool-call clients don't maintain).  Used when the MCP client (an LLM
+running in Hermes Agent / Claude Desktop / Cursor / OpenWebUI) wants
+to drive its own ReAct loop and just needs primitives.
+
+Every tool carries an 1800s (30 min) execution timeout (FastMCP
+``@mcp.tool(timeout=...)``, seconds) so a slow graph walk or cold
+retriever can't hang a client indefinitely, while still letting the
+heaviest legitimate calls finish.
 
 GPU/LLM protection: the project ``BoundedLLM`` semaphore (in DI,
 ``settings.agent.llm_max_concurrent``) gates every LLM call —
@@ -127,7 +134,7 @@ async def _c():
 # ── MCP tools (one per atomic_tools.* function) ────────────────────
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
 async def vector_search(query: str, top_k: int = 10) -> dict[str, Any]:
     """Hybrid (BM25 + dense vector + RRF) retrieval over the project
     corpus.  Returns the top_k matching chunks with text + metadata.
@@ -136,7 +143,7 @@ async def vector_search(query: str, top_k: int = 10) -> dict[str, Any]:
     return {"sources": json.loads(r.observation)}
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
 async def graph_search(query: str, depth: int = 2) -> dict[str, Any]:
     """Walk the knowledge graph around the query.  Returns entities
     and relations found in the KG (and adds matched chunks to the
@@ -146,7 +153,24 @@ async def graph_search(query: str, depth: int = 2) -> dict[str, Any]:
     return json.loads(r.observation)
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
+async def graph_walk(
+    start_entity: str, hops: int = 2, rel_filter: list[str] | None = None,
+) -> dict[str, Any]:
+    """Bounded multi-hop traversal from a KNOWN entity.  Unlike
+    `graph_search` (similarity, one hop), this follows actual
+    relationships outward up to `hops` (hard-capped).  Use for
+    connection / chain questions — "who is transitively connected to
+    X", "what links X and Y".  Optionally restrict to `rel_filter`
+    relationship types.  Returns entities + relations."""
+    r = await atomic_tools.graph_walk(
+        await _g(), start_entity=start_entity, hops=hops,
+        rel_filter=rel_filter,
+    )
+    return json.loads(r.observation)
+
+
+@mcp.tool(timeout=1800)
 async def find_entity_by_id(
     name: str, entity_type: str | None = None,
 ) -> dict[str, Any]:
@@ -158,7 +182,22 @@ async def find_entity_by_id(
     return json.loads(r.observation)
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
+async def find_entity_by_name(
+    query: str, limit: int = 10,
+) -> dict[str, Any]:
+    """Find entities whose NAME matches the query via the full-text
+    index — partial-name tolerant ("Иванов" → "Иванов Иван
+    Иванович").  Complements the exact `find_entity_by_id` and the
+    similarity `graph_search`; use when you have a (possibly partial)
+    name rather than an exact identifier.  Returns entity rows only."""
+    r = await atomic_tools.find_entity_by_name(
+        await _g(), query=query, limit=limit,
+    )
+    return json.loads(r.observation)
+
+
+@mcp.tool(timeout=1800)
 async def find_neighbours(
     entity_name: str, hops: int = 1,
 ) -> dict[str, Any]:
@@ -170,7 +209,7 @@ async def find_neighbours(
     return json.loads(r.observation)
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
 async def get_chunks_by_doc_id(
     doc_id: str, limit: int = 50, offset: int = 0,
 ) -> dict[str, Any]:
@@ -187,7 +226,7 @@ async def get_chunks_by_doc_id(
         return {"error": r.observation}
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
 async def read_full_document(
     doc_id: str, max_chars: int = 20000,
 ) -> dict[str, Any]:

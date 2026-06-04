@@ -21,9 +21,16 @@ Pick the tool by the *shape* of the question, not by habit:
 - **Known exact identifier** (E.164 phone, INN, OGRN, SNILS, email) →
   `find_entity_by_id(name, entity_type=None)`. Use when the user already names a
   precise identifier.
+- **Partial / fuzzy name** ("Иванов", "ООО Ромаш…", a surname only) →
+  `find_entity_by_name(query, limit=10)`. Full-text, partial-name tolerant —
+  use to resolve a name into canonical entities before drilling in.
 - **Relationships** ("who is connected to X", "X's surroundings", "X's owner") →
   `find_neighbours(entity_name, hops=1)` for a direct walk, or
   `graph_search(query, depth=2)` when the entity isn't pinned yet.
+- **Connection chains from a known entity** ("how is X transitively linked to Y",
+  "trace X's network N hops out") → `graph_walk(start_entity, hops=2,
+  rel_filter=None)`. Follows actual relationships outward (bounded); use when one
+  hop isn't enough and you already have a starting entity.
 - **Factual / semantic question** → `vector_search(query, top_k=10)`. If a hit
   needs surrounding context within its source, follow up with
   `get_chunks_by_doc_id(doc_id, limit, offset)`.
