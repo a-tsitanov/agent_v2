@@ -1,45 +1,49 @@
 """Smoke tests for the MCP-1 search server.
 
 We don't talk to a real Temporal cluster here — only assert that:
-  * `_list_tools` exposes exactly the kb_search tool with the right
-    name + description excerpt,
-  * the tool's input schema exposes the `query` parameter (R7b: the
-    server now submits the plan-execute ``SearchOrchestratorWorkflow``,
-    a local-only flow with no `mode` selector),
+  * `_list_tools` exposes the four orchestrated search tools (kb_search
+    + kb_global_search + kb_drift_search + kb_auto_search) with the
+    right names + description excerpt,
+  * each tool's input schema exposes the `query` parameter and no legacy
+    `mode` selector (R7b: the local flow submits the plan-execute
+    ``SearchOrchestratorWorkflow``),
   * the auth gate fails when KB_MCP_REQUIRE_AUTH=true and no API_KEYS
     is set.
 """
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-
-@pytest.mark.asyncio
-async def test_search_server_lists_kb_search_tool():
-    from src.mcp import search_server
-    tools = await search_server.mcp._list_tools()
-    names = [t.name for t in tools]
-    assert names == ["kb_search"]
-    desc = tools[0].description
-    assert "knowledge base" in desc.lower()
-    # The mode parameter shows up in the JSON-schema, not necessarily
-    # in the first line of the docstring (which fastmcp uses as the
-    # tool description summary).
+_EXPECTED_SEARCH_TOOLS = {
+    "kb_search",
+    "kb_global_search",
+    "kb_drift_search",
+    "kb_auto_search",
+}
 
 
 @pytest.mark.asyncio
-async def test_kb_search_schema_includes_query_param():
+async def test_search_server_lists_all_search_tools():
     from src.mcp import search_server
     tools = await search_server.mcp._list_tools()
-    schema = tools[0].parameters
-    props = schema.get("properties", {})
+    by_name = {t.name: t for t in tools}
+    assert set(by_name) == _EXPECTED_SEARCH_TOOLS
+    assert "knowledge base" in by_name["kb_search"].description.lower()
+    assert "global" in by_name["kb_global_search"].description.lower()
+
+
+@pytest.mark.asyncio
+async def test_search_tools_schema_includes_query_param():
+    from src.mcp import search_server
+    tools = await search_server.mcp._list_tools()
+    by_name = {t.name: t for t in tools}
     # R7b: orchestrator is local-only — `mode` is gone; `query` is the
-    # required input.
-    assert "query" in props
-    assert "mode" not in props
+    # required input on every search tool.
+    for name in _EXPECTED_SEARCH_TOOLS:
+        props = by_name[name].parameters.get("properties", {})
+        assert "query" in props, f"{name} missing query param"
+        assert "mode" not in props, f"{name} should not expose mode"
 
 
 def test_auth_gate_blocks_when_keys_missing(monkeypatch):

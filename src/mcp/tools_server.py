@@ -136,8 +136,15 @@ async def _c():
 
 @mcp.tool(timeout=1800)
 async def vector_search(query: str, top_k: int = 10) -> dict[str, Any]:
-    """Hybrid (BM25 + dense vector + RRF) retrieval over the project
-    corpus.  Returns the top_k matching chunks with text + metadata.
+    """Hybrid (BM25 + dense vector + RRF) semantic search over document
+    chunks. Returns the top_k matching chunks with text + metadata.
+
+    USE FOR: factual / "what / how / why" questions answered by the text
+    of documents. This is the default for content questions.
+    NOT FOR: entity lookup or relationships — use the graph tools
+    (`graph_search`, `find_entity_by_*`, `find_neighbours`, `graph_walk`).
+    NEXT STEP: to read more around a good hit, call `get_chunks_by_doc_id`
+    with its `doc_id`.
     """
     r = await atomic_tools.vector_search(await _r(), query=query, top_k=top_k)
     return {"sources": json.loads(r.observation)}
@@ -145,10 +152,15 @@ async def vector_search(query: str, top_k: int = 10) -> dict[str, Any]:
 
 @mcp.tool(timeout=1800)
 async def graph_search(query: str, depth: int = 2) -> dict[str, Any]:
-    """Walk the knowledge graph around the query.  Returns entities
-    and relations found in the KG (and adds matched chunks to the
-    in-process accumulator).  When Neo4j is unavailable returns
-    empty lists rather than failing."""
+    """Similarity search over the knowledge graph from a free-text query
+    (≈1 hop). Returns entities + relations found in the KG.
+
+    USE FOR: graph / relationship questions when you have NO specific
+    entity pinned yet — discovery ("что в графе связано с темой X").
+    PREFER INSTEAD: `find_entity_by_id` (you have an exact identifier),
+    `find_entity_by_name` (you have a partial name), `find_neighbours`
+    (you have a known entity, want 1 hop), `graph_walk` (known entity,
+    multi-hop chains). Returns empty lists if Neo4j is unavailable."""
     r = await atomic_tools.graph_search(await _g(), query=query, depth=depth)
     return json.loads(r.observation)
 
@@ -157,12 +169,14 @@ async def graph_search(query: str, depth: int = 2) -> dict[str, Any]:
 async def graph_walk(
     start_entity: str, hops: int = 2, rel_filter: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Bounded multi-hop traversal from a KNOWN entity.  Unlike
-    `graph_search` (similarity, one hop), this follows actual
-    relationships outward up to `hops` (hard-capped).  Use for
-    connection / chain questions — "who is transitively connected to
-    X", "what links X and Y".  Optionally restrict to `rel_filter`
-    relationship types.  Returns entities + relations."""
+    """Bounded MULTI-hop traversal following real relationships outward
+    from a KNOWN start entity (hard-capped nodes / edges / hops).
+
+    USE FOR: transitive connection / chain questions — "how is X linked
+    to Y", "trace X's network N hops out". Optionally restrict to
+    `rel_filter` relationship types. Returns entities + relations.
+    NOT FOR: a single hop (use `find_neighbours`) or discovery without a
+    start entity (use `graph_search` / `find_entity_by_name` first)."""
     r = await atomic_tools.graph_walk(
         await _g(), start_entity=start_entity, hops=hops,
         rel_filter=rel_filter,
@@ -174,8 +188,13 @@ async def graph_walk(
 async def find_entity_by_id(
     name: str, entity_type: str | None = None,
 ) -> dict[str, Any]:
-    """Exact lookup by canonical name (E.164 phone, INN, email,
-    SNILS, OGRN, …).  Use when you already know the identifier."""
+    """Exact pinpoint lookup by a precise identifier or canonical name
+    (E.164 phone, INN, OGRN, SNILS, email, exact entity name).
+
+    USE FOR: "whose number is +7…", "find INN 7707…" — when the user
+    gives an exact identifier. One entity expected.
+    PREFER INSTEAD: `find_entity_by_name` when you only have a partial /
+    approximate name; `graph_search` for non-name semantic queries."""
     r = await atomic_tools.find_entity_by_id(
         await _g(), name=name, entity_type=entity_type,
     )
@@ -186,11 +205,15 @@ async def find_entity_by_id(
 async def find_entity_by_name(
     query: str, limit: int = 10,
 ) -> dict[str, Any]:
-    """Find entities whose NAME matches the query via the full-text
-    index — partial-name tolerant ("Иванов" → "Иванов Иван
-    Иванович").  Complements the exact `find_entity_by_id` and the
-    similarity `graph_search`; use when you have a (possibly partial)
-    name rather than an exact identifier.  Returns entity rows only."""
+    """Fuzzy / partial NAME search via the full-text index ("Иванов" →
+    "Иванов Иван Иванович"; "Ромаш" → "ООО Ромашка").
+
+    USE FOR: resolving an approximate / partial name into canonical
+    entities — usually the first step before drilling in with
+    `find_neighbours` or `graph_walk`.
+    PREFER INSTEAD: `find_entity_by_id` for an exact identifier;
+    `graph_search` for non-name semantic queries. Returns entity rows
+    only (no chunks)."""
     r = await atomic_tools.find_entity_by_name(
         await _g(), query=query, limit=limit,
     )
@@ -201,8 +224,13 @@ async def find_entity_by_name(
 async def find_neighbours(
     entity_name: str, hops: int = 1,
 ) -> dict[str, Any]:
-    """Walk the graph 1-2 hops around an entity.  Returns the
-    entity's neighbours + relations."""
+    """Immediate (1-hop) neighbours + relations of a KNOWN entity.
+
+    USE FOR: "who / what is directly connected to X", and as the core
+    of an entity dossier.
+    PREFER INSTEAD: `graph_walk` for multi-hop / transitive chains;
+    `graph_search` if the entity isn't pinned down yet; `find_entity_*`
+    to resolve the entity first."""
     r = await atomic_tools.find_neighbours(
         await _g(), entity_name=entity_name, hops=hops,
     )
@@ -213,9 +241,13 @@ async def find_neighbours(
 async def get_chunks_by_doc_id(
     doc_id: str, limit: int = 50, offset: int = 0,
 ) -> dict[str, Any]:
-    """Fetch all chunks of one document by `doc_id`, ordered by
-    position.  Paginated via `limit`/`offset`.  Useful when a
-    vector hit needs surrounding context within the same source."""
+    """Fetch chunks of ONE document by `doc_id`, in position order,
+    paginated via `limit` / `offset`.
+
+    USE FOR: expanding context around a `vector_search` hit within the
+    same source, or reading a document chunk-by-chunk.
+    REQUIRES: a `doc_id` you already have (from `vector_search` or graph
+    results). For the whole raw file at once, see `read_full_document`."""
     r = await atomic_tools.get_chunks_by_doc_id(
         await _c(), doc_id=doc_id, limit=limit, offset=offset,
     )
@@ -230,10 +262,14 @@ async def get_chunks_by_doc_id(
 async def read_full_document(
     doc_id: str, max_chars: int = 20000,
 ) -> dict[str, Any]:
-    """Raw text of the original uploaded file (pre-chunk,
-    pre-translation), capped at `max_chars`.  Use only when
-    chunk-level retrieval can't surface what you need (tables,
-    code, short docs)."""
+    """Raw full text of the original uploaded file (pre-chunk,
+    pre-translation), capped at `max_chars`.
+
+    USE FOR: tables, code, or short documents where chunk-level
+    retrieval splits content badly.
+    REQUIRES: a `doc_id`. For large documents prefer
+    `get_chunks_by_doc_id` (this returns one big blob, truncated at
+    `max_chars`)."""
     r = await atomic_tools.read_full_document(
         await _c(), doc_id=doc_id, max_chars=max_chars,
     )

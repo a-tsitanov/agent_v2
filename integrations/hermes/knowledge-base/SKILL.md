@@ -36,10 +36,20 @@ Pick the tool by the *shape* of the question, not by habit:
   `get_chunks_by_doc_id(doc_id, limit, offset)`.
 - **Need the raw full text** (tables, code, short documents that chunking splits
   badly) → `read_full_document(doc_id, max_chars=20000)`.
-- **Hard multi-hop question** you cannot resolve in 2–3 atomic calls → escalate to
-  `kb_search(query)`. It runs the full plan-execute-synthesize workflow and
-  returns an answer with `citations` and `uncertainties`. Treat it as the
-  expensive escape hatch, not the default.
+- **Hard multi-hop / specific question** you cannot resolve in 2–3 atomic calls →
+  escalate to `kb_search(query)` (local plan-execute-synthesize). Returns an
+  answer with `citations` and `uncertainties`. The expensive escape hatch for a
+  *specific* question — not the default.
+- **Broad / thematic question about the whole corpus** ("main risks across all
+  contracts", "recurring themes") → `kb_global_search(query)`. GraphRAG
+  map-reduce over community summaries; reasons over the corpus, not single docs.
+- **Needs both specific detail AND corpus-wide context** → `kb_drift_search(query)`
+  (local seed + global expansion). The heaviest mode.
+- **Unsure which of the above fits** → `kb_auto_search(query)` lets a router pick
+  local / global / drift (falls back to local on doubt).
+
+These four `kb_*search` tools are orchestrated and expensive (up to ~30 min) —
+reach for the atomic tools first; escalate only when a single primitive won't do.
 
 **Canonical anchor:** the local Wikibase is the source of truth for entity
 identity. When names conflict, trust the canonical name returned by the graph

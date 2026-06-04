@@ -33,7 +33,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         name="relationship_walk",
-        user_turn="Кто связан с ООО «Ромашка»?",  # noqa: RUF001
+        user_turn="Кто связан с ООО «Ромашка»?",
         history=(),
         expected_tool="find_neighbours",
         expected_template="what_we_know",
@@ -71,23 +71,23 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         name="hard_multihop_escalation",
-        user_turn="Сравни условия трёх договоров с этим контрагентом и найди расхождения.",  # noqa: RUF001
+        user_turn="Сравни условия трёх договоров с этим контрагентом и найди расхождения.",
         history=(),
         expected_tool="kb_search",
         expected_template="factual",
     ),
     Scenario(
         name="entity_dossier",
-        user_turn="Расскажи всё, что у нас есть про Иванова И.И.",  # noqa: RUF001
+        user_turn="Расскажи всё, что у нас есть про Иванова И.И.",
         history=(),
         expected_tool="find_neighbours",  # graph_search also acceptable per SKILL.md dossier template
         expected_template="dossier",
     ),
     Scenario(
         name="multiturn_followup",
-        user_turn="А его телефон?",  # noqa: RUF001
+        user_turn="А его телефон?",
         history=(
-            "Расскажи всё, что у нас есть про Иванова И.И.",  # noqa: RUF001
+            "Расскажи всё, что у нас есть про Иванова И.И.",
             "Иванов Иван Иванович, менеджер, …",
         ),
         expected_tool="find_entity_by_id",
@@ -102,7 +102,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         name="connection_chain_walk",
-        user_turn="Как ООО «Ромашка» транзитивно связано с Петровым?",  # noqa: RUF001
+        user_turn="Как ООО «Ромашка» транзитивно связано с Петровым?",
         history=(),
         expected_tool="graph_walk",
         expected_template="what_we_know",
