@@ -151,10 +151,14 @@ async def vector_search(query: str, top_k: int = 10) -> dict[str, Any]:
 
 
 @mcp.tool(timeout=1800)
-async def graph_search(query: str, depth: int = 2) -> dict[str, Any]:
-    """Similarity search over the knowledge graph from a free-text query
-    (≈1 hop). Returns entities + relations found in the KG.
+async def graph_search(query: str, depth: int = 1) -> dict[str, Any]:
+    """Similarity search over the knowledge graph from a free-text query.
+    Returns matched entities + their neighbours up to `depth` triplet-hops
+    + related chunks.
 
+    `depth` controls neighbour expansion (1-3, default 1): 1 = matched
+    nodes + immediate relations; raise for wider context (more nodes /
+    tokens / latency).
     USE FOR: graph / relationship questions when you have NO specific
     entity pinned yet — discovery ("что в графе связано с темой X").
     PREFER INSTEAD: `find_entity_by_id` (you have an exact identifier),
@@ -224,13 +228,15 @@ async def find_entity_by_name(
 async def find_neighbours(
     entity_name: str, hops: int = 1,
 ) -> dict[str, Any]:
-    """Immediate (1-hop) neighbours + relations of a KNOWN entity.
+    """Neighbours + relations of a KNOWN entity, up to `hops` triplet-hops.
 
-    USE FOR: "who / what is directly connected to X", and as the core
-    of an entity dossier.
-    PREFER INSTEAD: `graph_walk` for multi-hop / transitive chains;
-    `graph_search` if the entity isn't pinned down yet; `find_entity_*`
-    to resolve the entity first."""
+    `hops` controls neighbour depth (1-3, default 1 = immediate). Raising
+    it widens context (more nodes / tokens / latency).
+    USE FOR: "who / what is connected to X", and as the core of an entity
+    dossier.
+    PREFER INSTEAD: `graph_walk` for deterministic edge-following with
+    rel-type filtering; `graph_search` if the entity isn't pinned down
+    yet; `find_entity_*` to resolve the entity first."""
     r = await atomic_tools.find_neighbours(
         await _g(), entity_name=entity_name, hops=hops,
     )

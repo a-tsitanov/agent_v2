@@ -26,11 +26,15 @@ Pick the tool by the *shape* of the question, not by habit:
   use to resolve a name into canonical entities before drilling in.
 - **Relationships** ("who is connected to X", "X's surroundings", "X's owner") →
   `find_neighbours(entity_name, hops=1)` for a direct walk, or
-  `graph_search(query, depth=2)` when the entity isn't pinned yet.
+  `graph_search(query, depth=1)` when the entity isn't pinned yet. Both take a
+  neighbour-depth knob (`hops` / `depth`, 1-3, default 1): raise to 2-3 to pull
+  wider context when 1 hop misses the connection — at the cost of more nodes,
+  tokens, and latency.
 - **Connection chains from a known entity** ("how is X transitively linked to Y",
   "trace X's network N hops out") → `graph_walk(start_entity, hops=2,
-  rel_filter=None)`. Follows actual relationships outward (bounded); use when one
-  hop isn't enough and you already have a starting entity.
+  rel_filter=None)`. Deterministic edge-following (bounded ≤3 hops); use when you
+  want explicit transitive paths from a starting entity, optionally filtered by
+  relationship type.
 - **Factual / semantic question** → `vector_search(query, top_k=10)`. If a hit
   needs surrounding context within its source, follow up with
   `get_chunks_by_doc_id(doc_id, limit, offset)`.

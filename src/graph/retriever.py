@@ -33,6 +33,11 @@ GRAPH_WALK_MAX_HOPS = 3
 GRAPH_WALK_NODE_CAP = 50
 GRAPH_WALK_EDGE_CAP = 100
 
+# Hard ceiling for the similarity-path retriever's ``path_depth`` (how
+# many triplet-hops of neighbours ``aretrieve`` pulls around each matched
+# entity). Bounds rel-map blow-up the same way the walk caps bound awalk.
+GRAPH_PATH_DEPTH_MAX = 3
+
 
 @dataclass
 class RoundGraphData:
@@ -133,11 +138,20 @@ class GraphRetriever:
         path_depth: int = 1,
         include_text: bool = True,
     ) -> None:
+        self._pg_index = pg_index
+        self._similarity_top_k = similarity_top_k
+        self._include_text = include_text
+        self._default_path_depth = path_depth
         self._retriever = pg_index.as_retriever(
             similarity_top_k=similarity_top_k,
             path_depth=path_depth,
             include_text=include_text,
         )
+        # Lazily-built retrievers keyed by clamped path_depth so a
+        # per-call depth doesn't rebuild on every request. The default
+        # is pre-seeded. Construction is cheap (no LLM/vector I/O — that
+        # happens in ``aretrieve``).
+        self._retrievers: dict[int, object] = {path_depth: self._retriever}
         # Underlying store handle for the bounded N-hop ``awalk`` (R3).
         # ``structured_query`` is the generic Cypher entry on
         # Neo4jPropertyGraphStore (same one ER uses). None for stores
@@ -145,10 +159,33 @@ class GraphRetriever:
         self._graph_store = getattr(
             pg_index, "property_graph_store", None,
         )
-        self._similarity_top_k = similarity_top_k
 
-    async def aretrieve(self, query: str) -> RoundGraphData:
-        nodes = await self._retriever.aretrieve(query)
+    def _retriever_for(self, path_depth: int):
+        """Return a retriever configured for ``path_depth`` (clamped to
+        ``[1, GRAPH_PATH_DEPTH_MAX]``), building + caching on first use."""
+        pd = max(1, min(int(path_depth), GRAPH_PATH_DEPTH_MAX))
+        r = self._retrievers.get(pd)
+        if r is None:
+            r = self._pg_index.as_retriever(
+                similarity_top_k=self._similarity_top_k,
+                path_depth=pd,
+                include_text=self._include_text,
+            )
+            self._retrievers[pd] = r
+        return r
+
+    async def aretrieve(
+        self, query: str, *, path_depth: int | None = None,
+    ) -> RoundGraphData:
+        """Similarity retrieval over the KG. ``path_depth`` overrides how
+        many triplet-hops of neighbours are pulled around each matched
+        entity (None ⇒ the retriever's default, clamped ≤
+        ``GRAPH_PATH_DEPTH_MAX``)."""
+        retriever = (
+            self._retriever if path_depth is None
+            else self._retriever_for(path_depth)
+        )
+        nodes = await retriever.aretrieve(query)
         out = RoundGraphData()
         for n in nodes:
             text = n.node.get_content() or ""
