@@ -17,6 +17,7 @@
 - [`search-usage.md`](search-usage.md) — текущие режимы `/search/{local,global,drift,auto}`, параметры, тюнинг
 - [`multimodel.md`](multimodel.md) — откуда берётся search-role LLM
 - [`analytics.md`](analytics.md) — Grafana для search-workflow latency
+- [`hermes.md`](hermes.md) — подключение MCP-серверов к Hermes Agent (SSE + skill)
 
 ---
 

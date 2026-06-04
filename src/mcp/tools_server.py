@@ -32,7 +32,7 @@ from loguru import logger
 
 from src.config import settings
 from src.mcp._shared import (
-    assert_api_key_env_set, log_banner, parse_args,
+    assert_api_key_env_set, build_sse_auth, log_banner, parse_args,
 )
 from src.retrieval import atomic_tools
 
@@ -45,6 +45,7 @@ mcp = FastMCP(
         "yourself in your own LLM loop.  For an already-orchestrated "
         "answer, use the sibling MCP-1 server (kb_search) instead."
     ),
+    auth=build_sse_auth(),  # evaluated at import time; see build_sse_auth docstring
 )
 
 

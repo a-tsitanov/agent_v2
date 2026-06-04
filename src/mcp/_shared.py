@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from src.config import settings
+
+if TYPE_CHECKING:
+    from fastmcp.server.auth import StaticTokenVerifier
+
+
+def _auth_required() -> bool:
+    """True unless KB_MCP_REQUIRE_AUTH is explicitly disabled."""
+    return os.environ.get(
+        "KB_MCP_REQUIRE_AUTH", "true",
+    ).lower() not in {"0", "false", "no"}
 
 
 def parse_args() -> dict[str, Any]:
@@ -35,10 +45,7 @@ def assert_api_key_env_set() -> None:
     no API_KEYS are configured — protects ops from accidentally
     exposing an open MCP server.
     """
-    require = os.environ.get(
-        "KB_MCP_REQUIRE_AUTH", "true",
-    ).lower() not in {"0", "false", "no"}
-    if not require:
+    if not _auth_required():
         logger.warning(
             "MCP auth DISABLED via KB_MCP_REQUIRE_AUTH=false — "
             "anyone reaching this port can call tools",
@@ -55,14 +62,43 @@ def assert_api_key_env_set() -> None:
 
 def is_valid_key(provided: str) -> bool:
     """Match against the configured API key list."""
-    require = os.environ.get(
-        "KB_MCP_REQUIRE_AUTH", "true",
-    ).lower() not in {"0", "false", "no"}
-    if not require:
+    if not _auth_required():
         return True
     if not provided:
         return False
     return provided in settings.api.keys_list
+
+
+def build_sse_auth() -> StaticTokenVerifier | None:
+    """Build a FastMCP auth provider for HTTP/SSE transports.
+
+    Returns a ``StaticTokenVerifier`` seeded with the configured API
+    keys when ``KB_MCP_REQUIRE_AUTH`` is on and keys exist; otherwise
+    ``None`` (auth disabled — stdio/desktop usage).  The verifier
+    validates the incoming ``Authorization: Bearer <key>`` header
+    against the configured key set.  Enforced only on HTTP/SSE
+    transports; stdio is unaffected.
+
+    The result is computed once at import time (when the server module
+    is loaded), not lazily per request.
+    """
+    if not _auth_required():
+        return None
+    keys = settings.api.keys_list
+    if not keys:
+        logger.warning(
+            "build_sse_auth: KB_MCP_REQUIRE_AUTH is on but API_KEYS is "
+            "empty — SSE transport will start WITHOUT auth.  Set API_KEYS "
+            "or KB_MCP_REQUIRE_AUTH=false.",
+        )
+        return None
+    from fastmcp.server.auth import StaticTokenVerifier
+    return StaticTokenVerifier(
+        tokens={
+            k: {"sub": "kb-mcp-client", "client_id": "kb"}
+            for k in keys
+        },
+    )
 
 
 def log_banner(server_name: str, transport: str, host: str, port: int) -> None:

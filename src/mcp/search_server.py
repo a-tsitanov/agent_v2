@@ -28,7 +28,7 @@ from temporalio.common import WorkflowIDReusePolicy
 
 from src.config import settings
 from src.mcp._shared import (
-    assert_api_key_env_set, log_banner, parse_args,
+    assert_api_key_env_set, build_sse_auth, log_banner, parse_args,
 )
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import OrchestratorParams, SearchOutcome
@@ -43,6 +43,7 @@ mcp = FastMCP(
         "question, retrieves per sub-question in parallel over vector "
         "+ graph, then synthesises a Russian answer with citations."
     ),
+    auth=build_sse_auth(),  # evaluated at import time; see build_sse_auth docstring
 )
 
 
