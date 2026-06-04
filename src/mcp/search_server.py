@@ -71,7 +71,11 @@ mcp = FastMCP(
 
 def _local_params(query: str, max_refinements: int = 3) -> OrchestratorParams:
     """Build OrchestratorParams for the local plan-execute flow,
-    mirroring the FastAPI ``/search/local`` route defaults."""
+    mirroring the FastAPI ``/search/local`` route defaults.
+
+    ``top_k`` is intentionally left at the OrchestratorParams default —
+    the MCP tools don't expose a per-call retrieval-pool knob (the FastAPI
+    route surfaces it via SearchRequest; both default to 10)."""
     return OrchestratorParams(
         query=query,
         max_subqueries=settings.agent.max_subqueries,
@@ -241,12 +245,16 @@ async def kb_drift_search(
     wide context — "how does <specific clause> compare to our general
     practice". A middle ground between `kb_search` (local) and
     `kb_global_search` (global).
-    COST: heaviest — runs local then global (up to ~30 min).
+    COST: heaviest — runs local then global sequentially; may approach or
+    hit the shared 1800s tool timeout. If it does, prefer `kb_search` or
+    `kb_global_search` alone.
 
     Returns the same shape as `kb_search` (mode == "drift").
     """
     handle = await (await get_temporal_client()).start_workflow(
         DriftSearchWorkflow.run,
+        # drift_mode=True mirrors the FastAPI /search/drift route; the
+        # workflow also forces it internally, so this is defensive.
         args=[_local_params(query), _global_params(query, drift_mode=True)],
         id=f"mcp-drift-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
