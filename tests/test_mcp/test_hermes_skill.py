@@ -10,7 +10,7 @@ import yaml
 
 _SKILL = Path("integrations/hermes/knowledge-base/SKILL.md")
 
-# The 8 atomic tools + the kb_search escape hatch.
+# The 8 atomic tools + the four orchestrated kb_*search escape hatches.
 _REQUIRED_TOOL_NAMES = {
     "vector_search",
     "graph_search",
@@ -21,6 +21,9 @@ _REQUIRED_TOOL_NAMES = {
     "get_chunks_by_doc_id",
     "read_full_document",
     "kb_search",
+    "kb_global_search",
+    "kb_drift_search",
+    "kb_auto_search",
 }
 
 

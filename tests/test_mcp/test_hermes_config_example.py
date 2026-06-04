@@ -37,4 +37,6 @@ def test_config_has_both_servers_with_auth_and_tools():
     kbsearch = servers["kbsearch"]
     assert kbsearch["url"].endswith("/sse")
     assert kbsearch["headers"]["Authorization"].startswith("Bearer ")
-    assert kbsearch["tools"]["include"] == ["kb_search"]
+    assert set(kbsearch["tools"]["include"]) == {
+        "kb_search", "kb_global_search", "kb_drift_search", "kb_auto_search",
+    }

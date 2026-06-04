@@ -26,6 +26,6 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${KB_API_KEY}"
     tools:
-      include: [kb_search]
+      include: [kb_search, kb_global_search, kb_drift_search, kb_auto_search]
       prompts: false
       resources: false

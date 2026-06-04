@@ -17,7 +17,8 @@ Hermes. Интеграция **аддитивна**: поведение MCP-се
 # Атомарные тулы (основная поверхность для интерактивного цикла)
 uv run python -m src.mcp.tools_server  --transport sse --host 0.0.0.0 --port 9002
 
-# kb_search (тяжёлый escape-hatch для многоходовых вопросов)
+# Оркестрованный поиск: kb_search (local) + kb_global_search +
+# kb_drift_search + kb_auto_search — тяжёлые escape-hatch'и
 uv run python -m src.mcp.search_server --transport sse --host 0.0.0.0 --port 9001
 ```
 
@@ -39,7 +40,8 @@ desktop-клиентов auth отключается через `KB_MCP_REQUIRE_
 Скопировать блок из [`integrations/hermes/config.example.yaml`](../../integrations/hermes/config.example.yaml)
 в `~/.hermes/config.yaml`, заменив `<kb-host>` и выставив `KB_API_KEY` в окружении
 процесса Hermes. При старте Hermes сам дискаверит тулы и покажет чек-лист; имена
-в агенте получают префикс `mcp_kbtools_*` и `mcp_kbsearch_kb_search`.
+в агенте получают префикс `mcp_kbtools_*` (8 атомарных) и `mcp_kbsearch_*`
+(`kb_search`, `kb_global_search`, `kb_drift_search`, `kb_auto_search`).
 
 ## 3. Установить скилл
 
@@ -52,7 +54,7 @@ Hub). Он учит Hermes выбирать тул под тип задачи, �
 ## 4. Smoke-проверка
 
 1. Hermes стартует без ошибок и в списке тулов видны 8 `mcp_kbtools_*` +
-   `mcp_kbsearch_kb_search`.
+   4 `mcp_kbsearch_*`.
 2. Запрос с точным идентификатором (телефон/ИНН) → Hermes зовёт
    `find_entity_by_id` и возвращает досье.
 3. Неверный/отсутствующий `KB_API_KEY` → запрос к SSE отклоняется (401).
