@@ -41,7 +41,9 @@ class RetrieverProtocol(Protocol):
 
 
 class GraphRetrieverProtocol(Protocol):
-    async def aretrieve(self, query: str) -> Any: ...
+    async def aretrieve(
+        self, query: str, *, path_depth: int | None = None,
+    ) -> Any: ...
 
     async def awalk(
         self,
@@ -131,15 +133,20 @@ async def graph_search(
     graph_retriever: GraphRetrieverProtocol | None,
     *,
     query: str,
-    depth: int = 2,
+    depth: int = 1,
 ) -> ToolResult:
-    """Knowledge-graph traversal: entities + relations + related chunks."""
+    """Knowledge-graph traversal: matched entities + their neighbours up
+    to ``depth`` triplet-hops + related chunks.
+
+    ``depth`` maps to the retriever's ``path_depth`` (clamped 1-3). 1 =
+    matched nodes + immediate (1-hop) relations; raise for wider context.
+    """
     if graph_retriever is None:
         return ToolResult(
             sources=[],
             observation=json.dumps({"entities": [], "relations": []}),
         )
-    data = await graph_retriever.aretrieve(query)
+    data = await graph_retriever.aretrieve(query, path_depth=depth)
     entities = getattr(data, "entities", []) or []
     relations = getattr(data, "relations", []) or []
     chunks = list(getattr(data, "chunks", []) or [])
@@ -242,15 +249,21 @@ async def find_neighbours(
     graph_retriever: GraphRetrieverProtocol | None,
     *,
     entity_name: str,
-    hops: int = 1,  # noqa: ARG001 — reserved for future multi-hop
+    hops: int = 1,
 ) -> ToolResult:
-    """Walk the graph around an entity (1-2 hops)."""
+    """Neighbours of an entity: matched node + relations up to ``hops``
+    triplet-hops out.
+
+    ``hops`` maps to the retriever's ``path_depth`` (clamped 1-3). 1 =
+    immediate neighbours. For deterministic edge-following from a known
+    entity (with rel-type filtering) prefer ``graph_walk``.
+    """
     if graph_retriever is None:
         return ToolResult(
             sources=[],
             observation=json.dumps({"entities": [], "relations": []}),
         )
-    data = await graph_retriever.aretrieve(entity_name)
+    data = await graph_retriever.aretrieve(entity_name, path_depth=hops)
     return ToolResult(
         sources=[],
         observation=json.dumps(

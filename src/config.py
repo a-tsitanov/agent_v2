@@ -472,6 +472,11 @@ class AgentSettings(BaseSettings):
     # (the tool clamps it to GRAPH_WALK_MAX_HOPS).
     graph_walk_enabled: bool = True
     graph_walk_hops: int = Field(default=2, ge=1, le=3)
+    # ``path_depth`` for the similarity graph_search inside the local
+    # pipeline: how many triplet-hops of neighbours aretrieve pulls around
+    # each matched entity. Default 1 (current behaviour); raise (≤3) to
+    # widen graph context. Tunable via TEMPORAL/AGENT env without code.
+    graph_search_path_depth: int = Field(default=1, ge=1, le=3)
     # Graph retriever candidate count (VectorContextRetriever top_k). Raised
     # from the LlamaIndex default so a named entity isn't ranked out of the
     # result set on a large graph.

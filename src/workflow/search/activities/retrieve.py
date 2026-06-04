@@ -103,10 +103,15 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
     find_name_obs: str | None = None
 
     for tool_name in _PIPELINE:
+        tool_args: dict = {"query": params.subquestion}
+        if tool_name == "graph_search":
+            # Operator-tunable neighbour depth (default 1 = current
+            # behaviour); see settings.agent.graph_search_path_depth.
+            tool_args["depth"] = settings.agent.graph_search_path_depth
         try:
             result = await atomic_tools.dispatch(
                 tool_name,
-                {"query": params.subquestion},
+                tool_args,
                 retriever=retriever,
                 graph_retriever=graph_retriever,
             )

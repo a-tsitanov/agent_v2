@@ -49,10 +49,12 @@ class _StubGraphRetriever:
         self._data = data
         self._walk_data = walk_data
         self.last_query = None
+        self.last_path_depth = None
         self.last_walk_kwargs = None
 
-    async def aretrieve(self, query: str):
+    async def aretrieve(self, query: str, *, path_depth=None):
         self.last_query = query
+        self.last_path_depth = path_depth
         return self._data
 
     async def awalk(self, start_entity, *, hops, rel_filter=None):
@@ -188,6 +190,30 @@ async def test_find_neighbours_returns_entities_and_relations():
     assert "entities" in parsed and "relations" in parsed
     assert len(parsed["entities"]) == 1
     assert len(parsed["relations"]) == 1
+
+
+# ── depth / hops → path_depth plumbing ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_graph_search_passes_depth_as_path_depth():
+    stub = _StubGraphRetriever(_StubGraphData(entities=[], relations=[]))
+    await atomic_tools.graph_search(stub, query="q", depth=3)
+    assert stub.last_path_depth == 3
+
+
+@pytest.mark.asyncio
+async def test_graph_search_default_depth_is_one():
+    stub = _StubGraphRetriever(_StubGraphData(entities=[], relations=[]))
+    await atomic_tools.graph_search(stub, query="q")
+    assert stub.last_path_depth == 1
+
+
+@pytest.mark.asyncio
+async def test_find_neighbours_passes_hops_as_path_depth():
+    stub = _StubGraphRetriever(_StubGraphData(entities=[], relations=[]))
+    await atomic_tools.find_neighbours(stub, entity_name="X", hops=2)
+    assert stub.last_path_depth == 2
 
 
 # ── graph_walk ──────────────────────────────────────────────────────
