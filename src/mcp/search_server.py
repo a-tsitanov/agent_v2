@@ -47,7 +47,7 @@ mcp = FastMCP(
 )
 
 
-@mcp.tool()
+@mcp.tool(timeout=1800)
 async def kb_search(
     query: str,
     ctx: Context,
