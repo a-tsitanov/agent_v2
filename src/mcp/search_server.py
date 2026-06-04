@@ -53,7 +53,17 @@ async def kb_search(
     ctx: Context,
     max_refinements: int = 3,
 ) -> dict[str, Any]:
-    """Search the project knowledge base.
+    """Orchestrated LOCAL deep-search over the knowledge base: decomposes
+    the question into sub-questions, retrieves each over vector + graph in
+    parallel, then synthesises ONE cited answer (with uncertainties).
+
+    USE FOR: complex / multi-part questions you can't resolve in 2-3
+    atomic MCP-2 tool calls, when you want a finished answer rather than
+    raw primitives. This is the heavy escape hatch.
+    COST: runs the full plan-execute-synthesize workflow (can take up to
+    ~30 min); for simple lookups use the atomic tools instead.
+    SCOPE: "local" mode — focused retrieval, not corpus-wide thematic
+    aggregation (there is no global/map-reduce search over MCP yet).
 
     Args:
       query: question in Russian (or the source-document language).

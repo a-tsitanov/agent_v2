@@ -98,4 +98,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 ignore = [
     "E501",  # line length — covered by formatter
     "B008",  # FastAPI Depends() pattern triggers it falsely
+    # ambiguous-unicode: false positives on legitimate Cyrillic in a
+    # Russian-language corpus (entity names, doc text, examples).
+    "RUF001", "RUF002", "RUF003",
 ]
