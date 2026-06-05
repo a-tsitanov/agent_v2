@@ -1,0 +1,63 @@
+# Data model — Neo4j + Milvus + Postgres + Wikibase
+direction: right
+
+classes: {
+  store: { style: { fill: "#f1f5f9"; stroke: "#64748b"; bold: true } }
+  ent:   { style: { fill: "#ecfdf5"; stroke: "#10b981" } }
+  chunk: { style: { fill: "#dbeafe"; stroke: "#2563eb" } }
+  comm:  { style: { fill: "#fef9c3"; stroke: "#ca8a04" } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+}
+
+neo4j: "Neo4j — property graph" {
+  class: store
+  chunk: ":Chunk\nid · text · doc_id · metadata" { class: chunk }
+  ent: ":__Entity__ (+ subtype label)\nPhoneNumber · Person · Org · INN · Email · …\nname · description · canonical_identifiers" { class: ent }
+  comm: ":Community\nlevel · summary (built offline)" { class: comm }
+
+  chunk -> ent: "MENTIONS"
+  ent -> ent: "<relation> (KNOWS / WORKS_AT / OWNS …)"
+  ent -> comm: "IN_COMMUNITY"
+  ent -> chunk: "KG_SOURCE (provenance)"
+  note_idx: "fulltext: entity_name_fulltext\nGDS: Leiden communities" { class: note }
+}
+
+milvus: "Milvus — collection kb_llamaindex" {
+  class: store
+  vec: "chunk vectors\nembedding (nomic-embed-text, 768d)\n+ BM25 · doc_id · text\n(oversized metadata scrubbed)" { class: chunk }
+}
+
+pg: "Postgres" {
+  class: store
+  docs: "documents" {
+    shape: sql_table
+    id: "uuid (doc_id)"
+    path: "s3:// | local"
+    department: "text"
+    doc_type: "text"
+    status: "pending|processing|completed|vector_only|failed"
+    error: "text?"
+    created_at: "ts"
+    updated_at: "ts"
+  }
+  metrics: "ingest_metrics" {
+    shape: sql_table
+    doc_id: "uuid"
+    activity: "text"
+    duration_ms: "int"
+    model: "text"
+    role: "text"
+    version_tag: "text"
+    env: "text"
+  }
+}
+
+wiki: "Wikibase — canonical anchor" {
+  class: store
+  item: "Item (QID)\nlabels/aliases · external-id statements\nrelation statements" { class: ent }
+}
+
+neo4j.ent -> wiki.item: "canonical link (QID)"
+neo4j.chunk -> milvus.vec: "same chunk_id"
+pg.docs -> milvus.vec: "doc_id" { style.stroke-dash: 2; style.stroke: "#94a3b8" }
+pg.docs -> neo4j.chunk: "doc_id" { style.stroke-dash: 2; style.stroke: "#94a3b8" }

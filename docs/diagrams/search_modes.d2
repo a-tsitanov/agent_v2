@@ -1,0 +1,49 @@
+# Search modes — local / global / drift / auto
+direction: down
+
+classes: {
+  entry: { style: { fill: "#1e293b"; font-color: "#f8fafc"; stroke: "#0f172a"; bold: true } }
+  wf:    { style: { fill: "#dbeafe"; stroke: "#2563eb"; bold: true } }
+  step:  { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  large: { style: { fill: "#fae8ff"; stroke: "#a21caf" } }
+  dec:   { shape: diamond; style: { fill: "#fef9c3"; stroke: "#ca8a04" } }
+  out:   { style: { fill: "#dcfce7"; stroke: "#16a34a"; bold: true } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+}
+
+surface: "Entry surfaces (same params)\nMCP-1: kb_search / _global / _drift / _auto\nFastAPI: /api/v1/search/{local,global,drift,auto}\nqueue: kb-search-small" { class: entry }
+
+local: "SearchOrchestratorWorkflow  (mode=local)\nplan → parallel sub-Q retrieve → merge\n→ coverage → rerank → synthesize" { class: wf }
+
+global: "GlobalSearchWorkflow  (mode=global)\nGraphRAG map-reduce over :Community summaries\nmap_communities → MAP (parallel) → REDUCE → synth\nparams: max_communities, map_parallelism" { class: wf }
+
+drift: "DriftSearchWorkflow  (mode=drift)" {
+  class: wf
+  d1: "1 · run local (child)" { class: step }
+  d2: "2 · global with drift_mode=True\nseeded by local sources" { class: large }
+  d1 -> d2: "local.sources as drift_seed"
+}
+
+auto: "AutoSearchWorkflow  (mode=auto)" {
+  class: wf
+  route: "route_query activity\nsmall LLM classifier (fail-safe → local)" { class: dec }
+  disp: "dispatch_for_route\nlocal | global | drift" { class: step }
+  route -> disp
+}
+
+surface -> local: "kb_search"
+surface -> global: "kb_global_search"
+surface -> drift: "kb_drift_search\nargs=[local_params, global_params]"
+surface -> auto: "kb_auto_search\nargs=[local_params, global_params]"
+
+auto.disp -> local: "route=local" { style.stroke: "#16a34a" }
+auto.disp -> global: "route=global" { style.stroke: "#ca8a04" }
+auto.disp -> drift: "route=drift" { style.stroke: "#ca8a04" }
+
+outcome: "SearchOutcome\nanswer · sources · documents · citations\nuncertainties · step_stats · latency_ms · mode" { class: out }
+local -> outcome
+global -> outcome
+drift -> outcome
+auto -> outcome: "(mode of chosen route)"
+
+note: "local = focused/specific · global = corpus-wide themes\ndrift = specific + corpus context (heaviest)\nauto = let the router decide.\nCommunity summaries built offline (CommunityBuildWorkflow)." { class: note }

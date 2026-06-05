@@ -1,0 +1,36 @@
+# Wikibase canonical anchoring
+direction: down
+
+classes: {
+  step:  { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  graph: { style: { fill: "#ecfdf5"; stroke: "#10b981" } }
+  wiki:  { style: { fill: "#fae8ff"; stroke: "#a21caf"; bold: true } }
+  store: { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+  dec:   { shape: diamond; style: { fill: "#fef9c3"; stroke: "#ca8a04" } }
+}
+
+ingest: "Ingest graph half (per document)" {
+  canon: "inject_canonical\ncanonical id-entities → Neo4j" { class: graph }
+  build: "build_property_graph\nmerged entities + relations → Neo4j" { class: graph }
+}
+
+gate: "graph_status == completed?" { class: dec }
+ingest.build -> gate
+
+push: "push_wikibase (best-effort)\nload caches from Neo4j:\n  WikibaseBaseClass · WikibaseProperty\nfor each entity/relation:\n  create/update Item (QID)\n  + external-id statements\n  + relation statements\n  + new properties as needed" { class: wiki }
+gate -> push: "yes"
+gate -> skip: "no ⇒ status=vector_only" { style.stroke: "#94a3b8" }
+skip: "skip (no Wikibase write)" { class: note }
+
+neo4j: "Neo4j\nentities carry QID after link" { class: store }
+wikibase: "Wikibase\nItems (QID) + properties + statements" { class: store }
+push -> wikibase: "create/update"
+push -> neo4j: "read entities; write back QID" { style.stroke-dash: 2; style.stroke: "#94a3b8" }
+
+# retrieval-side use
+retr: "Retrieval anchor\ngraph tools resolve names → canonical entity\n(Wikibase QID = source of truth on conflicts)\nSPARQL queries for canonical lookups" { class: step }
+wikibase -> retr: "canonical identity"
+neo4j -> retr
+
+note: "Wikibase = canonical identity anchor for the KB.\nName conflicts: trust the canonical (QID) entity over\nfree-text guesses. Self-hosted; see runbook/wikibase.md." { class: note }

@@ -1,0 +1,47 @@
+# Graph/entity tools + the two depth mechanisms
+direction: down
+
+classes: {
+  tool:  { style: { fill: "#ecfdf5"; stroke: "#10b981"; bold: true } }
+  mech:  { style: { fill: "#dbeafe"; stroke: "#2563eb" } }
+  ret:   { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  store: { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+  out:   { style: { fill: "#dcfce7"; stroke: "#16a34a" } }
+}
+
+tools: "Entity / graph tools (atomic_tools)" {
+  fid: "find_entity_by_id(name, entity_type?)\nexact identifier (phone/INN/OGRN/email/…)" { class: tool }
+  fname: "find_entity_by_name(query, limit)\nfuzzy/partial NAME (full-text)" { class: tool }
+  gs: "graph_search(query, depth=1)\nsimilarity from free-text query" { class: tool }
+  fn: "find_neighbours(entity_name, hops=1)\nneighbours of a known entity" { class: tool }
+  gw: "graph_walk(start_entity, hops=2, rel_filter)\ndeterministic BFS from a known entity" { class: tool }
+}
+
+m_pd: "Mechanism 1 · path_depth\n(LlamaIndex LLMSynonymRetriever.aretrieve)\nsynonym/vector match → get_rel_map(depth)\nclamp [1, GRAPH_PATH_DEPTH_MAX=3]" { class: mech }
+m_walk: "Mechanism 2 · awalk\n(structured Cypher BFS · variable-length pattern)\nrel_filter · caps NODE=50 / EDGE=100\nclamp [1, GRAPH_WALK_MAX_HOPS=3]" { class: mech }
+
+ar: "GraphRetriever.aretrieve(query, path_depth?)\nper-call retriever cache by path_depth" { class: ret }
+af: "GraphRetriever.afind_entities_by_name\n(fulltext index)" { class: ret }
+aw: "GraphRetriever.awalk(start, hops, rel_filter)" { class: ret }
+
+tools.gs -> ar: "path_depth = depth"
+tools.fn -> ar: "path_depth = hops"
+tools.fid -> ar: "lookup (depth 1)"
+tools.fname -> af
+tools.gw -> aw: "hops"
+
+ar -> m_pd
+aw -> m_walk
+af -> m_walk: "fulltext"
+
+neo4j: "Neo4j property graph" { class: store }
+m_pd -> neo4j
+m_walk -> neo4j
+
+ret_pd: "returns: entities + relations + CHUNKS" { class: out }
+ret_walk: "returns: entities + relations (no chunks)" { class: out }
+m_pd -> ret_pd
+m_walk -> ret_walk
+
+note: "Was a trap: graph_search.depth & find_neighbours.hops were\nIGNORED (path_depth pinned at 1). Now wired per-call.\nInternal kb_search additionally seeds graph_walk(graph_walk_hops=2)\nfrom the top graph_search entity." { class: note }

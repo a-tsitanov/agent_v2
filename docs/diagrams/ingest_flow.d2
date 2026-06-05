@@ -1,0 +1,104 @@
+# Document ingestion — DocumentIngestWorkflow (+ offline community build)
+# Source: src/api/routes/ingest.py, src/workflow/document_ingest.py,
+# graph_build.py, activities/*, src/ingestion/*, src/graph/*
+
+direction: down
+
+classes: {
+  entry:  { style: { fill: "#1e293b"; font-color: "#f8fafc"; stroke: "#0f172a"; bold: true } }
+  vec:    { style: { fill: "#dbeafe"; stroke: "#2563eb" } }
+  graph:  { style: { fill: "#ecfdf5"; stroke: "#10b981" } }
+  llm:    { style: { fill: "#fae8ff"; stroke: "#a21caf"; bold: true } }   # GPU-serialized LLM
+  step:   { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  fail:   { style: { fill: "#fee2e2"; stroke: "#dc2626" } }
+  store:  { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  note:   { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+  offline:{ style: { fill: "#fef9c3"; stroke: "#ca8a04" } }
+  thin:   { style: { stroke: "#94a3b8"; stroke-dash: 2 } }
+}
+
+client: "Client" { class: entry }
+api: "POST /api/v1/ingest\nfile · department · X-Version-Tag\n→ upload to MinIO · INSERT documents(pending)\n→ start workflow · return 202 {job_id}" { class: entry }
+cli: "CLI: python -m src.ingestion.run\n(direct embed→Milvus, no Temporal)" { class: note }
+
+client -> api
+
+stores: "Stores" {
+  minio_up: "MinIO · kb-uploads\n{doc_id}/{file}" { class: store }
+  minio_stg: "MinIO · kb-staging\nparsed.pkl / kg.pkl / merged.pkl\n(claim-check)" { class: store }
+  pg: "Postgres\ndocuments (status)\ningest_metrics" { class: store }
+  milvus: "Milvus\nvectors" { class: store }
+  neo4j: "Neo4j\nchunks · entities · relations\nMENTIONS · :Community" { class: store }
+  wikibase: "Wikibase\ncanonical items + statements" { class: store }
+}
+
+api -> stores.minio_up: "upload"
+api -> stores.pg: "INSERT pending"
+
+wf: "DocumentIngestWorkflow   (IngestParams → IngestResult)   queue: kb-ingest" {
+  style: { stroke: "#2563eb"; fill: "#f8fafc" }
+  tooltip: "Vector half MUST succeed; graph half is best-effort (try/except → vector_only)."
+
+  vechalf: "VECTOR HALF  (required)" {
+    style: { stroke: "#2563eb" }
+    fetch: "1 · fetch_source\nMinIO → local · status=processing" { class: vec }
+    parse: "2 · parse_and_chunk\n→ staging parsed.pkl" {
+      class: vec
+      t1: "DocumentTranslate (opt)\nper-doc → russian" { class: step }
+      split: "Splitter\nSentence(512/50) | Semantic(p95)" { class: step }
+      idc: "IdentifierCanonicalization\n24+ types: phone(E.164)/INN/OGRN/email/…" { class: step }
+      t2: "TranslateToRussian (opt)\nper-chunk" { class: step }
+      t1 -> split -> idc -> t2
+    }
+    index: "3 · index_vector\nembed + Milvus insert\n(scrub oversized metadata)" { class: vec }
+    fetch -> parse -> index
+  }
+
+  graphhalf: "GRAPH HALF  (best-effort · except ⇒ graph_status=vector_only)" {
+    style: { stroke: "#10b981" }
+    inject: "4 · inject_canonical\npre-write canonical id entities" { class: graph }
+    extract: "5 · extract_kg\nLLM KG extraction per chunk (LightRAG)\nqueue: kb-ingest-llm · GPU·1\n→ staging kg.pkl" { class: llm }
+    gbw: "GraphBuildWorkflow  (child · queue: kb-ingest-merge)" {
+      style: { stroke: "#10b981" }
+      merge: "6a · merge_and_resolve\nLightRAG dedup → phone consolidation(E.164)\n→ entity-resolution (judge LLM, opt)\n→ staging merged.pkl" { class: llm }
+      build: "6b · build_property_graph\nPropertyGraphIndex · Neo4j upsert\nchunks + MENTIONS + entities + relations\n+ fulltext index" { class: graph }
+      merge -> build
+    }
+    inject -> extract -> gbw
+  }
+
+  wiki: "7 · push_wikibase  (best-effort)\nonly if graph_status=completed" { class: graph }
+  final: "8 · finalize\nstatus=completed | vector_only\ndelete staging · write ingest_metrics" { class: vec }
+  failed: "9 · mark_failed\nstatus=failed + error\n(only on vector-half failure)" { class: fail }
+
+  vechalf -> graphhalf: "vector ok"
+  graphhalf -> wiki -> final
+  vechalf -> failed: "vector half throws" { style.stroke: "#dc2626"; style.stroke-dash: 4 }
+}
+
+api -> wf: "start  id=ingest-{doc_id}" { style.stroke: "#2563eb" }
+cli -> wf.vechalf.parse: "alt path" { style.stroke: "#94a3b8"; style.stroke-dash: 3 }
+
+# ── store writes (muted) ──
+wf.vechalf.fetch -> stores.minio_up: "download" { class: thin }
+wf.vechalf.fetch -> stores.pg: "processing" { class: thin }
+wf.vechalf.parse -> stores.minio_stg { class: thin }
+wf.vechalf.index -> stores.milvus { class: thin }
+wf.graphhalf.inject -> stores.neo4j { class: thin }
+wf.graphhalf.extract -> stores.minio_stg { class: thin }
+wf.graphhalf.gbw.merge -> stores.minio_stg { class: thin }
+wf.graphhalf.gbw.build -> stores.neo4j { class: thin }
+wf.wiki -> stores.wikibase { class: thin }
+wf.final -> stores.pg { class: thin }
+wf.failed -> stores.pg { class: thin }
+
+# ── offline (NOT per-document) ──
+offline: "CommunityBuildWorkflow   (OFFLINE · admin/schedule · queue: kb-graph-build)" {
+  class: offline
+  detect: "detect_communities\nNeo4j GDS Leiden (min_size=3)" { class: offline }
+  summ: "summarize_community\nfan-out (×, parallel) · small LLM" { class: offline }
+  detect -> summ
+}
+offline.summ -> stores.neo4j: ":Community.summary" { style.stroke: "#ca8a04"; style.stroke-dash: 3 }
+
+notes: "Queues & concurrency\n• kb-ingest (IO/embed/Neo4j) — conc 4\n• kb-ingest-llm (extract_kg) — conc 1 · GPU\n• kb-ingest-merge (merge + graph build) — conc 1\n• retries: FAST (≤60s) for IO ; HEAVY (≤30min) for LLM\n• models: extraction/judge = small tier\n• status: pending→processing→completed|vector_only|failed\n• version_tag (X-Version-Tag) → ingest_metrics" { class: note }

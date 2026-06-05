@@ -1,0 +1,56 @@
+# MCP tool surface — Hermes ↔ kb-llamaindex
+direction: right
+
+classes: {
+  ext:   { style: { fill: "#1e293b"; font-color: "#f8fafc"; stroke: "#0f172a"; bold: true } }
+  srv:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; bold: true } }
+  tool:  { style: { fill: "#ecfdf5"; stroke: "#10b981" } }
+  search:{ style: { fill: "#fae8ff"; stroke: "#a21caf" } }
+  back:  { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  store: { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+  thin:  { style: { stroke: "#94a3b8"; stroke-dash: 2 } }
+}
+
+hermes: "Hermes Agent\n~/.hermes/config.yaml\nmcp_servers: kbtools + kbsearch\nAuthorization: Bearer ${KB_API_KEY}\ntimeout 1800000ms" { class: ext }
+
+kbtools: "MCP-2  kbtools  :9002/sse  (mcp_kbtools_*)\nStaticTokenVerifier · @mcp.tool(timeout=1800)" {
+  class: srv
+  vs: "vector_search(query, top_k)" { class: tool }
+  gs: "graph_search(query, depth)" { class: tool }
+  gw: "graph_walk(start_entity, hops, rel_filter)" { class: tool }
+  fid: "find_entity_by_id(name)" { class: tool }
+  fname: "find_entity_by_name(query)" { class: tool }
+  fn: "find_neighbours(entity_name, hops)" { class: tool }
+  gc: "get_chunks_by_doc_id(doc_id)" { class: tool }
+  rd: "read_full_document(doc_id)" { class: tool }
+}
+
+kbsearch: "MCP-1  kbsearch  :9001/sse  (mcp_kbsearch_*)\nStaticTokenVerifier · @mcp.tool(timeout=1800)" {
+  class: srv
+  ks: "kb_search (local)" { class: search }
+  kg: "kb_global_search" { class: search }
+  kd: "kb_drift_search" { class: search }
+  ka: "kb_auto_search" { class: search }
+}
+
+hermes -> kbtools: "SSE"
+hermes -> kbsearch: "SSE"
+
+retr: "in-process retrievers\nGraphRetriever · vector · ChunkRepository\n(BoundedLLM semaphore)" { class: back }
+kbtools -> retr
+retr -> milvus { class: thin }
+retr -> neo4j { class: thin }
+retr -> pg { class: thin }
+
+orch: "Temporal search workflows\nOrchestrator / Global / Drift / Auto\nqueue: kb-search-small (+ large for synth)" { class: back }
+kbsearch -> orch: "submit + poll get_state"
+orch -> milvus { class: thin }
+orch -> neo4j { class: thin }
+
+milvus: "Milvus" { class: store }
+neo4j: "Neo4j" { class: store }
+pg: "Postgres" { class: store }
+
+note: "Skill `knowledge-base` (SKILL.md) teaches Hermes\nWHEN to pick each tool + response templates +\nmemory + follow-up reformulation." { class: note }
+note -> hermes: "" { class: thin }

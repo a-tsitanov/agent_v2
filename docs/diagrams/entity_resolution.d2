@@ -1,0 +1,38 @@
+# Entity resolution / merge — merge_and_resolve (R3) internals
+direction: down
+
+classes: {
+  io:    { style: { fill: "#dbeafe"; stroke: "#2563eb"; bold: true } }
+  pass:  { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  llm:   { style: { fill: "#fae8ff"; stroke: "#a21caf" } }
+  store: { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+  dec:   { shape: diamond; style: { fill: "#fef9c3"; stroke: "#ca8a04" } }
+}
+
+inp: "input: KGExtracted\nper-chunk entities + relations (from extract_kg)\nqueue: kb-ingest-merge · GPU·1" { class: io }
+
+p1: "pass 1 · LightRAG merge\nLLM cross-chunk dedup of entities\n→ duplicate_groups" { class: llm }
+p2: "pass 2 · phone consolidation\ndeterministic E.164 normalize + collapse\n→ phones_collapsed, phone_alias_map" { class: pass }
+erq: "ER enabled?\nsettings.agent.er_enabled" { class: dec }
+p3: "pass 3 · entity resolution\njudge LLM (small) + embedding name-sim\nlanguage=Russian · judge_batch_size\nNeo4j verdict cache (opt)\n→ er_merged, er_alias_map" { class: llm }
+
+out: "merged entities + relations + nodes\n→ staging merged.pkl" { class: io }
+
+build: "build_property_graph\nNeo4j upsert: entities + relations\n+ chunk MENTIONS + fulltext index" { class: io }
+
+inp -> p1 -> p2 -> erq
+erq -> p3: "yes"
+erq -> out: "no" { style.stroke: "#16a34a" }
+p3 -> out
+out -> build
+
+neo4j: "Neo4j" { class: store }
+vcache: "Neo4j verdict cache" { class: store }
+build -> neo4j
+p3 -> vcache: "read/write verdicts" { style.stroke-dash: 2; style.stroke: "#94a3b8" }
+
+canon: "inject_canonical (earlier)\npre-writes canonical id-entities\n(phones/INN/…) before extraction" { class: note }
+canon -> p2: "feeds canonical ids" { style.stroke-dash: 3; style.stroke: "#ca8a04" }
+
+note: "Three dedup layers: LLM semantic (1) → deterministic phone (2)\n→ optional ER judge (3). FAIL within graph-half ⇒ vector_only." { class: note }

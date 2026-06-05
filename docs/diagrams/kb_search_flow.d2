@@ -1,0 +1,88 @@
+# kb_search — plan-execute-synthesize flow (SearchOrchestratorWorkflow, local mode)
+# Source of truth: src/workflow/search/orchestrator.py, subquery_wf.py,
+# activities/retrieve.py, src/mcp/search_server.py
+
+direction: down
+
+classes: {
+  entry:    { style: { fill: "#1e293b"; font-color: "#f8fafc"; stroke: "#0f172a"; bold: true } }
+  phase:    { style: { fill: "#dbeafe"; stroke: "#2563eb" } }
+  act:      { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  tool:     { style: { fill: "#ecfdf5"; stroke: "#10b981" } }
+  decision: { shape: diamond; style: { fill: "#fef9c3"; stroke: "#ca8a04" } }
+  large:    { style: { fill: "#fae8ff"; stroke: "#a21caf"; bold: true } }
+  out:      { style: { fill: "#dcfce7"; stroke: "#16a34a"; bold: true } }
+  note:     { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+  store:    { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+}
+
+client: "MCP client\n(Hermes / OpenWebUI)" { class: entry }
+
+mcp: "MCP-1 tool: kb_search(query, max_refinements=3)\n@mcp.tool(timeout=1800s) · submits workflow, polls get_state → progress" { class: entry }
+
+client -> mcp
+
+orch: "SearchOrchestratorWorkflow  (mode = \"local\")" {
+  style: { stroke: "#2563eb"; fill: "#f8fafc" }
+  tooltip: "queue: kb-search-small. Only 2 LLM decision points: plan + synthesize."
+
+  plan: "1 · plan_subquestions\nsmall LLM (role=plan)\nsplit into ≤ max_subqueries (5) atomic sub-Qs\natomic question ⇒ [query]" { class: phase }
+
+  retrieve: "2 · retrieve  (fan-out, PARALLEL)\none SubQueryRetrievalWorkflow child per sub-Q\nasyncio.gather" { class: phase }
+
+  merge: "3 · merge + dedup by chunk_id\n(union of all children's sources)" { class: phase }
+
+  cov: "3b · coverage gap?\ncoverage_check (small LLM)" { class: decision }
+
+  rerank: "3c · rerank_sources\nBGE cross-encoder → top_n (rerank_top_n)\nco-ranks graph + vector · FAIL-OPEN ⇒ capped merged pool" { class: phase }
+
+  synth: "4 · synthesize_answer\nLARGE LLM (use_synthesis_llm) · queue: kb-search-large\nreflective loop ≤ max_refinements (3)\n→ answer + citations + uncertainties" { class: large }
+
+  plan -> retrieve
+  retrieve -> merge
+  merge -> cov
+  cov -> rerank: "no gap" { style.stroke: "#16a34a" }
+  cov -> covrun: "named gap\n& rounds_left>0" { style.stroke: "#ca8a04" }
+  covrun: "extra SubQueryRetrievalWorkflow(gap)\nbudget: max_coverage_rounds (1)" { class: act }
+  covrun -> merge: "re-merge" { style.stroke: "#ca8a04"; style.stroke-dash: 3 }
+  rerank -> synth
+}
+
+# ── the parallel child: one per sub-question ──
+sub: "SubQueryRetrievalWorkflow  (×N, parallel) — deterministic, no tool-pick LLM" {
+  style: { stroke: "#10b981"; fill: "#f8fafc" }
+
+  rs: "activity: retrieve_subquestion  (hybrid)" {
+    vs: "vector_search\nBM25 + dense + RRF · top_k (10)" { class: tool }
+    gs: "graph_search\npath_depth = graph_search_path_depth (1)\nmatched entities + neighbours + chunks" { class: tool }
+    fn: "find_entity_by_name\nfull-text entity lookup" { class: tool }
+    gw: "graph_walk (seed)\nstart = top graph_search entity\nhops = graph_walk_hops (2, ≤3)\nif graph_walk_enabled · FAIL-OPEN" { class: tool }
+    vs -> gw: "" { style.opacity: 0 }
+    gs -> gw: "seeds" { style.stroke: "#10b981"; style.stroke-dash: 3 }
+  }
+  dd: "dedup by chunk_id" { class: act }
+  rs -> dd
+}
+
+orch.retrieve -> sub: "fan-out" { style.stroke: "#2563eb"; style.stroke-dash: 4 }
+sub -> orch.merge: "sources" { style.stroke: "#10b981"; style.stroke-dash: 4 }
+
+graph: "Stores" {
+  vstore: "Milvus\n(vector + BM25)" { class: store }
+  gstore: "Neo4j\n(property graph)" { class: store }
+  pg: "Postgres\n(chunks / docs)" { class: store }
+}
+sub.rs.vs -> graph.vstore { style.stroke: "#94a3b8" }
+sub.rs.gs -> graph.gstore { style.stroke: "#94a3b8" }
+sub.rs.gw -> graph.gstore { style.stroke: "#94a3b8" }
+
+outcome: "SearchOutcome\nanswer · sources (merged pool) · documents (distinct doc_ids)\ncitations · uncertainties · step_stats (per sub-Q)\nrefinement_rounds · latency_ms · mode=local" { class: out }
+orch.synth -> outcome
+outcome -> mcp: "return" { style.stroke: "#16a34a"; style.stroke-dash: 4 }
+
+params: "Tunable parameters\n— query (required)\n— max_refinements = 3  (synthesis reflective loop)\n— max_subqueries = 5  (settings.agent)\n— top_k = 10  (per sub-Q pool)\n— coverage_check_enabled = true\n— max_coverage_rounds = 1\n— graph_search_path_depth = 1  (1–3)\n— graph_walk_enabled / graph_walk_hops = 2  (≤3)\n— rerank_top_n  (settings.temporal)" { class: note }
+
+features: "Design notes\n• Deterministic retrieval — NO 'LLM picks next tool' loop\n• Only 3 LLM roles touched: plan + coverage (small) , synthesize (large)\n• Queues: small activities → kb-search-small ; synthesis pinned → kb-search-large\n• FAIL-OPEN at coverage, graph_walk, rerank (never block the answer)\n• Children run fully in parallel (asyncio.gather)" { class: note }
+
+mcp -> orch: "OrchestratorParams" { style.stroke: "#2563eb" }
+params -> mcp: "" { style.opacity: 0 }

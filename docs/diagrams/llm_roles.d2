@@ -1,0 +1,48 @@
+# LLM roles → tier → model/queue (via LiteLLM)
+direction: right
+
+classes: {
+  role:  { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  small: { style: { fill: "#dbeafe"; stroke: "#2563eb"; bold: true } }
+  large: { style: { fill: "#fae8ff"; stroke: "#a21caf"; bold: true } }
+  proxy: { style: { fill: "#ecfdf5"; stroke: "#10b981"; bold: true } }
+  q:     { style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
+}
+
+roles: "Roles (per-call)" {
+  extraction: "extraction\n(KG triples, ingest)" { class: role }
+  judge: "judge\n(entity resolution)" { class: role }
+  plan: "plan\n(decompose query)" { class: role }
+  route: "route\n(local/global/drift)" { class: role }
+  search: "search\n(graph synonym norm.)" { class: role }
+  coverage: "coverage\n(gap check)" { class: role }
+  synthesis: "synthesis\n(final answer)" { class: role }
+}
+
+small: "SMALL tier\nmodel_small" { class: small }
+large: "LARGE tier\nmodel_large" { class: large }
+
+roles.extraction -> small
+roles.judge -> small
+roles.plan -> small
+roles.route -> small
+roles.search -> small
+roles.coverage -> small
+roles.synthesis -> large
+
+litellm: "LiteLLM proxy :4000\nOpenAI-compatible · embeddings" { class: proxy }
+small -> litellm
+large -> litellm
+
+queues: "Queues (GPU lanes)" {
+  qi: "kb-ingest-llm (extract_kg) · conc 1" { class: q }
+  qm: "kb-ingest-merge (merge/build) · conc 1" { class: q }
+  qss: "kb-search-small (plan/retrieve/route/coverage/rerank) · conc 4" { class: q }
+  qsl: "kb-search-large (synthesize) · conc 2" { class: q }
+}
+small -> queues.qi: "" { style.stroke-dash: 2; style.stroke: "#94a3b8" }
+small -> queues.qss: "" { style.stroke-dash: 2; style.stroke: "#94a3b8" }
+large -> queues.qsl: "" { style.stroke-dash: 2; style.stroke: "#94a3b8" }
+
+note: "Defaults overridable per role via LITELLM_ROLE_TIERS\n(e.g. {\"plan\":\"large\"}). Operator manages 2 physical\nmodels; roles map onto them. See docs/MODELS.md." { class: note }

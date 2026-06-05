@@ -1,0 +1,62 @@
+# kb-llamaindex — system architecture (container view)
+direction: right
+
+classes: {
+  ext:   { style: { fill: "#1e293b"; font-color: "#f8fafc"; stroke: "#0f172a"; bold: true } }
+  edge:  { style: { fill: "#dbeafe"; stroke: "#2563eb" } }
+  comp:  { style: { fill: "#eff6ff"; stroke: "#3b82f6" } }
+  llm:   { style: { fill: "#fae8ff"; stroke: "#a21caf" } }
+  store: { shape: cylinder; style: { fill: "#f1f5f9"; stroke: "#64748b" } }
+  obs:   { style: { fill: "#fff7ed"; stroke: "#ea580c" } }
+  thin:  { style: { stroke: "#94a3b8"; stroke-dash: 2 } }
+}
+
+clients: "Clients" {
+  hermes: "Hermes Agent" { class: ext }
+  owui: "OpenWebUI / Desktop" { class: ext }
+}
+
+edge: "Edge / API" {
+  api: "FastAPI :8000\n/search/* · /ingest · /documents" { class: edge }
+  mcp1: "MCP-1 :9001\nkb_search · _global · _drift · _auto" { class: edge }
+  mcp2: "MCP-2 :9002\n8 atomic retrieval tools" { class: edge }
+}
+
+temporal: "Temporal" {
+  worker: "Worker\nactivities + workflows" { class: comp }
+  q: "Queues\nkb-ingest · kb-ingest-llm · kb-ingest-merge\nkb-search-small · kb-search-large · kb-graph-build" { class: comp }
+  worker -> q: "" { class: thin }
+}
+
+litellm: "LiteLLM proxy :4000\nmodel_small · model_large · embeddings" { class: llm }
+
+stores: "Stores" {
+  milvus: "Milvus\nvectors + BM25" { class: store }
+  neo4j: "Neo4j\nproperty graph + GDS" { class: store }
+  pg: "Postgres\ndocuments · ingest_metrics" { class: store }
+  minio: "MinIO\nuploads + staging" { class: store }
+  wiki: "Wikibase\ncanonical entities" { class: store }
+}
+
+obs: "Observability\nPrometheus · Grafana · Langfuse · Temporal UI" { class: obs }
+
+clients.hermes -> edge.mcp1: "SSE + Bearer"
+clients.hermes -> edge.mcp2: "SSE + Bearer"
+clients.owui -> edge.mcp1
+clients.owui -> edge.api
+
+edge.api -> temporal.worker: "submit ingest / search"
+edge.mcp1 -> temporal.worker: "submit search wf"
+edge.mcp2 -> stores.milvus: "vector" { class: thin }
+edge.mcp2 -> stores.neo4j: "graph" { class: thin }
+edge.mcp2 -> stores.pg: "chunks" { class: thin }
+
+temporal.worker -> litellm: "LLM / embeddings"
+temporal.worker -> stores.milvus { class: thin }
+temporal.worker -> stores.neo4j { class: thin }
+temporal.worker -> stores.pg { class: thin }
+temporal.worker -> stores.minio { class: thin }
+temporal.worker -> stores.wiki { class: thin }
+
+temporal.worker -> obs: "metrics / traces" { class: thin }
+edge.api -> obs: "metrics" { class: thin }
