@@ -136,3 +136,31 @@ def test_repr_useful():
     s = repr(llm)
     assert "BoundedLLM" in s
     assert "max_concurrent=3" in s
+
+
+@pytest.mark.asyncio
+async def test_gates_acquired_in_order_and_both_bound():
+    """With two gates (caps 2 and 3), the tighter gate (2) bounds in-flight."""
+    import asyncio
+    in_flight = 0
+    max_observed = 0
+    lock = asyncio.Lock()
+
+    async def fake(*a, **kw):
+        nonlocal in_flight, max_observed
+        async with lock:
+            in_flight += 1
+            max_observed = max(max_observed, in_flight)
+        await asyncio.sleep(0.05)
+        async with lock:
+            in_flight -= 1
+        return "ok"
+
+    inner = _make_inner()
+    inner.achat = fake
+    g_tight = asyncio.Semaphore(2)
+    g_loose = asyncio.Semaphore(3)
+    llm = BoundedLLM(inner, gates=[g_tight, g_loose])
+    results = await asyncio.gather(*[llm.achat() for _ in range(6)])
+    assert results == ["ok"] * 6
+    assert max_observed <= 2
