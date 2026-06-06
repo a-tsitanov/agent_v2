@@ -157,3 +157,14 @@ def test_llm_pool_settings_defaults():
     # f49a83c anti-regression sizing rule must hold by default:
     assert s.lane_caps["extraction"] <= s.tier_small_total - s.judge_floor
     assert s.lane_caps["judge"] >= 1
+
+
+def test_wiki_settings_defaults():
+    from src.config import WikiSettings
+    s = WikiSettings()
+    assert s.enabled is False
+    assert s.task_queue == "kb-wiki"
+    assert s.activity_concurrency >= 1
+    assert s.sweep_batch >= 1
+    assert s.sweep_interval_minutes >= 1
+    assert s.citations_top_k >= 1

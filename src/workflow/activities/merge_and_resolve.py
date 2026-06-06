@@ -164,6 +164,13 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         raw=raw_entity_count,
         e=len(merged_entities), r=len(merged_relations),
     )
+    # Task 8b: surface entity/relation names on the contract so the wiki
+    # dirty-mark hook can read them without touching staging (sandbox-safe).
+    _entity_names = [e.name for e in merged_entities]
+    _relation_endpoints = list(dict.fromkeys(
+        [r.source_id for r in merged_relations]
+        + [r.target_id for r in merged_relations]
+    ))
     return Merged(
         kg=kg,
         merged_entities_uri=uri,
@@ -175,4 +182,6 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         phone_alias_map=_sample_map(_phone_map),
         er_merged=len(er_map),
         er_alias_map=_sample_map(er_map),
+        entity_names=_entity_names,
+        relation_endpoints=_relation_endpoints,
     )
