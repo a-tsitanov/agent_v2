@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from loguru import logger
 from llama_index.core.llms import LLM
 
 from src.config import LLMRole
@@ -53,13 +54,15 @@ class Lane:
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
-        self.in_use -= 1
         self._sem.release()
+        self.in_use -= 1
 
 
 class LLMPool:
     """Registry of role -> gated LLM, with shared per-tier globals."""
 
+    # settings is the project Settings; typed Any to avoid a circular
+    # import (src.config would import back through the retrieval stack).
     def __init__(self, settings: Any) -> None:
         self._settings = settings
         cfg = settings.llm_pool
@@ -76,9 +79,15 @@ class LLMPool:
             cap = self._settings.llm_pool.lane_caps[role]
             lane = Lane(role, tier, cap)
             self._lanes[role] = lane
+            logger.debug(
+                "LLMPool register role={role!r} tier={tier} lane_cap={cap}",
+                role=role, tier=tier, cap=cap,
+            )
             # lane first, then tier-global (consistent order => no deadlock).
             gates = [lane, self._tiers[tier]]
-            self._llms[role] = BoundedLLM(build_llm(role), gates=gates)
+            self._llms[role] = BoundedLLM(  # type: ignore[assignment]
+                build_llm(role), gates=gates,
+            )
         return self._llms[role]
 
     def stats(self) -> dict[str, Any]:

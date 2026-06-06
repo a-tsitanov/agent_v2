@@ -127,3 +127,17 @@ async def test_stats_reports_lanes(monkeypatch):
     assert "extraction" in st["lanes"]
     assert st["lanes"]["extraction"]["cap"] >= 1
     assert "small" in st["tiers"]
+
+
+def test_lane_rejects_zero_cap():
+    with pytest.raises(ValueError, match="cap must be >= 1"):
+        Lane("x", "small", cap=0)
+
+
+@pytest.mark.asyncio
+async def test_reset_rebuilds_singleton(monkeypatch):
+    monkeypatch.setattr(pool_mod, "build_llm", lambda role: _fake_llm())
+    p1 = get_llm_pool()
+    reset_for_tests()
+    p2 = get_llm_pool()
+    assert p1 is not p2
