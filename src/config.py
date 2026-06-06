@@ -435,6 +435,9 @@ class AgentSettings(BaseSettings):
     # graph_search's LLMSynonymRetriever, judge) share this gate.
     # Bump up when LLM proxy / OpenAI quotas allow; default 8 leaves
     # headroom for ingest's pool-governed LLM activity budget.
+    # DEPRECATED: no longer read by production paths — LLM concurrency is
+    # now owned by LLMPool (see LLMPoolSettings / src/retrieval/llm_pool.py).
+    # Kept to avoid breaking envs that still set AGENT_LLM_MAX_CONCURRENT.
     llm_max_concurrent: int = Field(default=8, ge=1, le=64)
     # Hard cap (chars) on any single observation written into the
     # reasoning history — backstop even when distillation is off or the

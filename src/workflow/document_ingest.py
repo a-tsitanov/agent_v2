@@ -110,11 +110,13 @@ class DocumentIngestWorkflow:
 
             workflow.upsert_memo({"stage": "parse_and_chunk"})
             log.info("→ parse_and_chunk")
+            # Headroom: the optional translation LLM now waits on the
+            # shared LLMPool extraction lane (can block under flood).
             parsed = await workflow.execute_activity(
                 "parse_and_chunk", ctx,
                 result_type=Parsed,
                 start_to_close_timeout=timedelta(minutes=30),
-                heartbeat_timeout=timedelta(minutes=2),
+                heartbeat_timeout=timedelta(minutes=15),
                 schedule_to_close_timeout=timedelta(hours=6),
                 retry_policy=_FAST_FOREVER,
             )

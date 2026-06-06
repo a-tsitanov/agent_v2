@@ -7,8 +7,12 @@ simultaneously (or several MCP clients call ``graph_search`` whose
 the same GPU / proxy.  We don't want that.
 
 ``BoundedLLM`` is a thin composition wrapper that gates every async
-chat method through one ``asyncio.Semaphore``.  Cap is set per-process
-via ``settings.agent.llm_max_concurrent``.  Sync methods (``chat``,
+chat method through one ``asyncio.Semaphore``.  In production it is
+primarily composed by ``LLMPool`` (``src/retrieval/llm_pool.py``), which
+owns the per-role lane and tier semaphores; ``BoundedLLM`` receives those
+gates via the ``gates=`` constructor path.  The ``max_concurrent=`` path
+remains available for standalone/legacy use (e.g. diag scripts).  Sync
+methods (``chat``,
 ``complete``) are forwarded without gating — production code paths
 should use async variants; sync paths are mostly for diag scripts.
 
