@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from src.api.routes import documents, health, ingest, search_v2
+from src.api.routes import admin, documents, health, ingest, search_v2
 from src.config import settings
 from src.di.providers import build_api_container
 from src.utils.logging import configure_logging
@@ -65,3 +65,4 @@ app.include_router(health.router)
 app.include_router(search_v2.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(admin.router)

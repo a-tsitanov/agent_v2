@@ -59,6 +59,9 @@ from src.workflow.search.global_wf import GlobalSearchWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
+from src.workflow.wiki.wiki_sweep import (
+    WikiSweepWorkflow, select_dirty_entities, write_entity_article,
+)
 
 
 def _build_runtime() -> Runtime | None:
@@ -210,10 +213,23 @@ async def _run() -> None:
         gbq=settings.temporal.graph_build_task_queue,
         gbc=settings.temporal.graph_build_activity_concurrency,
     )
+    wiki_worker = Worker(
+        client,
+        task_queue=settings.wiki.task_queue,
+        workflows=[WikiSweepWorkflow],
+        activities=[select_dirty_entities, write_entity_article],
+        max_concurrent_activities=settings.wiki.activity_concurrency,
+    )
+    logger.info(
+        "temporal worker  wiki_queue={wq}  wiki_concurrency={wc}",
+        wq=settings.wiki.task_queue,
+        wc=settings.wiki.activity_concurrency,
+    )
 
     await asyncio.gather(
         main_worker.run(), llm_worker.run(), merge_worker.run(),
         search_worker.run(), large_worker.run(), graph_build_worker.run(),
+        wiki_worker.run(),
     )
 
 
