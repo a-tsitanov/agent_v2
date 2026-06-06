@@ -54,7 +54,7 @@ async def _build_graph_retriever_once(embed_model, llm):
         from src.config import settings
         from src.graph.index import (
             build_kg_extractor, build_property_graph_index,
-            ensure_entity_fulltext_index,
+            ensure_entity_fulltext_index, ensure_entity_lookup_indexes,
         )
         from src.graph.retriever import GraphRetriever
         from src.graph.store import build_neo4j_graph_store
@@ -65,8 +65,10 @@ async def _build_graph_retriever_once(embed_model, llm):
             llm=llm,  # local LiteLLM model for the retriever's synonym step
         )
         # Existing-graph coverage: create the entity-name full-text index
-        # once at bootstrap (idempotent, fail-open).
+        # plus the range indexes (name / mention_count) once at bootstrap
+        # (idempotent, fail-open).
         ensure_entity_fulltext_index(gs)
+        ensure_entity_lookup_indexes(gs)
         return GraphRetriever(
             pg, similarity_top_k=settings.agent.graph_similarity_top_k,
         )

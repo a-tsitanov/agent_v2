@@ -163,6 +163,16 @@ class ERConfig:
     "СтройИнвест" ⊂ "АО «СтройИнвест", overlap=1.0).  Set to a
     value > 1.0 to disable this bypass."""
 
+    incremental_window: int = 5000
+    """How many already-stored canonical entities to load per ingest for
+    cross-document matching.  The load is now ``ORDER BY mention_count
+    DESC`` so the most-mentioned (hub) canonicals are always in the
+    window — without that ordering the LIMIT picked an arbitrary slice
+    and, once the graph exceeds this many canonicals, new mentions of a
+    frequent entity could silently fail to match (→ duplicates).  Raise
+    for larger graphs (memory ≈ window × embedding-dim × 4 bytes: 5k×768
+    ≈ 15 MB, 25k ≈ 75 MB); candidate-generation cost grows with it too."""
+
     verdict_cache_enabled: bool = True
     """When True AND an `er_store` is passed to `resolve_entities`,
     borderline LLM-judge verdicts are cached in Neo4j (label
@@ -1084,11 +1094,19 @@ async def _cleanup_stored_losers(
 
 async def _load_existing_canonicals(
     graph_store: Any | None,
+    *,
+    limit: int = 5000,
 ) -> list[_Item]:
     """Read Neo4j entities with `er_canonical_name` and their stored
     embedding.  Returns empty when graph_store is None or any error
     occurs (incremental ER is best-effort — without it we still do
     within-batch ER).
+
+    The result is ordered by ``mention_count DESC`` so that, when the
+    graph has more canonicals than ``limit``, the window always contains
+    the most-mentioned (hub) entities rather than an arbitrary Neo4j
+    slice — the difference between a new mention reliably matching a
+    frequent entity and silently fragmenting into a duplicate.
     """
     if graph_store is None:
         return []
@@ -1105,8 +1123,10 @@ async def _load_existing_canonicals(
                    n.er_embedding AS er_embedding,
                    coalesce(n.mention_count, 1) AS mention_count,
                    coalesce(n.description, '') AS description
-            LIMIT 5000
+            ORDER BY mention_count DESC
+            LIMIT $limit
             """,
+            param_map={"limit": int(limit)},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("ER load existing canonicals failed: {err}", err=exc)
@@ -1216,7 +1236,9 @@ async def resolve_entities(
         return entities, relations, {}
 
     # 2. Load existing canonicals (incremental ER).
-    stored_items = await _load_existing_canonicals(graph_store)
+    stored_items = await _load_existing_canonicals(
+        graph_store, limit=cfg.incremental_window,
+    )
 
     # 3. Embed new entities.  Stored ones already have embeddings.
     if not await _embed_entities(new_items, embed_model):
