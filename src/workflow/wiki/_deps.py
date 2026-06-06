@@ -28,5 +28,6 @@ async def get_mediawiki() -> AsyncMediaWiki:
 
 
 def reset_for_tests() -> None:
-    global _mw
+    global _mw, _lock
     _mw = None
+    _lock = asyncio.Lock()

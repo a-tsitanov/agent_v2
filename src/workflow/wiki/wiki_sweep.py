@@ -67,7 +67,10 @@ async def write_entity_article(name: str) -> str:
     new = splice_bot_section(current, bot_md)
     if new != current:
         await mw.upsert_page(title, new, summary="KB bot: updated from graph")
-    await mw.ensure_sitelink(ctx.wikibase_qid, title)
+    try:
+        await mw.ensure_sitelink(ctx.wikibase_qid, title)
+    except Exception as exc:  # noqa: BLE001 — sitelink is best-effort; page is already written
+        activity.logger.warning("ensure_sitelink failed name=%s: %s", name, exc)
     # persist page title + hash + clear dirty
     store.structured_query(
         "MATCH (e:__Entity__ {name:$n}) SET e.wiki_page_title=$t",

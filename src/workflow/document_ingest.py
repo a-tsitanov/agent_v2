@@ -85,6 +85,13 @@ _HEAVY_FOREVER = RetryPolicy(
     maximum_interval=timedelta(minutes=30),
     maximum_attempts=0,
 )
+# Best-effort wiki dirty-mark: capped (don't delay ingest if it fails).
+_WIKI_BESTEFFORT = RetryPolicy(
+    initial_interval=timedelta(seconds=1),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=10),
+    maximum_attempts=3,
+)
 
 
 @workflow.defn
@@ -224,8 +231,8 @@ class DocumentIngestWorkflow:
                             MarkDirtyIn(entity_names=ent_names,
                                         relation_endpoints=endpoints),
                             start_to_close_timeout=timedelta(minutes=2),
-                            schedule_to_close_timeout=timedelta(minutes=30),
-                            retry_policy=_FAST_FOREVER,
+                            schedule_to_close_timeout=timedelta(minutes=5),
+                            retry_policy=_WIKI_BESTEFFORT,
                         )
                     except Exception as exc:  # noqa: BLE001 — best-effort
                         log.warning("wiki dirty-mark failed: %s", exc)
