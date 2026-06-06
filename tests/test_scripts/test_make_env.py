@@ -65,3 +65,30 @@ from scripts.make_env import parse_env
 def test_parse_env_reads_keyvalues_ignores_comments_blanks():
     txt = "# c\nA=1\n\nB=hello world\n# D=skip\nC=\n"
     assert parse_env(txt) == {"A": "1", "B": "hello world", "C": ""}
+
+
+import re as _re
+from scripts.make_env import is_secret, gen_secret
+
+
+def test_is_secret_matches_secret_keys():
+    for k in ["NEO4J_PASSWORD", "WIKIBASE_SECRET_KEY", "API_KEYS",
+              "MINIO_ACCESS_KEY", "LITELLM_API_KEY", "WIKIBASE_ADMIN_PASS"]:
+        assert is_secret(k), k
+    for k in ["API_HOST", "MILVUS_PORT", "LLM_POOL_TIER_SMALL_TOTAL"]:
+        assert not is_secret(k), k
+
+
+def test_gen_secret_wikibase_key_is_32_hex():
+    v = gen_secret("WIKIBASE_SECRET_KEY")
+    assert _re.fullmatch(r"[0-9a-f]{32}", v)
+
+
+def test_gen_secret_password_meets_min_lengths():
+    assert len(gen_secret("WIKIBASE_ADMIN_PASS")) >= 12
+    assert len(gen_secret("NEO4J_PASSWORD")) >= 12
+
+
+def test_gen_secret_api_key_has_sk_prefix():
+    assert gen_secret("LITELLM_API_KEY").startswith("sk-")
+    assert gen_secret("API_KEYS").startswith("sk-")
