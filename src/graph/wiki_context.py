@@ -25,7 +25,7 @@ def subgraph_hash(ctx: EntityContext) -> str:
     """Stable sha256 over the entity's facts. Order-independent on
     relations (sorted), independent of qid/page_title/citations."""
     rels = sorted(
-        "|".join((rl, d, nn, rd)) for (rl, d, nn, _nl, rd) in ctx.relations
+        "\x1f".join((rl, d, nn, rd)) for (rl, d, nn, _nl, rd) in ctx.relations
     )
     payload = "\x1e".join([ctx.name, ctx.label, ctx.description, *rels])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -53,6 +53,7 @@ RETURN e.name AS name,
 _CITATIONS_CYPHER = """
 MATCH (c:Chunk)-[:MENTIONS]->(e:__Entity__ {name: $name})
 RETURN coalesce(c.text, '') AS text, coalesce(c.doc_id, '') AS doc_id
+ORDER BY c.doc_id, text
 LIMIT $k
 """
 

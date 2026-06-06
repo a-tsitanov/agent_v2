@@ -1,4 +1,6 @@
-from src.graph.wiki_context import EntityContext, subgraph_hash
+from unittest.mock import MagicMock
+
+from src.graph.wiki_context import EntityContext, read_citations, read_entity_subgraph, subgraph_hash
 
 
 def _ctx(**kw):
@@ -33,10 +35,6 @@ def test_hash_changes_on_description_change():
 def test_hash_ignores_qid_and_page_title():
     assert subgraph_hash(_ctx(wikibase_qid="Q9", page_title="other")) == \
            subgraph_hash(_ctx())
-
-
-from unittest.mock import MagicMock
-from src.graph.wiki_context import read_entity_subgraph, read_citations
 
 
 def test_read_entity_subgraph_builds_context():

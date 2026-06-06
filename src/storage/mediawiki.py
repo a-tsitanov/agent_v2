@@ -4,8 +4,6 @@ sitelink). Used by the wiki editor to write entity article pages.
 Cookie-session auth via httpx.AsyncClient; CSRF token fetched per edit."""
 from __future__ import annotations
 
-from typing import Any
-
 import httpx
 from loguru import logger
 

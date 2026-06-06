@@ -1,4 +1,10 @@
-from src.workflow.wiki.article import splice_bot_section, BOT_START, BOT_END
+import inspect
+
+import pytest
+from unittest.mock import AsyncMock
+
+from src.graph.wiki_context import EntityContext
+from src.workflow.wiki.article import splice_bot_section, BOT_START, BOT_END, render_bot_section
 
 
 def test_insert_into_pageless_creates_marked_section():
@@ -22,12 +28,6 @@ def test_idempotent_twice_equals_once():
 def test_human_only_page_gets_bot_section_prepended_without_loss():
     out = splice_bot_section("Just human text.", "B")
     assert "Just human text." in out and "B" in out and BOT_START in out
-
-
-import pytest
-from unittest.mock import AsyncMock
-from src.graph.wiki_context import EntityContext
-from src.workflow.wiki.article import render_bot_section
 
 
 def _ctx():
@@ -58,6 +58,5 @@ async def test_render_grounds_on_facts_and_citations_not_prior_prose():
     assert "[[Договор № 17-К]]" in out and "[d1]" in out
     # Anti-drift: there is no "prior article" channel — the function takes
     # no existing-prose argument (enforced by signature).
-    import inspect
     params = set(inspect.signature(render_bot_section).parameters)
     assert "existing" not in params and "prior" not in params

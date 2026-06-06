@@ -29,5 +29,5 @@ def select_dirty(store, limit: int) -> list[str]:
     return [r["name"] for r in rows]
 
 
-def clear_dirty(store, name: str, hash: str) -> None:
-    store.structured_query(_CLEAR, param_map={"name": name, "hash": hash})
+def clear_dirty(store, name: str, digest: str) -> None:
+    store.structured_query(_CLEAR, param_map={"name": name, "hash": digest})
