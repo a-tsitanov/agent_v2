@@ -490,6 +490,41 @@ class AgentSettings(BaseSettings):
     canonical_linker_enabled: bool = False
 
 
+class LLMPoolSettings(BaseSettings):
+    """Per-process LLM concurrency pool (hierarchical tier + lane limits).
+
+    The pool owns LLM concurrency; Temporal queue caps are relaxed to
+    isolation only.  Small-tier lanes intentionally over-subscribe
+    (sum of ceilings > tier_small_total) so one workload can fill the
+    GPU while no role can monopolize it beyond its ceiling.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_POOL_", env_file=".env", extra="ignore",
+    )
+
+    # Real backend capacity (GPU concurrent requests for small tier).
+    tier_small_total: int = Field(default=25, ge=1)
+    tier_large_total: int = Field(default=8, ge=1)
+    # Reserved floor for the merge/judge lane under an extraction flood.
+    # The sizing rule extraction_ceiling <= tier_small_total - judge_floor
+    # guarantees merge never starves (f49a83c anti-regression).
+    judge_floor: int = Field(default=7, ge=1)
+    # Per-role lane ceilings.  Override the whole map via
+    # LLM_POOL_LANE_CAPS='{"extraction":12,...}'.
+    lane_caps: dict[str, int] = Field(
+        default_factory=lambda: {
+            "extraction": 18,
+            "judge": 14,
+            "search": 14,
+            "plan": 4,
+            "route": 2,
+            "retrieve": 4,
+            "synthesis": 8,
+        }
+    )
+
+
 class MetricsSettings(BaseSettings):
     """Worker-side Prometheus exporter (Stage 2 of analytics plan).
 
@@ -577,6 +612,10 @@ class Settings(BaseSettings):
         return AgentSettings()
 
     @cached_property
+    def llm_pool(self) -> LLMPoolSettings:
+        return LLMPoolSettings()
+
+    @cached_property
     def wikibase(self) -> WikibaseSettings:
         return WikibaseSettings()
 
@@ -603,6 +642,7 @@ __all__ = [
     "HFSettings",
     "IngestionSettings",
     "LiteLLMSettings",
+    "LLMPoolSettings",
     "MetricsSettings",
     "MilvusSettings",
     "MinioSettings",
