@@ -57,3 +57,11 @@ def test_render_substitutes_values_only():
 def test_render_roundtrips_real_env_example():
     ex = Path(".env.example").read_text()
     assert render(parse_example(ex), {}) == ex
+
+
+from scripts.make_env import parse_env
+
+
+def test_parse_env_reads_keyvalues_ignores_comments_blanks():
+    txt = "# c\nA=1\n\nB=hello world\n# D=skip\nC=\n"
+    assert parse_env(txt) == {"A": "1", "B": "hello world", "C": ""}
