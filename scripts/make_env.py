@@ -206,6 +206,15 @@ def validate(values: dict[str, str]) -> list[Issue]:
         issues.append(Issue("ERROR",
             "OPENAI_API_KEY is empty but a model tier points at OpenAI (gpt-*)"))
 
+    bp = values.get("WIKIBASE_BOT_PASSWORD", "")
+    if bp and len(bp) < 8:
+        issues.append(Issue("ERROR",
+            f"WIKIBASE_BOT_PASSWORD must be >= 8 chars (MediaWiki minimum), got {len(bp)}"))
+    ap = values.get("WIKIBASE_ADMIN_PASS", "")
+    if ap and len(ap) < 10:
+        issues.append(Issue("ERROR",
+            f"WIKIBASE_ADMIN_PASS must be >= 10 chars (MediaWiki minimum), got {len(ap)}"))
+
     return issues
 
 

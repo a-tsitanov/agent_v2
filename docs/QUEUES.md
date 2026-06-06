@@ -7,11 +7,12 @@ own task queue so GPU / LLM pressure can be capped independently.
 | Queue (config field) | Default | Hosts | Concurrency cap |
 | --- | --- | --- | --- |
 | `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding activities | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
-| `llm_task_queue` | `kb-ingest-llm` | `extract_kg` ONLY (the extract lane) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (1) |
-| `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (the merge lane) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (1) |
+| `llm_task_queue` | `kb-ingest-llm` | `extract_kg` ONLY (the extract lane) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (18) |
+| `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (the merge lane) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (14) |
 | `search_task_queue` | `kb-search-small` | `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` + `GlobalSearchWorkflow` + `DriftSearchWorkflow` + `AutoSearchWorkflow` + their activities (plan / retrieve / coverage_check / rerank_sources / route / map_communities / documents_for_communities) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
 | `large_task_queue` | `kb-search-large` | `synthesize_answer` ONLY (final large-tier synthesis, Search R5) — activities-only Worker, no workflows | `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) |
 | `graph_build_task_queue` | `kb-graph-build` | `CommunityBuildWorkflow` + `detect_communities_activity` / `summarize_community_activity` (OFFLINE GDS-Leiden community build, Search R6) | `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY` (2) |
+| `wiki_task_queue` | `kb-wiki` | `WikiSweepWorkflow` + `select_dirty_entities` / `write_entity_article` (continuous per-entity MediaWiki article editor) | `TEMPORAL_WIKI_ACTIVITY_CONCURRENCY` (4) |
 
 ## Dedicated merge queue: `kb-ingest-merge`
 
@@ -31,17 +32,12 @@ queue and ride the merge lane automatically. `extract_kg` stays pinned
 to `kb-ingest-llm`. Now extract and merge poll independent queues and
 interleave instead of serialising through one FIFO.
 
-**Tradeoff — ~2 concurrent LLM tasks**: with both lanes capped at
-concurrency 1, up to two LLM tasks can be in flight at once (one extract
-+ one merge). This was confirmed acceptable — the GPU/proxy is sized for
-~2 concurrent LLM calls. Operators on a tighter budget should keep both
-caps at 1 (the default); raising either multiplies the in-flight LLM
-load. `build_property_graph` remains registered in `MAIN_ACTIVITIES`
-too (Neo4j-write, not GPU-bound) so single-pool deployments still work.
+**LLM concurrency is now owned by the per-process LLMPool** (`src/retrieval/llm_pool.py`), not by Temporal caps alone. The Temporal `llm`/`merge` caps were raised to 18/14 so the pool binds first — they must be ≥ the pool's per-role lane ceilings or Temporal would throttle before the pool gets a chance to arbitrate. The pool enforces a hierarchical limit: a small-tier global total (default 25, `LLM_POOL_TIER_SMALL_TOTAL`) combined with per-role lane ceilings (`LLM_POOL_LANE_CAPS`), so extract and merge interleave dynamically and the GPU stays utilized without either role monopolizing capacity. `build_property_graph` remains registered in `MAIN_ACTIVITIES` too (Neo4j-write, not GPU-bound) so single-pool deployments still work.
 
 **Operator action on upgrade**: set `TEMPORAL_MERGE_TASK_QUEUE` /
-`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` if non-default, and restart the
-worker so it polls the new `kb-ingest-merge` queue.
+`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` if non-default (keep them ≥ the
+corresponding pool lane ceiling), and restart the worker so it polls the
+new `kb-ingest-merge` queue.
 
 ## Offline graph-community build queue: `kb-graph-build` (Search R6)
 
@@ -139,3 +135,7 @@ worker; new submissions go to `kb-search-small`.
 
 The orchestrator reuses `synthesize_answer` for the final answer, so no
 synthesis activity is duplicated.
+
+## Continuous wiki editor queue: kb-wiki
+
+The worker hosts a `kb-wiki` Worker pool running `WikiSweepWorkflow` and its two activities: `select_dirty_entities` (queries Neo4j for entities flagged `wiki_dirty=true`) and `write_entity_article` (generates and writes the per-entity MediaWiki article section). Ingest marks touched entities `wiki_dirty` via a best-effort hook immediately after graph writes; a Temporal Schedule (`scripts/setup_wiki_schedule.py`) or the admin route `POST /admin/wiki/rebuild` starts the sweep, which regenerates each dirty entity's bot-managed MediaWiki article section from the graph (grounded and cited, drift-free) and skips unchanged entities via a subgraph hash. The feature is opt-in via `WIKI_ENABLED`. Concurrency is capped via `TEMPORAL_WIKI_ACTIVITY_CONCURRENCY` (default 4); article generation rides the LLMPool synthesis lane so it shares the same hierarchical GPU budget as search synthesis. **Operator action on upgrade**: restart the worker so it polls the new `kb-wiki` queue.

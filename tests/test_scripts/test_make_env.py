@@ -1,3 +1,4 @@
+import pytest
 from scripts.make_env import parse_example, Comment, Blank, Section, KV
 
 EX = """# ── Sec One ──────────
@@ -239,3 +240,20 @@ def test_noninteractive_generates_project_secret_but_not_openai(tmp_path):
     assert "OPENAI_API_KEY=\n" in written        # left EMPTY, not minted
     # project secret WAS auto-generated (non-empty, not the blank example default)
     assert "NEO4J_PASSWORD=\n" not in written
+
+
+# --- MediaWiki password length validators ---
+
+@pytest.mark.parametrize("bot_pass,expect_error", [
+    ("short7", True),   # 6 chars — too short, ERROR
+    ("exactly8", False),  # 8 chars — ok
+    ("longenoughpass", False),  # well over 8 — ok
+    ("", False),  # empty means not set → no check
+])
+def test_validate_bot_password_length(bot_pass, expect_error):
+    v = {**BASE, "WIKIBASE_BOT_PASSWORD": bot_pass}
+    errors = [i for i in validate(v) if i.level == "ERROR" and "WIKIBASE_BOT_PASSWORD" in i.msg]
+    if expect_error:
+        assert errors, f"Expected ERROR for password {bot_pass!r}, got none"
+    else:
+        assert not errors, f"Unexpected ERROR for password {bot_pass!r}: {errors}"
