@@ -128,6 +128,10 @@ class Merged(_Frozen):
     phone_alias_map: dict[str, str] = {}
     er_merged: int = 0
     er_alias_map: dict[str, str] = {}
+    # Task 8b: entity/relation names surfaced for wiki dirty-marking.
+    # Populated by merge_and_resolve; empty default keeps old callers working.
+    entity_names: list[str] = Field(default_factory=list)
+    relation_endpoints: list[str] = Field(default_factory=list)
 
 
 class GraphBuilt(_Frozen):
@@ -167,6 +171,17 @@ class MarkFailedIn(_Frozen):
     ctx: Ctx | None
     params: IngestParams
     error: str
+
+
+class MarkDirtyIn(_Frozen):
+    """Input to the mark_entities_dirty activity.
+
+    Contains the entity names and relation endpoint names to flag as
+    dirty for the continuous wiki editor (Project A).
+    """
+
+    entity_names: list[str] = Field(default_factory=list)
+    relation_endpoints: list[str] = Field(default_factory=list)
 
 
 class IngestResult(_Frozen):

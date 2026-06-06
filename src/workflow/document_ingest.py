@@ -52,12 +52,22 @@ with workflow.unsafe.imports_passed_through():
         IngestResult,
         Injected,
         KGExtracted,
+        MarkDirtyIn,
         MarkFailedIn,
         Merged,
         Parsed,
         WikibasePushed,
     )
     from src.workflow.graph_build import GraphBuildWorkflow
+
+
+def _wiki_dirty_targets(merged: "Merged") -> tuple[list[str], list[str]]:
+    """Entity names + relation endpoints to flag dirty for the wiki editor.
+    Reads the names surfaced on the Merged contract by merge_and_resolve
+    (Task 8b) — no staging access needed."""
+    names = list(merged.entity_names or [])
+    endpoints = list(merged.relation_endpoints or [])
+    return names, endpoints
 
 
 # Forever-retry profiles.  ``maximum_attempts=0`` means no cap on
@@ -203,6 +213,23 @@ class DocumentIngestWorkflow:
                     merged.merged_entities_uri,
                     built.entities, built.relations,
                 )
+
+                # Wiki editor (Project A): flag this doc's entities for
+                # article (re)write.  Best-effort — must not fail ingest.
+                if settings.wiki.enabled:
+                    try:
+                        ent_names, endpoints = _wiki_dirty_targets(merged)
+                        await workflow.execute_activity(
+                            "mark_entities_dirty",
+                            MarkDirtyIn(entity_names=ent_names,
+                                        relation_endpoints=endpoints),
+                            start_to_close_timeout=timedelta(minutes=2),
+                            schedule_to_close_timeout=timedelta(minutes=30),
+                            retry_policy=_FAST_FOREVER,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — best-effort
+                        log.warning("wiki dirty-mark failed: %s", exc)
+
             except (ActivityError, ChildWorkflowError) as exc:
                 log.warning("graph stage failed, downgrading to vector_only: %s", exc)
                 graph_status = "vector_only"

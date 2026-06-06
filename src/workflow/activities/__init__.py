@@ -32,6 +32,7 @@ from src.workflow.activities.fetch_source import fetch_source
 from src.workflow.activities.finalize import finalize, mark_failed
 from src.workflow.activities.index_vector import index_vector
 from src.workflow.activities.inject_canonical import inject_canonical
+from src.workflow.activities.mark_dirty import mark_entities_dirty
 from src.workflow.activities.merge_and_resolve import merge_and_resolve
 from src.workflow.activities.parse_and_chunk import parse_and_chunk
 from src.workflow.activities.push_wikibase import push_wikibase
@@ -65,6 +66,7 @@ MAIN_ACTIVITIES = [
     push_wikibase,
     finalize,
     mark_failed,
+    mark_entities_dirty,
 ]
 
 # R7b cutover: the legacy ReAct SearchWorkflow was removed, so its
@@ -94,6 +96,7 @@ __all__ = [
     "finalize",
     "index_vector",
     "inject_canonical",
+    "mark_entities_dirty",
     "mark_failed",
     "merge_and_resolve",
     "parse_and_chunk",
