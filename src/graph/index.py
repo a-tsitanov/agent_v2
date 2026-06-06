@@ -63,6 +63,42 @@ def ensure_entity_fulltext_index(store) -> bool:
         return False
 
 
+# Range index on `__Entity__.name`.  The llama-index Neo4j store creates a
+# UNIQUE constraint on `.id` (the node identity), but the project's own
+# Cypher matches entities by the separate `.name` property
+# (``GraphRetriever.awalk`` seed lookup, ER stored-loser cleanup).  Without
+# this index those are full label scans — O(N) at 250k+ entities.
+ENTITY_NAME_INDEX_CYPHER = (
+    "CREATE INDEX entity_name IF NOT EXISTS "
+    "FOR (e:__Entity__) ON (e.name)"
+)
+
+# Range index on `__Entity__.mention_count`.  Backs the incremental-ER
+# window's ``ORDER BY n.mention_count DESC`` so the planner can return the
+# most-mentioned canonicals without sorting the whole label.
+ENTITY_MENTION_COUNT_INDEX_CYPHER = (
+    "CREATE INDEX entity_mention_count IF NOT EXISTS "
+    "FOR (e:__Entity__) ON (e.mention_count)"
+)
+
+
+def ensure_entity_lookup_indexes(store) -> bool:
+    """Idempotently create the range indexes that keep entity lookups and
+    the incremental-ER window scalable at 250k+ entities.
+
+    Fail-open like ``ensure_entity_fulltext_index``: any error is logged
+    and swallowed (a store/version without these indexes just keeps the
+    old full-scan behaviour).  Returns True only if both succeeded."""
+    ok = True
+    for cypher in (ENTITY_NAME_INDEX_CYPHER, ENTITY_MENTION_COUNT_INDEX_CYPHER):
+        try:
+            store.structured_query(cypher)
+        except Exception as exc:  # broad by design — fail-open
+            logger.warning("ensure_entity_lookup_indexes failed: {e}", e=exc)
+            ok = False
+    return ok
+
+
 def _parse_triplets_strip_thinking(response: str, **kwargs):
     """Wrap the upstream parser with a `<think>...</think>` stripper.
 

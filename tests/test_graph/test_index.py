@@ -145,6 +145,44 @@ def test_ensure_entity_fulltext_index_idempotent_cypher_and_failopen():
     assert ensure_entity_fulltext_index(_BoomStore()) is False
 
 
+def test_ensure_entity_lookup_indexes_name_and_mention_count_and_failopen():
+    from src.graph.index import (
+        ENTITY_MENTION_COUNT_INDEX_CYPHER,
+        ENTITY_NAME_INDEX_CYPHER,
+        ensure_entity_lookup_indexes,
+    )
+
+    # Idempotent range indexes backing entity-by-name lookups and the
+    # incremental-ER `ORDER BY mention_count DESC` window.
+    assert "CREATE INDEX entity_name IF NOT EXISTS" in ENTITY_NAME_INDEX_CYPHER
+    assert "FOR (e:__Entity__) ON (e.name)" in ENTITY_NAME_INDEX_CYPHER
+    assert (
+        "CREATE INDEX entity_mention_count IF NOT EXISTS"
+        in ENTITY_MENTION_COUNT_INDEX_CYPHER
+    )
+    assert "ON (e.mention_count)" in ENTITY_MENTION_COUNT_INDEX_CYPHER
+
+    class _Store:
+        def __init__(self):
+            self.ran: list[str] = []
+
+        def structured_query(self, cypher):
+            self.ran.append(cypher)
+
+    store = _Store()
+    assert ensure_entity_lookup_indexes(store) is True
+    assert store.ran == [
+        ENTITY_NAME_INDEX_CYPHER, ENTITY_MENTION_COUNT_INDEX_CYPHER,
+    ]
+
+    class _BoomStore:
+        def structured_query(self, cypher):
+            raise RuntimeError("no index support")
+
+    # Fail-open: returns False, never raises.
+    assert ensure_entity_lookup_indexes(_BoomStore()) is False
+
+
 def test_build_property_graph_index_threads_llm(monkeypatch):
     # The index's llm must be the project (LiteLLM) model so the default
     # retriever's LLMSynonymRetriever doesn't fall back to Settings.llm

@@ -49,7 +49,34 @@ def build_vector_store(
         # may retry the `index_vector` activity if the worker
         # crashes mid-batch.
         upsert_mode=True,
+        # ANN index config — see MilvusSettings.  Without this the store
+        # falls back to FLAT (exhaustive) search, which is a latency cliff
+        # at production scale (≳1M chunk vectors).  Only applied when the
+        # collection is (re)created.
+        index_config=_index_config(cfg),
+        search_config=_search_config(cfg),
     )
+
+
+def _index_config(cfg) -> dict:
+    """Build the Milvus dense-index config from settings.
+
+    For non-HNSW index types the HNSW-specific build params are omitted
+    so the server uses its own defaults.  ``metric_type`` is left out —
+    MilvusVectorStore derives it from ``similarity_metric``.
+    """
+    conf: dict = {"index_type": cfg.index_type}
+    if cfg.index_type.upper() == "HNSW":
+        conf["M"] = cfg.hnsw_m
+        conf["efConstruction"] = cfg.hnsw_ef_construction
+    return conf
+
+
+def _search_config(cfg) -> dict:
+    """Build the Milvus query-time search params from settings."""
+    if cfg.index_type.upper() == "HNSW":
+        return {"ef": cfg.hnsw_ef_search}
+    return {}
 
 
 def build_vector_index(

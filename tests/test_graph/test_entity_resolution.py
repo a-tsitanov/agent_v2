@@ -124,7 +124,7 @@ class _GraphStoreStub:
     rows: list[dict] = field(default_factory=list)
     raises: bool = False
 
-    def structured_query(self, query: str) -> list[dict]:
+    def structured_query(self, query: str, param_map: dict | None = None) -> list[dict]:
         if self.raises:
             raise RuntimeError("neo4j down")
         return self.rows
@@ -445,3 +445,34 @@ async def test_singletons_get_er_metadata() -> None:
     props = out_ents[0].properties or {}
     assert props.get("er_canonical_name") == "Unique Concept"
     assert json.loads(props.get("er_embedding")) == [0.1, 0.2, 0.3, 0.4]
+
+
+@pytest.mark.asyncio
+async def test_load_existing_canonicals_orders_by_mention_count_and_limits():
+    """The incremental-ER window must load the most-mentioned canonicals
+    first (ORDER BY mention_count DESC) and honour the configured limit —
+    so a graph larger than the window can't silently drop hub entities
+    from dedup."""
+    from src.graph.entity_resolution import _load_existing_canonicals
+
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def structured_query(self, query, param_map=None):
+            captured["query"] = query
+            captured["param_map"] = param_map
+            return []
+
+    out = await _load_existing_canonicals(_Store(), limit=123)
+
+    assert out == []
+    assert "ORDER BY mention_count DESC" in captured["query"]
+    assert "LIMIT $limit" in captured["query"]
+    assert captured["param_map"] == {"limit": 123}
+
+
+@pytest.mark.asyncio
+async def test_load_existing_canonicals_none_store_returns_empty():
+    from src.graph.entity_resolution import _load_existing_canonicals
+
+    assert await _load_existing_canonicals(None, limit=10) == []

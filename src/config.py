@@ -82,6 +82,25 @@ class MilvusSettings(BaseSettings):
     timeout_s: float = 10.0
     dim: int = 768
 
+    # --- ANN index (scale) -------------------------------------------
+    # The chunk collection's vector index.  llama-index's MilvusVectorStore
+    # defaults to ``index_type="FLAT"`` (brute-force, exhaustive scan) —
+    # fine up to a few hundred k vectors, a latency cliff beyond ~1M.  We
+    # default to HNSW so production collections get approximate-NN search.
+    # NOTE: ``index_type`` only takes effect when the collection is
+    # (re)created (fresh deploy or ``overwrite=True`` re-ingest); an
+    # existing FLAT collection keeps FLAT until rebuilt — so this is an
+    # opt-in-by-rebuild swap, never a silent in-place mutation.  Set
+    # ``MILVUS_INDEX_TYPE=FLAT`` to keep exact search.
+    index_type: str = "HNSW"
+    hnsw_m: int = 16
+    """HNSW graph degree (M).  Higher → better recall, more memory."""
+    hnsw_ef_construction: int = 200
+    """HNSW build-time search width.  Higher → better recall, slower build."""
+    hnsw_ef_search: int = 64
+    """HNSW query-time search width (ef).  Higher → better recall, slower
+    query.  Must be ≥ the search top_k."""
+
     @cached_property
     def uri(self) -> str:
         return f"http://{self.host}:{self.port}"
