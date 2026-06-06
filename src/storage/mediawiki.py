@@ -48,7 +48,10 @@ class AsyncMediaWiki:
                 return ""
             revs = page.get("revisions") or []
             if revs:
-                return revs[0]["slots"]["main"]["content"]
+                slot = revs[0]["slots"]["main"]
+                # formatversion=2 returns the body under "content"; the
+                # default formatversion=1 returns it under "*". Accept both.
+                return slot.get("content", slot.get("*", ""))
         return ""
 
     async def upsert_page(self, title: str, wikitext: str, summary: str) -> bool:

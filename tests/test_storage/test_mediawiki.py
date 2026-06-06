@@ -35,6 +35,18 @@ async def test_get_missing_page_returns_empty():
 
 
 @pytest.mark.asyncio
+async def test_get_page_reads_legacy_formatversion1_star_slot():
+    # Default MediaWiki (formatversion=1) returns slot content under "*",
+    # not "content". get_page must read both (verified live against a real
+    # wikibase-docker instance).
+    c = _client_returning([
+        {"query": {"pages": {"7": {"revisions": [{"slots": {"main": {"*": "WT1"}}}]}}}},
+    ])
+    mw = AsyncMediaWiki(client=c, api_url="http://x/w/api.php")
+    assert await mw.get_page("Title") == "WT1"
+
+
+@pytest.mark.asyncio
 async def test_upsert_page_fetches_token_then_edits():
     c = _client_returning([
         {"query": {"tokens": {"csrftoken": "T+\\"}}},     # csrf token
