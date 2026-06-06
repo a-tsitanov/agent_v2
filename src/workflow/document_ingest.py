@@ -166,7 +166,9 @@ class DocumentIngestWorkflow:
                     result_type=KGExtracted,
                     task_queue=settings.temporal.llm_task_queue,
                     start_to_close_timeout=timedelta(hours=2),
-                    heartbeat_timeout=timedelta(minutes=5),
+                    # Headroom for pool-wait before the first heartbeat
+                    # (LLMPool may block on the lane under saturation).
+                    heartbeat_timeout=timedelta(minutes=15),
                     schedule_to_close_timeout=timedelta(hours=48),
                     retry_policy=_HEAVY_FOREVER,
                 )
