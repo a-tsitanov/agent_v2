@@ -133,3 +133,43 @@ def test_validate_temporal_caps_warn_when_below_ceiling():
 def test_validate_openai_key_required_for_gpt_model():
     v = {**BASE, "OPENAI_API_KEY": ""}
     assert "ERROR" in _levels(validate(v), "OPENAI_API_KEY")
+
+
+from scripts.make_env import run_interactive
+
+
+def _scripted(answers):
+    it = iter(answers)
+    return lambda prompt="": next(it)
+
+
+def test_interactive_skip_keeps_defaults():
+    lines = parse_example(EX)
+    values = {l.key: l.example_val for l in lines if isinstance(l, KV)}
+    # Two sections; press Enter (keep) for both.
+    out = run_interactive(lines, dict(values),
+                          input_fn=_scripted(["", ""]),
+                          getpass_fn=_scripted([]))
+    assert out == values
+
+
+def test_interactive_configure_section_sets_value():
+    lines = parse_example(EX)
+    values = {l.key: l.example_val for l in lines if isinstance(l, KV)}
+    # Sec One: 'e' to configure -> A="7", B="" (keep). Sec Two: "" skip.
+    out = run_interactive(lines, dict(values),
+                          input_fn=_scripted(["e", "7", "", ""]),
+                          getpass_fn=_scripted([]))
+    assert out["A"] == "7" and out["B"] == "2" and out["C"] == "hello"
+
+
+def test_interactive_generate_secret():
+    txt = "# ── S ──\nNEO4J_PASSWORD=changeme\n"
+    lines = parse_example(txt)
+    values = {"NEO4J_PASSWORD": "changeme"}
+    # configure section -> secret prompt answered with 'g' (generate)
+    out = run_interactive(lines, dict(values),
+                          input_fn=_scripted(["e"]),
+                          getpass_fn=_scripted(["g"]))
+    assert out["NEO4J_PASSWORD"] != "changeme"
+    assert len(out["NEO4J_PASSWORD"]) >= 12
