@@ -49,6 +49,12 @@ class Lane:
         return self.cap - self.in_use
 
     async def __aenter__(self) -> "Lane":
+        if self._sem.locked():
+            logger.warning(
+                "LLMPool lane {name!r} saturated (cap={cap}, in_use={in_use}) "
+                "— caller waiting",
+                name=self.name, cap=self.cap, in_use=self.in_use,
+            )
         await self._sem.acquire()
         self.in_use += 1
         return self

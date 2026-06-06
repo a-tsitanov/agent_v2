@@ -141,3 +141,55 @@ async def test_reset_rebuilds_singleton(monkeypatch):
     reset_for_tests()
     p2 = get_llm_pool()
     assert p1 is not p2
+
+
+@pytest.mark.asyncio
+async def test_lane_warns_on_saturation():
+    """When a lane is full and a caller must wait, emit a WARNING so the
+    backlog that moved from Temporal schedule_to_start into pool-wait
+    stays visible."""
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, level="WARNING")
+    try:
+        lane = Lane("extraction", "small", cap=1)
+        block = asyncio.Event()
+
+        async def hold():
+            async with lane:
+                await block.wait()
+
+        holder = asyncio.create_task(hold())
+        await asyncio.sleep(0.01)  # ensure holder owns the only permit
+
+        async def enter_and_release():
+            async with lane:
+                pass
+
+        waiter = asyncio.create_task(enter_and_release())
+        await asyncio.sleep(0.01)  # waiter is now blocked -> should have warned
+        block.set()
+        await holder
+        await waiter
+    finally:
+        logger.remove(sink_id)
+
+    assert any("saturated" in m for m in messages), messages
+
+
+@pytest.mark.asyncio
+async def test_lane_no_warning_when_free():
+    """No saturation warning when the lane has a free permit."""
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, level="WARNING")
+    try:
+        lane = Lane("extraction", "small", cap=2)
+        async with lane:
+            pass
+    finally:
+        logger.remove(sink_id)
+
+    assert not any("saturated" in m for m in messages), messages
