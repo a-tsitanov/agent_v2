@@ -92,3 +92,44 @@ def test_gen_secret_password_meets_min_lengths():
 def test_gen_secret_api_key_has_sk_prefix():
     assert gen_secret("LITELLM_API_KEY").startswith("sk-")
     assert gen_secret("API_KEYS").startswith("sk-")
+
+
+from scripts.make_env import validate, Issue
+
+BASE = {
+    "MILVUS_DIM": "1536", "LITELLM_EMBEDDING_DIM": "1536",
+    "LLM_POOL_TIER_SMALL_TOTAL": "25", "LLM_POOL_JUDGE_FLOOR": "7",
+    "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "18",
+    "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY": "14",
+    "OPENAI_API_KEY": "sk-x", "LITELLM_MODEL_SMALL": "gemma4:e4b",
+    "LITELLM_MODEL_LARGE": "gpt-4o-mini",
+}
+
+
+def _levels(issues, needle):
+    return [i.level for i in issues if needle in i.msg]
+
+
+def test_validate_clean_base_has_no_errors():
+    assert [i for i in validate(BASE) if i.level == "ERROR"] == []
+
+
+def test_validate_dim_mismatch_errors():
+    v = {**BASE, "LITELLM_EMBEDDING_DIM": "3072"}
+    assert "ERROR" in _levels(validate(v), "DIM")
+
+
+def test_validate_pool_rule_errors_when_extraction_too_high():
+    # default lane_caps extraction=18; small-floor = 20-7=13 -> 18>13 -> ERROR
+    v = {**BASE, "LLM_POOL_TIER_SMALL_TOTAL": "20"}
+    assert "ERROR" in _levels(validate(v), "extraction")
+
+
+def test_validate_temporal_caps_warn_when_below_ceiling():
+    v = {**BASE, "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "2"}
+    assert "WARN" in _levels(validate(v), "TEMPORAL_LLM_ACTIVITY_CONCURRENCY")
+
+
+def test_validate_openai_key_required_for_gpt_model():
+    v = {**BASE, "OPENAI_API_KEY": ""}
+    assert "ERROR" in _levels(validate(v), "OPENAI_API_KEY")
