@@ -28,8 +28,6 @@ from loguru import logger
 from src.retrieval.atomic_tools import (
     GraphRetrieverProtocol, RetrieverProtocol,
 )
-from src.retrieval.llm import build_search_llm
-from src.retrieval.llm_semaphore import wrap_if_needed
 
 
 _lock = asyncio.Lock()
@@ -95,15 +93,9 @@ async def _build_synthesizer_once(llm):
 
 
 async def get_search_llm() -> LLM:
-    """Project search-role LLM wrapped in BoundedLLM semaphore."""
-    async with _lock:
-        if _state["llm"] is None:
-            from src.config import settings
-            _state["llm"] = wrap_if_needed(
-                build_search_llm(),
-                max_concurrent=settings.agent.llm_max_concurrent,
-            )
-    return _state["llm"]
+    """Project search-role LLM from the shared per-process LLM pool."""
+    from src.retrieval.llm_pool import get_llm_pool
+    return get_llm_pool().get("search")
 
 
 async def get_retriever() -> RetrieverProtocol:
@@ -125,7 +117,8 @@ async def get_graph_retriever() -> GraphRetrieverProtocol | None:
         if "_embed_model" not in _state:
             _, embed = await _build_retriever_once()
             _state["_embed_model"] = embed
-        llm = _state["llm"] or wrap_if_needed(build_search_llm(), max_concurrent=8)
+        from src.retrieval.llm_pool import get_llm_pool
+        llm = _state["llm"] or get_llm_pool().get("search")
         _state["llm"] = llm
         _state["graph_retriever"] = await _build_graph_retriever_once(
             _state["_embed_model"], llm,
@@ -142,9 +135,7 @@ async def get_chunk_repository():
 
 
 async def get_synthesizer():
-    # Resolve the LLM BEFORE taking _lock: get_search_llm acquires _lock
-    # itself, and asyncio.Lock is non-reentrant — calling it while holding
-    # _lock would self-deadlock (the cold-worker synthesize hang).
+    # Resolve the LLM before taking _lock (pool.get is non-blocking).
     llm = await get_search_llm()
     async with _lock:
         if _state["synthesizer"] is None:
@@ -153,23 +144,14 @@ async def get_synthesizer():
 
 
 async def get_synthesis_llm() -> LLM:
-    """Large-tier final-synthesis LLM (R2 plan-execute flow), wrapped in
-    the shared BoundedLLM semaphore."""
-    async with _lock:
-        if _state["synthesis_llm"] is None:
-            from src.config import settings
-            from src.retrieval.llm import build_synthesis_llm
-            _state["synthesis_llm"] = wrap_if_needed(
-                build_synthesis_llm(),
-                max_concurrent=settings.agent.llm_max_concurrent,
-            )
-    return _state["synthesis_llm"]
+    """Large-tier final-synthesis LLM from the shared per-process pool."""
+    from src.retrieval.llm_pool import get_llm_pool
+    return get_llm_pool().get("synthesis")
 
 
 async def get_synthesis_synthesizer():
     """ResponseSynthesizer bound to the large tier (R2)."""
-    # Resolve the LLM BEFORE taking _lock (get_synthesis_llm acquires _lock
-    # itself; asyncio.Lock is non-reentrant — nesting self-deadlocks).
+    # Resolve the LLM before taking _lock (pool.get is non-blocking).
     llm = await get_synthesis_llm()
     async with _lock:
         if _state["synthesis_synthesizer"] is None:

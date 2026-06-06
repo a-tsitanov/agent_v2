@@ -23,8 +23,6 @@ from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.llms import LLM
 
 from src.ingestion.embeddings import build_embedding_model
-from src.retrieval.llm import build_search_llm
-from src.retrieval.llm_semaphore import BoundedLLM
 from src.storage.postgres import AsyncPostgres
 
 
@@ -39,14 +37,10 @@ class CommonProvider(Provider):
 
     @provide
     def llm(self) -> LLM:
-        # Shared bounded LLM singleton.  Wrapped in BoundedLLM so every
-        # async chat method passes through a process-wide semaphore,
-        # protecting the GPU/proxy from unbounded concurrency.
-        from src.config import settings
-        return BoundedLLM(
-            build_search_llm(),
-            max_concurrent=settings.agent.llm_max_concurrent,
-        )
+        # Search-role LLM from the shared per-process pool (one semaphore
+        # set per role across all call-sites).
+        from src.retrieval.llm_pool import get_llm_pool
+        return get_llm_pool().get("search")
 
     @provide
     def embed_model(self) -> BaseEmbedding:

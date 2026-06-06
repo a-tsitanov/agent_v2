@@ -25,12 +25,17 @@ async def _fake_synth(llm):
 @pytest.mark.asyncio
 async def test_get_synthesis_synthesizer_no_self_deadlock(monkeypatch):
     # Fresh lock bound to this test's loop; stub the heavy builders so we
-    # exercise ONLY the lock interaction.
+    # exercise ONLY the lock interaction.  After migrating to LLMPool,
+    # patch get_synthesis_llm directly instead of the old wrap_if_needed
+    # / build_synthesis_llm pair.
     monkeypatch.setattr(sd, "_lock", asyncio.Lock())
     sd.reset_for_tests()
-    monkeypatch.setattr(sd, "wrap_if_needed", lambda llm, **k: llm)
-    import src.retrieval.llm as llm_mod
-    monkeypatch.setattr(llm_mod, "build_synthesis_llm", lambda: object())
+    _fake_llm = object()
+
+    async def _fake_synthesis_llm():
+        return _fake_llm
+
+    monkeypatch.setattr(sd, "get_synthesis_llm", _fake_synthesis_llm)
     monkeypatch.setattr(sd, "_build_synthesizer_once", _fake_synth)
 
     res = await asyncio.wait_for(sd.get_synthesis_synthesizer(), timeout=3.0)
@@ -40,10 +45,16 @@ async def test_get_synthesis_synthesizer_no_self_deadlock(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_synthesizer_no_self_deadlock(monkeypatch):
+    # After migrating to LLMPool, patch get_search_llm directly instead
+    # of the old wrap_if_needed / build_search_llm pair.
     monkeypatch.setattr(sd, "_lock", asyncio.Lock())
     sd.reset_for_tests()
-    monkeypatch.setattr(sd, "wrap_if_needed", lambda llm, **k: llm)
-    monkeypatch.setattr(sd, "build_search_llm", lambda: object())
+    _fake_llm = object()
+
+    async def _fake_search_llm():
+        return _fake_llm
+
+    monkeypatch.setattr(sd, "get_search_llm", _fake_search_llm)
     monkeypatch.setattr(sd, "_build_synthesizer_once", _fake_synth)
 
     res = await asyncio.wait_for(sd.get_synthesizer(), timeout=3.0)
