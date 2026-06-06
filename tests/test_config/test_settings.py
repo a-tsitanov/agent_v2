@@ -38,7 +38,7 @@ def test_merge_queue_defaults() -> None:
 
     s = TemporalSettings()
     assert s.merge_task_queue == "kb-ingest-merge"
-    assert s.merge_activity_concurrency == 1
+    assert s.merge_activity_concurrency == 14
 
 
 def test_merge_queue_env_override(monkeypatch) -> None:

@@ -197,24 +197,22 @@ class TemporalSettings(BaseSettings):
     activity_concurrency: int = 4
     staging_bucket: str = "kb-staging"
 
-    # GPU-bound activities (LLM extract_kg + merge_and_resolve) run on
-    # a separate task queue so we can cap their concurrency
-    # independently of the IO-bound fast activities.  Default of 1
-    # serialises LLM calls — sane for a single local GPU.  Raise on
-    # multi-GPU hosts or when proxy-side batching makes parallel calls
-    # safe.
+    # LLM-bound extract_kg activities run on a separate task queue.
+    # LLMPool owns real concurrency (tier + lane ceilings); this Temporal
+    # cap must be >= the pool extraction lane ceiling so the pool binds
+    # first.  Default matches LLMPoolSettings.lane_caps extraction ceiling.
+    # Lower only if Temporal slot overhead is a concern on a constrained host.
     llm_task_queue: str = "kb-ingest-llm"
-    llm_activity_concurrency: int = 1
+    llm_activity_concurrency: int = 18
 
     # Merge stage (GraphBuildWorkflow → merge_and_resolve +
     # build_property_graph) runs on its OWN queue so it interleaves with
     # extract_kg instead of queueing behind a burst of extracts on
     # kb-ingest-llm (head-of-line blocking starved merge under load).
-    # Default 1 + llm_activity_concurrency=1 → up to ~2 concurrent LLM
-    # tasks in flight (one extract lane + one merge lane); the GPU/proxy
-    # is sized for that.  Raise on multi-GPU hosts.
+    # Must be >= LLMPool judge/merge lane ceiling so the pool binds before
+    # Temporal.  Default matches LLMPoolSettings.lane_caps judge ceiling.
     merge_task_queue: str = "kb-ingest-merge"
-    merge_activity_concurrency: int = 1
+    merge_activity_concurrency: int = 14
 
     # Search-side activities (plan_subquestions, retrieve_subquestion,
     # coverage_check, rerank_sources, synthesize_answer) live on their own
@@ -436,7 +434,7 @@ class AgentSettings(BaseSettings):
     # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
     # graph_search's LLMSynonymRetriever, judge) share this gate.
     # Bump up when LLM proxy / OpenAI quotas allow; default 8 leaves
-    # headroom for ingest's serial llm_activity_concurrency.
+    # headroom for ingest's pool-governed LLM activity budget.
     llm_max_concurrent: int = Field(default=8, ge=1, le=64)
     # Hard cap (chars) on any single observation written into the
     # reasoning history — backstop even when distillation is off or the
