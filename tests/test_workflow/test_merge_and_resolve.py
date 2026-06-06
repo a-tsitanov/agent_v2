@@ -29,8 +29,8 @@ async def test_merge_consolidate_resolve_chain():
         "src.workflow.activities.merge_and_resolve.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.merge_and_resolve.build_judge_llm",
-        return_value=MagicMock(),
+        "src.workflow.activities.merge_and_resolve.get_llm_pool",
+        return_value=MagicMock(**{"get.return_value": MagicMock()}),
     ), patch(
         "src.workflow.activities.merge_and_resolve.merge_kg_extraction",
         new=AsyncMock(return_value=(merged_entities, merged_relations)),
@@ -76,8 +76,8 @@ async def test_runs_er_when_enabled():
         "src.workflow.activities.merge_and_resolve.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.merge_and_resolve.build_judge_llm",
-        return_value=MagicMock(),
+        "src.workflow.activities.merge_and_resolve.get_llm_pool",
+        return_value=MagicMock(**{"get.return_value": MagicMock()}),
     ), patch(
         "src.workflow.activities.merge_and_resolve.build_embedding_model",
         return_value=MagicMock(),
@@ -102,3 +102,10 @@ async def test_runs_er_when_enabled():
         await merge_and_resolve(kg)
 
     er_mock.assert_awaited_once()
+
+
+def test_merge_and_resolve_wired_to_pool():
+    import src.workflow.activities.merge_and_resolve as mr
+    src = __import__("inspect").getsource(mr)
+    assert "get_llm_pool" in src
+    assert "build_judge_llm" not in src

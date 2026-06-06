@@ -38,7 +38,7 @@ def test_merge_queue_defaults() -> None:
 
     s = TemporalSettings()
     assert s.merge_task_queue == "kb-ingest-merge"
-    assert s.merge_activity_concurrency == 1
+    assert s.merge_activity_concurrency == 14
 
 
 def test_merge_queue_env_override(monkeypatch) -> None:
@@ -147,3 +147,13 @@ def test_effective_base_prefers_deprecated_alias(monkeypatch):
 def test_agent_graph_similarity_top_k_default():
     from src.config import settings
     assert settings.agent.graph_similarity_top_k == 20
+
+
+def test_llm_pool_settings_defaults():
+    from src.config import LLMPoolSettings
+    s = LLMPoolSettings()
+    assert s.tier_small_total == 25
+    assert s.tier_large_total == 8
+    # f49a83c anti-regression sizing rule must hold by default:
+    assert s.lane_caps["extraction"] <= s.tier_small_total - s.judge_floor
+    assert s.lane_caps["judge"] >= 1

@@ -66,7 +66,9 @@ class GraphBuildWorkflow:
             "merge_and_resolve", kg,
             result_type=Merged,
             start_to_close_timeout=timedelta(hours=1),
-            heartbeat_timeout=timedelta(minutes=5),
+            # Headroom for pool-wait before the first heartbeat
+            # (LLMPool may block on the lane under saturation).
+            heartbeat_timeout=timedelta(minutes=15),
             schedule_to_close_timeout=timedelta(hours=24),
             retry_policy=_HEAVY_FOREVER,
         )

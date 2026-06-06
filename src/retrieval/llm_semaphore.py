@@ -7,8 +7,12 @@ simultaneously (or several MCP clients call ``graph_search`` whose
 the same GPU / proxy.  We don't want that.
 
 ``BoundedLLM`` is a thin composition wrapper that gates every async
-chat method through one ``asyncio.Semaphore``.  Cap is set per-process
-via ``settings.agent.llm_max_concurrent``.  Sync methods (``chat``,
+chat method through one ``asyncio.Semaphore``.  In production it is
+primarily composed by ``LLMPool`` (``src/retrieval/llm_pool.py``), which
+owns the per-role lane and tier semaphores; ``BoundedLLM`` receives those
+gates via the ``gates=`` constructor path.  The ``max_concurrent=`` path
+remains available for standalone/legacy use (e.g. diag scripts).  Sync
+methods (``chat``,
 ``complete``) are forwarded without gating — production code paths
 should use async variants; sync paths are mostly for diag scripts.
 
@@ -27,55 +31,83 @@ and injected wherever an ``LLM`` is needed downstream, so LLM call-sites
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from typing import Any, AsyncIterator
 
 from llama_index.core.llms import LLM
 
 
 class BoundedLLM:
-    """Wraps an LLM with a process-wide asyncio.Semaphore."""
+    """Wraps an LLM with a process-wide asyncio.Semaphore, or through an
+    ordered list of async context-manager gates (the ``gates=`` path)."""
 
-    def __init__(self, inner: LLM, *, max_concurrent: int) -> None:
-        if max_concurrent < 1:
-            raise ValueError(
-                f"max_concurrent must be >= 1, got {max_concurrent}",
-            )
+    def __init__(
+        self,
+        inner: LLM,
+        *,
+        max_concurrent: int | None = None,
+        gates: list[AbstractAsyncContextManager[Any]] | None = None,
+    ) -> None:
+        if gates is None and max_concurrent is None:
+            raise ValueError("supply either max_concurrent= or gates=")
+        if gates is None:
+            if max_concurrent < 1:
+                raise ValueError(
+                    f"max_concurrent must be >= 1, got {max_concurrent}",
+                )
+            gates = [asyncio.Semaphore(max_concurrent)]
+            self._max_concurrent: int | None = max_concurrent
+        else:
+            if not gates:
+                raise ValueError("gates must be a non-empty list")
+            self._max_concurrent = None
         self._inner = inner
-        self._sem = asyncio.Semaphore(max_concurrent)
-        self._max_concurrent = max_concurrent
+        self._gates = gates
+        # Back-compat: keep a `_sem` alias to the first gate for any
+        # introspection that referenced it.  Note: gate[0] may be a
+        # non-Semaphore (e.g. a pool Lane), so callers must not assume
+        # `.locked()` / `.acquire()` are available.
+        self._sem = gates[0]
+
+    @asynccontextmanager
+    async def _acquire_all(self):
+        async with AsyncExitStack() as stack:
+            for g in self._gates:
+                await stack.enter_async_context(g)
+            yield
 
     # ── async hot path methods (gated) ───────────────────────────────
 
     async def achat(self, *a, **kw):
-        async with self._sem:
+        async with self._acquire_all():
             return await self._inner.achat(*a, **kw)
 
     async def acomplete(self, *a, **kw):
-        async with self._sem:
+        async with self._acquire_all():
             return await self._inner.acomplete(*a, **kw)
 
     async def achat_with_tools(self, *a, **kw):
-        async with self._sem:
+        async with self._acquire_all():
             return await self._inner.achat_with_tools(*a, **kw)
 
     async def astructured_predict(self, *a, **kw):
-        async with self._sem:
+        async with self._acquire_all():
             return await self._inner.astructured_predict(*a, **kw)
 
     async def astream_chat(self, *a, **kw) -> AsyncIterator[Any]:
-        # streaming variant: hold the semaphore for the entire stream.
+        # streaming variant: hold the gates for the entire stream.
         # one concurrent stream per slot — fine.
-        async with self._sem:
+        async with self._acquire_all():
             async for chunk in self._inner.astream_chat(*a, **kw):
                 yield chunk
 
     async def astream_complete(self, *a, **kw) -> AsyncIterator[Any]:
-        async with self._sem:
+        async with self._acquire_all():
             async for chunk in self._inner.astream_complete(*a, **kw):
                 yield chunk
 
     async def apredict(self, *a, **kw):
-        async with self._sem:
+        async with self._acquire_all():
             return await self._inner.apredict(*a, **kw)
 
     async def aget_tool_calls_from_response(self, *a, **kw):
@@ -96,7 +128,7 @@ class BoundedLLM:
     # ── introspection helpers ────────────────────────────────────────
 
     @property
-    def max_concurrent(self) -> int:
+    def max_concurrent(self) -> int | None:
         return self._max_concurrent
 
     @property

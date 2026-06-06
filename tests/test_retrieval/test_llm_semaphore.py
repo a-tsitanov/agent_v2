@@ -136,3 +136,55 @@ def test_repr_useful():
     s = repr(llm)
     assert "BoundedLLM" in s
     assert "max_concurrent=3" in s
+
+
+@pytest.mark.asyncio
+async def test_gates_acquired_in_order_and_both_bound():
+    """With two gates (caps 2 and 3), the tighter gate (2) bounds in-flight."""
+    in_flight = 0
+    max_observed = 0
+    lock = asyncio.Lock()
+
+    async def fake(*a, **kw):
+        nonlocal in_flight, max_observed
+        async with lock:
+            in_flight += 1
+            max_observed = max(max_observed, in_flight)
+        await asyncio.sleep(0.05)
+        async with lock:
+            in_flight -= 1
+        return "ok"
+
+    inner = _make_inner()
+    inner.achat = fake
+    g_tight = asyncio.Semaphore(2)
+    g_loose = asyncio.Semaphore(3)
+    llm = BoundedLLM(inner, gates=[g_tight, g_loose])
+    results = await asyncio.gather(*[llm.achat() for _ in range(6)])
+    assert results == ["ok"] * 6
+    assert max_observed <= 2
+
+
+@pytest.mark.asyncio
+async def test_no_args_raises_clear_error():
+    inner = _make_inner()
+    with pytest.raises(ValueError, match="either max_concurrent"):
+        BoundedLLM(inner)
+
+
+@pytest.mark.asyncio
+async def test_gates_released_on_exception():
+    """If the inner call raises, all gates are released (no leak)."""
+    sem = asyncio.Semaphore(1)
+    inner = _make_inner()
+
+    async def boom(*a, **kw):
+        raise RuntimeError("kaboom")
+
+    inner.achat = boom
+    llm = BoundedLLM(inner, gates=[sem])
+    with pytest.raises(RuntimeError):
+        await llm.achat()
+    # Gate must be free again -> a fresh acquire returns immediately.
+    await asyncio.wait_for(sem.acquire(), timeout=0.5)
+    sem.release()

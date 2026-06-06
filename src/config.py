@@ -197,24 +197,22 @@ class TemporalSettings(BaseSettings):
     activity_concurrency: int = 4
     staging_bucket: str = "kb-staging"
 
-    # GPU-bound activities (LLM extract_kg + merge_and_resolve) run on
-    # a separate task queue so we can cap their concurrency
-    # independently of the IO-bound fast activities.  Default of 1
-    # serialises LLM calls — sane for a single local GPU.  Raise on
-    # multi-GPU hosts or when proxy-side batching makes parallel calls
-    # safe.
+    # LLM-bound extract_kg activities run on a separate task queue.
+    # LLMPool owns real concurrency (tier + lane ceilings); this Temporal
+    # cap must be >= the pool extraction lane ceiling so the pool binds
+    # first.  Default matches LLMPoolSettings.lane_caps extraction ceiling.
+    # Lower only if Temporal slot overhead is a concern on a constrained host.
     llm_task_queue: str = "kb-ingest-llm"
-    llm_activity_concurrency: int = 1
+    llm_activity_concurrency: int = 18
 
     # Merge stage (GraphBuildWorkflow → merge_and_resolve +
     # build_property_graph) runs on its OWN queue so it interleaves with
     # extract_kg instead of queueing behind a burst of extracts on
     # kb-ingest-llm (head-of-line blocking starved merge under load).
-    # Default 1 + llm_activity_concurrency=1 → up to ~2 concurrent LLM
-    # tasks in flight (one extract lane + one merge lane); the GPU/proxy
-    # is sized for that.  Raise on multi-GPU hosts.
+    # Must be >= LLMPool judge/merge lane ceiling so the pool binds before
+    # Temporal.  Default matches LLMPoolSettings.lane_caps judge ceiling.
     merge_task_queue: str = "kb-ingest-merge"
-    merge_activity_concurrency: int = 1
+    merge_activity_concurrency: int = 14
 
     # Search-side activities (plan_subquestions, retrieve_subquestion,
     # coverage_check, rerank_sources, synthesize_answer) live on their own
@@ -436,7 +434,10 @@ class AgentSettings(BaseSettings):
     # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
     # graph_search's LLMSynonymRetriever, judge) share this gate.
     # Bump up when LLM proxy / OpenAI quotas allow; default 8 leaves
-    # headroom for ingest's serial llm_activity_concurrency.
+    # headroom for ingest's pool-governed LLM activity budget.
+    # DEPRECATED: no longer read by production paths — LLM concurrency is
+    # now owned by LLMPool (see LLMPoolSettings / src/retrieval/llm_pool.py).
+    # Kept to avoid breaking envs that still set AGENT_LLM_MAX_CONCURRENT.
     llm_max_concurrent: int = Field(default=8, ge=1, le=64)
     # Hard cap (chars) on any single observation written into the
     # reasoning history — backstop even when distillation is off or the
@@ -488,6 +489,41 @@ class AgentSettings(BaseSettings):
     # linker + alias storage ship as building blocks and are NOT yet
     # wired into the ingest activity.
     canonical_linker_enabled: bool = False
+
+
+class LLMPoolSettings(BaseSettings):
+    """Per-process LLM concurrency pool (hierarchical tier + lane limits).
+
+    The pool owns LLM concurrency; Temporal queue caps are relaxed to
+    isolation only.  Small-tier lanes intentionally over-subscribe
+    (sum of ceilings > tier_small_total) so one workload can fill the
+    GPU while no role can monopolize it beyond its ceiling.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_POOL_", env_file=".env", extra="ignore",
+    )
+
+    # Real backend capacity (GPU concurrent requests for small tier).
+    tier_small_total: int = Field(default=25, ge=1)
+    tier_large_total: int = Field(default=8, ge=1)
+    # Reserved floor for the merge/judge lane under an extraction flood.
+    # The sizing rule extraction_ceiling <= tier_small_total - judge_floor
+    # guarantees merge never starves (f49a83c anti-regression).
+    judge_floor: int = Field(default=7, ge=1)
+    # Per-role lane ceilings.  Override the whole map via
+    # LLM_POOL_LANE_CAPS='{"extraction":12,...}'.
+    lane_caps: dict[str, int] = Field(
+        default_factory=lambda: {
+            "extraction": 18,
+            "judge": 14,
+            "search": 14,
+            "plan": 4,
+            "route": 2,
+            "retrieve": 4,
+            "synthesis": 8,
+        }
+    )
 
 
 class MetricsSettings(BaseSettings):
@@ -577,6 +613,10 @@ class Settings(BaseSettings):
         return AgentSettings()
 
     @cached_property
+    def llm_pool(self) -> LLMPoolSettings:
+        return LLMPoolSettings()
+
+    @cached_property
     def wikibase(self) -> WikibaseSettings:
         return WikibaseSettings()
 
@@ -603,6 +643,7 @@ __all__ = [
     "HFSettings",
     "IngestionSettings",
     "LiteLLMSettings",
+    "LLMPoolSettings",
     "MetricsSettings",
     "MilvusSettings",
     "MinioSettings",
