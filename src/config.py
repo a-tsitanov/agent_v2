@@ -405,6 +405,25 @@ class WikibaseSettings(BaseSettings):
     timeout_s: float = 30.0
 
 
+class WikiSettings(BaseSettings):
+    """Continuous wiki-article editor (Project A). Generates per-entity
+    MediaWiki pages from the Neo4j graph. Opt-in via WIKI_ENABLED."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="WIKI_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = False
+    task_queue: str = "kb-wiki"
+    activity_concurrency: int = Field(default=4, ge=1)
+    sweep_batch: int = Field(default=50, ge=1)
+    sweep_interval_minutes: int = Field(default=15, ge=1)
+    citations_top_k: int = Field(default=5, ge=1)
+    # MediaWiki Action API URL. Empty -> derived from wikibase.base_url
+    # + "/w/api.php" by mediawiki_api_url() below.
+    mediawiki_api_url: str = ""
+
+
 class AgentSettings(BaseSettings):
     """Knobs for the agentic search endpoints (`/agent`, `/selfrag`)."""
 
@@ -621,6 +640,10 @@ class Settings(BaseSettings):
         return WikibaseSettings()
 
     @cached_property
+    def wiki(self) -> WikiSettings:
+        return WikiSettings()
+
+    @cached_property
     def hf(self) -> HFSettings:
         return HFSettings()
 
@@ -652,5 +675,6 @@ __all__ = [
     "Settings",
     "TemporalSettings",
     "WikibaseSettings",
+    "WikiSettings",
     "settings",
 ]
