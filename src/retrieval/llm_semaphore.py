@@ -27,24 +27,27 @@ and injected wherever an ``LLM`` is needed downstream, so LLM call-sites
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from typing import Any, AsyncIterator
 
 from llama_index.core.llms import LLM
 
 
 class BoundedLLM:
-    """Wraps an LLM with a process-wide asyncio.Semaphore."""
+    """Wraps an LLM with a process-wide asyncio.Semaphore, or through an
+    ordered list of async context-manager gates (the ``gates=`` path)."""
 
     def __init__(
         self,
         inner: LLM,
         *,
         max_concurrent: int | None = None,
-        gates: list | None = None,
+        gates: list[AbstractAsyncContextManager[Any]] | None = None,
     ) -> None:
+        if gates is None and max_concurrent is None:
+            raise ValueError("supply either max_concurrent= or gates=")
         if gates is None:
-            if max_concurrent is None or max_concurrent < 1:
+            if max_concurrent < 1:
                 raise ValueError(
                     f"max_concurrent must be >= 1, got {max_concurrent}",
                 )
@@ -57,7 +60,9 @@ class BoundedLLM:
         self._inner = inner
         self._gates = gates
         # Back-compat: keep a `_sem` alias to the first gate for any
-        # introspection that referenced it.
+        # introspection that referenced it.  Note: gate[0] may be a
+        # non-Semaphore (e.g. a pool Lane), so callers must not assume
+        # `.locked()` / `.acquire()` are available.
         self._sem = gates[0]
 
     @asynccontextmanager
