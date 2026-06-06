@@ -29,3 +29,51 @@ def subgraph_hash(ctx: EntityContext) -> str:
     )
     payload = "\x1e".join([ctx.name, ctx.label, ctx.description, *rels])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+_SUBGRAPH_CYPHER = """
+MATCH (e:__Entity__ {name: $name})
+OPTIONAL MATCH (e)-[r]-(m:__Entity__)
+WITH e,
+  collect(CASE WHEN m IS NULL THEN NULL ELSE {
+    rl: type(r),
+    dir: CASE WHEN startNode(r) = e THEN 'out' ELSE 'in' END,
+    nn: m.name,
+    nl: head([l IN labels(m) WHERE l <> '__Entity__' AND l <> '__Node__']),
+    rd: coalesce(r.description, '')
+  } END) AS rels
+RETURN e.name AS name,
+  head([l IN labels(e) WHERE l <> '__Entity__' AND l <> '__Node__']) AS label,
+  coalesce(e.description, '') AS description,
+  coalesce(e.wikibase_qid, '') AS qid,
+  coalesce(e.wiki_page_title, '') AS page_title,
+  [x IN rels WHERE x IS NOT NULL] AS relations
+"""
+
+_CITATIONS_CYPHER = """
+MATCH (c:Chunk)-[:MENTIONS]->(e:__Entity__ {name: $name})
+RETURN coalesce(c.text, '') AS text, coalesce(c.doc_id, '') AS doc_id
+LIMIT $k
+"""
+
+
+def read_entity_subgraph(store, name: str) -> EntityContext:
+    rows = store.structured_query(_SUBGRAPH_CYPHER, param_map={"name": name})
+    if not rows:
+        raise ValueError(f"entity not found: {name!r}")
+    r = rows[0]
+    relations = [
+        (x["rl"], x["dir"], x["nn"], x.get("nl") or "", x.get("rd") or "")
+        for x in (r.get("relations") or [])
+    ]
+    return EntityContext(
+        name=r["name"], label=r.get("label") or "",
+        description=r.get("description") or "", wikibase_qid=r.get("qid") or "",
+        page_title=(r.get("page_title") or r["name"]), relations=relations,
+    )
+
+
+def read_citations(store, name: str, k: int) -> list[tuple[str, str]]:
+    rows = store.structured_query(
+        _CITATIONS_CYPHER, param_map={"name": name, "k": k})
+    return [(row.get("text") or "", row.get("doc_id") or "") for row in rows]
