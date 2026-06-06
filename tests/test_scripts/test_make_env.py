@@ -200,3 +200,42 @@ def test_write_env_no_backup_when_absent(tmp_path):
     write_env(out, "NEW=2\n")
     assert out.read_text() == "NEW=2\n"
     assert not (tmp_path / ".env.bak").exists()
+
+
+from scripts.make_env import main
+
+
+_EXAMPLE_MIN = """# ── Models ──
+OPENAI_API_KEY=
+LITELLM_MODEL_SMALL=gemma4:e4b
+LITELLM_MODEL_LARGE=gpt-4o-mini
+# ── Vector ──
+MILVUS_DIM=1536
+LITELLM_EMBEDDING_DIM=1536
+NEO4J_PASSWORD=
+"""
+
+
+def test_noninteractive_does_not_mint_openai_key_and_errors(tmp_path, capsys):
+    ex = tmp_path / ".env.example"
+    ex.write_text(_EXAMPLE_MIN)
+    out = tmp_path / ".env.out"
+    rc = main(["--non-interactive", "--no-merge",
+               "--example", str(ex), "--out", str(out)])
+    assert rc == 1                      # OpenAI ERROR surfaced, no --force
+    assert not out.exists()            # not written on ERROR
+    out_text = capsys.readouterr().out
+    assert "OPENAI_API_KEY" in out_text  # the error mentions it
+
+
+def test_noninteractive_generates_project_secret_but_not_openai(tmp_path):
+    ex = tmp_path / ".env.example"
+    ex.write_text(_EXAMPLE_MIN)
+    out = tmp_path / ".env.out"
+    rc = main(["--non-interactive", "--no-merge", "--force",
+               "--example", str(ex), "--out", str(out)])
+    assert rc == 0                      # --force writes despite ERROR
+    written = out.read_text()
+    assert "OPENAI_API_KEY=\n" in written        # left EMPTY, not minted
+    # project secret WAS auto-generated (non-empty, not the blank example default)
+    assert "NEO4J_PASSWORD=\n" not in written

@@ -5,12 +5,17 @@ Run: uv run python -m scripts.make_env   (see --help for flags)
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import re
 import secrets
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Upstream credentials the user must supply — never auto-minted (an
+# invented value would mask the validation that requires a real one).
+_UPSTREAM_CREDENTIALS = {"OPENAI_API_KEY"}
 
 
 @dataclass
@@ -230,9 +235,8 @@ def run_interactive(
     Per var: Enter keeps the current default; text overrides; for secrets
     'g' generates.  I/O is injected for testing.
     """
-    import getpass as _gp
     if getpass_fn is None:
-        getpass_fn = _gp.getpass
+        getpass_fn = getpass.getpass
 
     for title, kvs in _sections_in_order(lines):
         print(f"\n=== {title or '(no section)'} ===")
@@ -310,7 +314,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.non_interactive:
         for ln in lines:
-            if isinstance(ln, KV) and is_secret(ln.key) and not values[ln.key]:
+            if (isinstance(ln, KV) and is_secret(ln.key)
+                    and not values[ln.key]
+                    and ln.key not in _UPSTREAM_CREDENTIALS):
                 values[ln.key] = gen_secret(ln.key)
     else:
         if not sys.stdin.isatty():
