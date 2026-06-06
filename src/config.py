@@ -422,6 +422,9 @@ class WikiSettings(BaseSettings):
     # MediaWiki Action API URL. Empty -> derived from wikibase.base_url
     # + "/w/api.php" by mediawiki_api_url() below.
     mediawiki_api_url: str = ""
+    # MediaWiki site global id for sitelinks (wgLocalDatabases / site id).
+    # Must match the wiki's actual site id; default fits the dev compose.
+    site_global_id: str = "kbwiki"
 
 
 class AgentSettings(BaseSettings):

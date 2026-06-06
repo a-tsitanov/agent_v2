@@ -47,3 +47,16 @@ async def test_upsert_page_fetches_token_then_edits():
     _args, kwargs = c.post.call_args
     data = kwargs.get("data") or {}
     assert data.get("token") == "T+\\" and data.get("text") == "NEW"
+
+
+@pytest.mark.asyncio
+async def test_ensure_sitelink_uses_configured_site_id():
+    c = _client_returning([
+        {"query": {"tokens": {"csrftoken": "T"}}},   # csrf
+        {"entity": {"id": "Q5"}},                      # wbsetsitelink ok
+    ])
+    mw = AsyncMediaWiki(client=c, api_url="http://x/w/api.php", site_global_id="myWiki")
+    await mw.ensure_sitelink("Q5", "Some Title")
+    _args, kwargs = c.post.call_args
+    data = kwargs.get("data") or {}
+    assert data.get("linksite") == "myWiki" and data.get("linktitle") == "Some Title"

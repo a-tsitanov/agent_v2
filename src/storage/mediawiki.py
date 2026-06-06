@@ -9,12 +9,13 @@ from loguru import logger
 
 
 class AsyncMediaWiki:
-    def __init__(self, client: httpx.AsyncClient, api_url: str) -> None:
+    def __init__(self, client: httpx.AsyncClient, api_url: str, site_global_id: str = "kbwiki") -> None:
         self._c = client
         self._api = api_url
+        self._site = site_global_id
 
     @classmethod
-    async def login(cls, api_url: str, user: str, password: str) -> "AsyncMediaWiki":
+    async def login(cls, api_url: str, user: str, password: str, site_global_id: str = "kbwiki") -> "AsyncMediaWiki":
         client = httpx.AsyncClient(timeout=30.0)
         # 1) login token
         r = await client.get(api_url, params={
@@ -28,7 +29,7 @@ class AsyncMediaWiki:
         r.raise_for_status()
         if r.json().get("login", {}).get("result") != "Success":
             raise RuntimeError(f"mediawiki login failed: {r.json()}")
-        return cls(client=client, api_url=api_url)
+        return cls(client=client, api_url=api_url, site_global_id=site_global_id)
 
     async def _csrf(self) -> str:
         r = await self._c.get(self._api, params={
@@ -70,7 +71,7 @@ class AsyncMediaWiki:
         token = await self._csrf()
         r = await self._c.post(self._api, data={
             "action": "wbsetsitelink", "id": qid,
-            "linksite": "kbwiki", "linktitle": title,
+            "linksite": self._site, "linktitle": title,
             "token": token, "format": "json"})
         r.raise_for_status()
         return "error" not in r.json()

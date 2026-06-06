@@ -23,7 +23,8 @@ async def get_mediawiki() -> AsyncMediaWiki:
         if _mw is None:
             _mw = await AsyncMediaWiki.login(
                 _api_url(), settings.wikibase.bot_user,
-                settings.wikibase.bot_password.get_secret_value())
+                settings.wikibase.bot_password.get_secret_value(),
+                site_global_id=settings.wiki.site_global_id)
     return _mw
 
 
