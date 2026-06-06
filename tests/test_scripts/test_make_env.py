@@ -173,3 +173,30 @@ def test_interactive_generate_secret():
                           getpass_fn=_scripted(["g"]))
     assert out["NEO4J_PASSWORD"] != "changeme"
     assert len(out["NEO4J_PASSWORD"]) >= 12
+
+
+from scripts.make_env import build_values, write_env
+
+
+def test_build_values_merges_existing_over_example():
+    lines = parse_example(EX)
+    existing = {"A": "merged", "C": "kept"}
+    vals = build_values(lines, existing)
+    assert vals["A"] == "merged"   # existing wins
+    assert vals["B"] == "2"        # falls back to example default
+    assert vals["C"] == "kept"
+
+
+def test_write_env_backs_up_existing(tmp_path):
+    out = tmp_path / ".env"
+    out.write_text("OLD=1\n")
+    write_env(out, "NEW=2\n")
+    assert out.read_text() == "NEW=2\n"
+    assert (tmp_path / ".env.bak").read_text() == "OLD=1\n"
+
+
+def test_write_env_no_backup_when_absent(tmp_path):
+    out = tmp_path / ".env"
+    write_env(out, "NEW=2\n")
+    assert out.read_text() == "NEW=2\n"
+    assert not (tmp_path / ".env.bak").exists()
