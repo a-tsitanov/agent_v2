@@ -41,8 +41,8 @@ async def test_writes_nodes_blob_and_returns_uri(tmp_path: Path):
         "src.workflow.activities.parse_and_chunk.build_ingestion_pipeline",
         return_value=fake_pipeline,
     ), patch(
-        "src.workflow.activities.parse_and_chunk.build_extraction_llm",
-        return_value=MagicMock(),
+        "src.workflow.activities.parse_and_chunk.get_llm_pool",
+        return_value=MagicMock(**{"get.return_value": MagicMock()}),
     ), patch(
         "src.workflow.activities.parse_and_chunk.build_embedding_model",
         return_value=MagicMock(),
@@ -82,8 +82,8 @@ async def test_raises_when_reader_does_not_find_file(tmp_path: Path):
         "src.workflow.activities.parse_and_chunk.build_ingestion_pipeline",
         return_value=MagicMock(),
     ), patch(
-        "src.workflow.activities.parse_and_chunk.build_extraction_llm",
-        return_value=MagicMock(),
+        "src.workflow.activities.parse_and_chunk.get_llm_pool",
+        return_value=MagicMock(**{"get.return_value": MagicMock()}),
     ), patch(
         "src.workflow.activities.parse_and_chunk.build_embedding_model",
         return_value=MagicMock(),

@@ -53,7 +53,7 @@ def main() -> None:
     args = _parse_args()
     configure_logging(level=settings.api.log_level)
 
-    from src.retrieval.llm import build_extraction_llm
+    from src.retrieval.llm_pool import get_llm_pool
 
     embed_model = build_embedding_model()
     pipeline = build_ingestion_pipeline(
@@ -61,7 +61,7 @@ def main() -> None:
         semantic=args.semantic,
         cache_dir=settings.ingestion.cache_dir,
         translator_llm=(
-            build_extraction_llm()
+            get_llm_pool().get("extraction")
             if settings.ingestion.translate_to_russian else None
         ),
     )
