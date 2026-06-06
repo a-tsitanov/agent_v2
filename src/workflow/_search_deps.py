@@ -12,9 +12,9 @@ init.  Reset hooks left out — workers restart cleanly enough; if
 the underlying store config changes the operator restarts the
 worker.
 
-All builders use the project's search-role LLM (BoundedLLM wrapper —
-see ``src/retrieval/llm_semaphore.py``) so concurrent activities
-share one GPU semaphore even when they run inside Temporal.
+All builders obtain their LLM from the shared per-process ``LLMPool``
+(``src/retrieval/llm_pool.py``) — still BoundedLLM-gated under the
+hood — so concurrent activities share one GPU semaphore.
 """
 
 from __future__ import annotations

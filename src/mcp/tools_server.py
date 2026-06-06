@@ -13,11 +13,12 @@ Every tool carries an 1800s (30 min) execution timeout (FastMCP
 retriever can't hang a client indefinitely, while still letting the
 heaviest legitimate calls finish.
 
-GPU/LLM protection: the project ``BoundedLLM`` semaphore (in DI,
-``settings.agent.llm_max_concurrent``) gates every LLM call —
-including those inside ``graph_search`` / ``find_*`` (which use
-``LLMSynonymRetriever`` for query normalisation).  Concurrent MCP
-clients automatically serialise behind it.
+GPU/LLM protection: every LLM call — including those inside
+``graph_search`` / ``find_*`` (which use ``LLMSynonymRetriever`` for
+query normalisation) — is served by the per-process ``LLMPool``
+(``src/retrieval/llm_pool.py``, configured via ``settings.llm_pool``),
+which keeps each role BoundedLLM-gated.  Concurrent MCP clients
+automatically serialise behind it.
 
 Run::
 
@@ -86,8 +87,8 @@ async def _init() -> None:
         _deps["retriever"] = index.as_retriever(similarity_top_k=10)
 
         from src.retrieval.llm_pool import get_llm_pool
-        _deps["llm"] = get_llm_pool().get("search")
-        llm = _deps["llm"]
+        llm = get_llm_pool().get("search")
+        _deps["llm"] = llm
 
         try:
             from src.graph.index import (
