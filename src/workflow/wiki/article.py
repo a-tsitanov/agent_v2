@@ -62,14 +62,31 @@ def _fmt_citations(cites) -> str:
     return "\n".join(f"[{doc_id}] {text[:300]}" for text, doc_id in cites)
 
 
-async def render_bot_section(ctx, citations, llm) -> str:
+def _fmt_sources(doc_ids, base_url: str) -> str:
+    """Deterministic '== Источники ==' section with download links to the
+    original files. Empty string when there are no docs or no base URL
+    (section omitted entirely). Link text is the bare doc_id (UUID)."""
+    if not doc_ids or not base_url:
+        return ""
+    base = base_url.rstrip("/")
+    lines = ["== Источники ==", ""]
+    for d in doc_ids:
+        lines.append(f"* [{base}/documents/{d} {d}] — скачать исходник")
+    return "\n".join(lines)
+
+
+async def render_bot_section(ctx, citations, llm,
+                             source_doc_ids=(), docs_base_url: str = "") -> str:
     """LLM-render the bot section grounded ONLY in `ctx` (graph facts) and
     `citations`. No prior article prose is passed — this is the anti-drift
-    guarantee (see spec §5)."""
+    guarantee (see spec §5). A deterministic '== Источники ==' section with
+    download links is appended after the prose (not LLM-generated)."""
     prompt = _PROMPT.format(
         name=ctx.name, label=ctx.label or "entity",
         description=ctx.description or "(none)",
         relations=_fmt_relations(ctx), citations=_fmt_citations(citations),
     )
     resp = await llm.acomplete(prompt)
-    return str(resp).strip()
+    prose = str(resp).strip()
+    sources = _fmt_sources(source_doc_ids, docs_base_url)
+    return f"{prose}\n\n{sources}" if sources else prose
