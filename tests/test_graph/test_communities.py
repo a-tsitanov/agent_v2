@@ -279,10 +279,12 @@ async def test_detect_hierarchy_carries_unchanged_report():
     l0_hash = members_hash(["a", "b", "c"])
     old_rows = [
         {"level": 0, "h": l0_hash, "report": '{"title":"L0"}',
-         "title": "L0", "summary": "sum L0", "report_vec": [0.3]},
+         "title": "L0", "summary": "sum L0", "report_vec": [0.3],
+         "summarized_at": 1234567890},
         # A stale (level,hash) that is NOT among the detected ones — ignored.
         {"level": 1, "h": "stale-hash", "report": '{"x":1}',
-         "title": "x", "summary": "y", "report_vec": None},
+         "title": "x", "summary": "y", "report_vec": None,
+         "summarized_at": 1},
     ]
     store = _FakeStoreWithOldReports(rows, old_rows)
     comms = await detect_hierarchy(store, max_levels=10, min_size=1)
@@ -308,6 +310,8 @@ async def test_detect_hierarchy_carries_unchanged_report():
     assert l0_merge.get("carry_title") == "L0"
     assert l0_merge.get("carry_summary") == "sum L0"
     assert l0_merge.get("carry_report_vec") == [0.3]
+    # The ORIGINAL summarisation time is carried (not re-stamped to now).
+    assert l0_merge.get("carry_summarized_at") == 1234567890
 
     l1_merges = [p for c, p in store.calls
                  if "MERGE (c:Community" in c and "PARENT_OF" in c]

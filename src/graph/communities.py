@@ -131,7 +131,8 @@ _READ_OLD_REPORTS_CYPHER = """
 MATCH (c:Community)
 WHERE c.members_hash IS NOT NULL AND c.report IS NOT NULL
 RETURN c.level AS level, c.members_hash AS h, c.report AS report,
-       c.title AS title, c.summary AS summary, c.report_vec AS report_vec
+       c.title AS title, c.summary AS summary, c.report_vec AS report_vec,
+       c.summarized_at AS summarized_at
 """
 
 # Constraint backing the :Community MERGE (idempotent, prevents dupes).
@@ -151,7 +152,7 @@ SET c.member_count = $member_count, c.members_hash = $members_hash,
 FOREACH (_ IN CASE WHEN $carry_report IS NULL THEN [] ELSE [1] END |
     SET c.report = $carry_report, c.title = $carry_title,
         c.summary = $carry_summary, c.report_vec = $carry_report_vec,
-        c.summarized_at = timestamp())
+        c.summarized_at = coalesce($carry_summarized_at, timestamp()))
 WITH c
 OPTIONAL MATCH (c)<-[old:IN_COMMUNITY]-(:__Entity__)
 DELETE old
@@ -176,7 +177,7 @@ SET c.member_count = $member_count, c.members_hash = $members_hash,
 FOREACH (_ IN CASE WHEN $carry_report IS NULL THEN [] ELSE [1] END |
     SET c.report = $carry_report, c.title = $carry_title,
         c.summary = $carry_summary, c.report_vec = $carry_report_vec,
-        c.summarized_at = timestamp())
+        c.summarized_at = coalesce($carry_summarized_at, timestamp()))
 WITH c
 MATCH (p:Community {id: $parent_id, level: $level - 1})
 MERGE (p)-[:PARENT_OF]->(c)
@@ -213,6 +214,7 @@ async def _read_old_reports(store: Any | None) -> dict[tuple[int, str], dict]:
         out[(int(r.get("level") or 0), h)] = {
             "report": r.get("report"), "title": r.get("title"),
             "summary": r.get("summary"), "report_vec": r.get("report_vec"),
+            "summarized_at": r.get("summarized_at"),
         }
     return out
 
@@ -483,12 +485,17 @@ async def detect_hierarchy(
                 "carry_title": carried.get("title"),
                 "carry_summary": carried.get("summary"),
                 "carry_report_vec": carried.get("report_vec"),
+                # Preserve the ORIGINAL summarisation time — a carried report
+                # was NOT re-summarised, so summarized_at must reflect content
+                # freshness, not the rebuild time (keeps staleness logic sane).
+                "carry_summarized_at": carried.get("summarized_at"),
             }
             n_carried += 1
         else:
             params = {
                 "carry_report": None, "carry_title": None,
                 "carry_summary": None, "carry_report_vec": None,
+                "carry_summarized_at": None,
             }
         carried_refs.append(comm)
         carry_params.append(params)
