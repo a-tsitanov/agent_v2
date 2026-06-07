@@ -376,6 +376,30 @@ async def _embed_entities(
 # ── candidate generation ───────────────────────────────────────────
 
 
+def _normalized_matrix(group: list[_Item]):
+    """Row-normalised float64 matrix of the group's embeddings, or None.
+
+    Lets ``_candidate_pairs`` get every pairwise cosine in one BLAS
+    matrix-vector product per row instead of an O(N²) pure-Python
+    ``_cosine`` loop (the candidate-gen cost cliff at scale).  Returns
+    None — keeping the slow but identical pure-Python path — when numpy
+    is unavailable or the embeddings are ragged, so behaviour never
+    silently changes.  Zero vectors keep cosine 0 (norm clamped to 1),
+    matching ``_cosine``.
+    """
+    try:
+        import numpy as np
+
+        m = np.asarray([it.embedding for it in group], dtype="float64")
+        if m.ndim != 2 or m.shape[0] != len(group):
+            return None
+        norms = np.linalg.norm(m, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        return m / norms
+    except Exception:  # broad by design — fall back to pure-Python cosine
+        return None
+
+
 def _candidate_pairs(
     items: list[_Item], cfg: ERConfig,
 ) -> tuple[list[tuple[str, str, float]], list[tuple[str, str, float]]]:
@@ -387,6 +411,11 @@ def _candidate_pairs(
                         cosine ≥ HIGH but cross-script.
 
     Pairs are reported by NORMALISED name (the union-find key).
+
+    Cosines come from a vectorised matrix product when numpy is
+    available (``_normalized_matrix``); otherwise an identical
+    pure-Python ``_cosine`` fallback runs.  The surrounding filter /
+    top-k / classification logic is unchanged either way.
     """
     by_label: dict[str, list[_Item]] = defaultdict(list)
     for it in items:
@@ -398,7 +427,15 @@ def _candidate_pairs(
     seen: set[tuple[str, str]] = set()
 
     for label, group in by_label.items():
+        mat = _normalized_matrix(group)
+        # Tokenise each name once (O(N)) instead of re-tokenising both
+        # sides of every pair inside the O(N²) loop below.
+        toks = [_name_tokens(it.name) for it in group]
         for i, a in enumerate(group):
+            # All cosines from `a` to the group in one shot (or None →
+            # per-pair pure-Python below).
+            cos_row = (mat @ mat[i]) if mat is not None else None
+            ta = toks[i]
             # Top-K nearest neighbors above LOW threshold.
             sims = []
             for j, b in enumerate(group):
@@ -409,7 +446,10 @@ def _candidate_pairs(
                     if not a.description or not b.description
                     else cfg.low
                 )
-                cos = _cosine(a.embedding, b.embedding)
+                cos = (
+                    float(cos_row[j]) if cos_row is not None
+                    else _cosine(a.embedding, b.embedding)
+                )
                 # High name-token overlap bypasses the cosine floor.
                 # `_embed_entities` keys on `name + description`, so two
                 # entities sharing the same Cyrillic surface but with
@@ -421,7 +461,8 @@ def _candidate_pairs(
                 # of the other, or shares ≥ half its content tokens),
                 # the cosine signal becomes secondary to the
                 # orthographic signal — let the LLM judge decide.
-                overlap = _name_token_overlap(a.name, b.name)
+                tb = toks[j]
+                overlap = (len(ta & tb) / len(ta | tb)) if ta and tb else 0.0
                 if cos < floor and overlap < cfg.name_overlap_floor_bypass:
                     continue
                 # Name-token guard: when both names share at least

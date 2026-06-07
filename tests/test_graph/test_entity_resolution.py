@@ -476,3 +476,39 @@ async def test_load_existing_canonicals_none_store_returns_empty():
     from src.graph.entity_resolution import _load_existing_canonicals
 
     assert await _load_existing_canonicals(None, limit=10) == []
+
+
+def _mk_item(name: str, vec: list[float], *, label: str = "Person", desc: str = "d"):
+    from src.graph.entity_resolution import _Item, _normalize_entity_name
+    return _Item(
+        name=name, norm=_normalize_entity_name(name), label=label,
+        description=desc, mention_count=3, source="new", embedding=vec,
+    )
+
+
+def test_candidate_pairs_numpy_path_matches_pure_python(monkeypatch):
+    """The vectorised cosine path is an optimisation — it must yield the
+    EXACT same candidate set as the pure-Python `_cosine` fallback, never
+    a behaviour change."""
+    import src.graph.entity_resolution as er
+
+    items = [
+        _mk_item("Alpha One", [1.0, 0.0, 0.0, 0.0]),
+        _mk_item("Alpha Two", [0.99, 0.10, 0.0, 0.0]),   # near-dup of Alpha
+        _mk_item("Beta Core", [0.0, 1.0, 0.0, 0.0]),
+        _mk_item("Beta Prime", [0.02, 0.98, 0.05, 0.0]),  # near-dup of Beta
+        _mk_item("Gamma", [0.0, 0.0, 1.0, 0.0]),
+        _mk_item("Delta", [0.0, 0.0, 0.0, 1.0]),
+        _mk_item("Beta Two", [0.0, 0.97, 0.10, 0.0]),     # another Beta-ish
+        _mk_item("Empty Desc", [0.9, 0.2, 0.0, 0.0], desc=""),  # empty-desc floor
+    ]
+    cfg = ERConfig()
+
+    auto_np, bord_np = er._candidate_pairs(items, cfg)
+    set_np = {(a, b) for a, b, _ in [*auto_np, *bord_np]}
+
+    monkeypatch.setattr(er, "_normalized_matrix", lambda group: None)
+    auto_py, bord_py = er._candidate_pairs(items, cfg)
+    set_py = {(a, b) for a, b, _ in [*auto_py, *bord_py]}
+
+    assert set_np == set_py
