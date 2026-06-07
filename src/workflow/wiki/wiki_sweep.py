@@ -40,16 +40,18 @@ async def select_dirty_entities(limit: int) -> list[str]:
 async def write_entity_article(name: str) -> str:
     from src.graph.store import build_neo4j_graph_store
     from src.graph.wiki_context import (
-        read_entity_subgraph, read_citations, subgraph_hash)
+        read_entity_subgraph, read_citations, read_source_docs, subgraph_hash)
     from src.graph.wiki_dirty import clear_dirty
     from src.retrieval.llm_pool import get_llm_pool
     from src.workflow.wiki._deps import get_mediawiki
     from src.workflow.wiki.article import render_bot_section, splice_bot_section
 
     store = build_neo4j_graph_store()
-    ctx = read_entity_subgraph(store, name)
-    h = subgraph_hash(ctx)
-    # change-detection: skip if the subgraph is unchanged since last write.
+    ctx = read_entity_subgraph(store, name, settings.wiki.max_relations)
+    docs = read_source_docs(store, name)
+    h = subgraph_hash(ctx, docs)
+    # change-detection: skip if the facts + source set are unchanged since
+    # the last write.
     cur_hash_rows = store.structured_query(
         "MATCH (e:__Entity__ {name:$n}) RETURN coalesce(e.wiki_hash,'') AS h",
         param_map={"n": name})
@@ -59,7 +61,9 @@ async def write_entity_article(name: str) -> str:
 
     cites = read_citations(store, name, settings.wiki.citations_top_k)
     llm = get_llm_pool().get("synthesis")
-    bot_md = await render_bot_section(ctx, cites, llm=llm)
+    bot_md = await render_bot_section(
+        ctx, cites, llm=llm, source_doc_ids=docs,
+        docs_base_url=settings.wiki.docs_base_url)
 
     mw = await get_mediawiki()
     title = ctx.page_title

@@ -437,7 +437,13 @@ class WikiSettings(BaseSettings):
     activity_concurrency: int = Field(default=4, ge=1)
     sweep_batch: int = Field(default=50, ge=1)
     sweep_interval_minutes: int = Field(default=15, ge=1)
-    citations_top_k: int = Field(default=5, ge=1)
+    citations_top_k: int = Field(default=8, ge=1)
+    # Cap on 1-hop relations fed to the article prompt (ranked by neighbour
+    # mention_count desc). Bounds prompt size for hub entities.
+    max_relations: int = Field(default=30, ge=1)
+    # Base URL for source-document download links in the "Источники" section.
+    # Points at the documents API (GET {docs_base_url}/documents/{doc_id}).
+    docs_base_url: str = "http://localhost:8000/api/v1"
     # MediaWiki Action API URL. Empty -> derived from wikibase.base_url
     # + "/w/api.php" by mediawiki_api_url() below.
     mediawiki_api_url: str = ""

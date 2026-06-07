@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from src.graph.wiki_context import EntityContext, read_citations, read_entity_subgraph, subgraph_hash
+from src.graph.wiki_context import EntityContext, read_citations, read_entity_subgraph, read_source_docs, subgraph_hash
 
 
 def _ctx(**kw):
@@ -64,3 +64,30 @@ def test_read_citations_returns_text_docid_pairs():
     ]
     cites = read_citations(store, "ООО Альфа", k=5)
     assert cites == [("ООО Альфа заключила…", "d1"), ("…контакт +7495…", "d2")]
+
+
+def test_hash_folds_source_doc_ids():
+    a = subgraph_hash(_ctx(), source_doc_ids=["d1", "d2"])
+    b = subgraph_hash(_ctx(), source_doc_ids=["d1"])
+    assert a != b
+    # order-independent
+    assert subgraph_hash(_ctx(), source_doc_ids=["d2", "d1"]) == a
+    # default (no docs) stays backward-compatible and stable
+    assert subgraph_hash(_ctx()) == subgraph_hash(_ctx(), source_doc_ids=[])
+
+
+def test_read_entity_subgraph_passes_max_relations():
+    store = MagicMock()
+    store.structured_query.return_value = [{
+        "name": "X", "label": "Organization", "description": "",
+        "qid": "", "page_title": "", "relations": [],
+    }]
+    read_entity_subgraph(store, "X", max_relations=7)
+    _args, kwargs = store.structured_query.call_args
+    assert kwargs["param_map"]["max_rel"] == 7
+
+
+def test_read_source_docs_returns_distinct_ids():
+    store = MagicMock()
+    store.structured_query.return_value = [{"doc_id": "d1"}, {"doc_id": "d2"}]
+    assert read_source_docs(store, "X") == ["d1", "d2"]

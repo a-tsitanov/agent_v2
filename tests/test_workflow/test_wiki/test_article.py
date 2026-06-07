@@ -4,7 +4,8 @@ import pytest
 from unittest.mock import AsyncMock
 
 from src.graph.wiki_context import EntityContext
-from src.workflow.wiki.article import splice_bot_section, BOT_START, BOT_END, render_bot_section
+from src.workflow.wiki.article import (
+    splice_bot_section, BOT_START, BOT_END, render_bot_section, _fmt_sources)
 
 
 def test_insert_into_pageless_creates_marked_section():
@@ -60,3 +61,49 @@ async def test_render_grounds_on_facts_and_citations_not_prior_prose():
     # no existing-prose argument (enforced by signature).
     params = set(inspect.signature(render_bot_section).parameters)
     assert "existing" not in params and "prior" not in params
+
+
+def test_fmt_sources_builds_download_links():
+    out = _fmt_sources(["d1", "d2"], "http://h/api/v1")
+    assert "== Источники ==" in out
+    assert "[http://h/api/v1/documents/d1 d1]" in out
+    assert "[http://h/api/v1/documents/d2 d2]" in out
+
+
+def test_fmt_sources_empty_when_no_docs_or_no_base():
+    assert _fmt_sources([], "http://h/api/v1") == ""
+    assert _fmt_sources(["d1"], "") == ""
+
+
+def test_fmt_sources_strips_trailing_slash_in_base():
+    out = _fmt_sources(["d1"], "http://h/api/v1/")
+    assert "http://h/api/v1/documents/d1" in out
+    assert "api/v1//documents" not in out
+
+
+class _FakeLLM:
+    async def acomplete(self, prompt):
+        return "PROSE BODY"
+
+
+@pytest.mark.asyncio
+async def test_render_appends_sources_section():
+    from src.graph.wiki_context import EntityContext
+    ctx = EntityContext(name="X", label="Org", description="d",
+                        wikibase_qid="", page_title="X", relations=[])
+    out = await render_bot_section(ctx, citations=[], llm=_FakeLLM(),
+        source_doc_ids=["d1"], docs_base_url="http://h/api/v1")
+    assert out.startswith("PROSE BODY")
+    assert "== Источники ==" in out
+    assert "[http://h/api/v1/documents/d1 d1]" in out
+
+
+@pytest.mark.asyncio
+async def test_render_no_sources_section_when_empty():
+    from src.graph.wiki_context import EntityContext
+    ctx = EntityContext(name="X", label="Org", description="d",
+                        wikibase_qid="", page_title="X", relations=[])
+    out = await render_bot_section(ctx, citations=[], llm=_FakeLLM(),
+        source_doc_ids=[], docs_base_url="http://h/api/v1")
+    assert out == "PROSE BODY"
+    assert "Источники" not in out
