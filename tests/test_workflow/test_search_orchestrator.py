@@ -27,6 +27,7 @@ from temporalio.worker import Worker
 
 from src.config import settings
 from src.workflow.contracts import (
+    CoverageResult,
     OrchestratorParams,
     PlanParams,
     PlanResult,
