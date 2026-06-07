@@ -8,6 +8,7 @@ skip when Milvus/Neo4j are down) — NOT the scaling numbers themselves
 from __future__ import annotations
 
 from tests.eval.scale.bench_er import bench_cost_curve, bench_dedup_recall
+from tests.eval.scale.bench_er_native import bench_native_vs_window
 from tests.eval.scale.bench_milvus import bench_flat_vs_hnsw
 from tests.eval.scale.bench_walk import bench_hub_walk
 from tests.eval.scale.synth import gen_edges, gen_items, gen_vectors
@@ -54,4 +55,9 @@ def test_milvus_bench_skips_without_infra() -> None:
 
 def test_walk_bench_skips_without_infra() -> None:
     out = bench_hub_walk(n_nodes=100, uri="bolt://127.0.0.1:1")  # nothing there
+    assert out["status"] == "skipped"
+
+
+def test_er_native_bench_skips_without_infra() -> None:
+    out = bench_native_vs_window(n_stored=100, dim=8, uri="bolt://127.0.0.1:1")
     assert out["status"] == "skipped"

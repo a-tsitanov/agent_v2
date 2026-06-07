@@ -15,6 +15,7 @@ bracket the real graph by shape instead of measuring it directly.
 |---|---|---|---|
 | `er-cost` | **P0.2** ER candidate-gen O(N²) | nothing | how fast `_candidate_pairs` (the real function) blows up with entities-per-label |
 | `er-recall` | **P0.1** dedup window/floor | nothing | of planted near-duplicates, how many are surfaced as candidates (ceiling on dedup quality) |
+| `bench_er_native` | **P0.1 structural** native vs window | local Neo4j | native Neo4j vector kNN recall + latency vs what the 5000-window can even reach (justifies dropping the window) |
 | `milvus` | **P1.1** FLAT→HNSW | local Milvus | FLAT (exhaustive, the shipped-fix default) vs HNSW latency + HNSW recall vs FLAT |
 | `walk` | **P1.2** hub traversal | local Neo4j | `(e)-[*1..hops]-` walk latency from a normal node vs a planted hub |
 
@@ -105,3 +106,23 @@ hops 2–3 and caps 50–200 the hub cliff never exceeded ~2× / ~20 ms —
 (Caveat: synthetic hubs link to random low-degree nodes; a real
 hub→hub→hub chain on a much larger graph could differ — re-measure on a
 restored graph before fully closing.)
+
+### P0.1 structural — native Neo4j vector kNN vs the 5000-window
+
+Loading clustered entities into a native Neo4j vector index, querying
+`db.index.vector.queryNodes` for the nearest stored canonical per
+incoming entity:
+
+| n_stored | native kNN recall | 5000-window reachable | native p50 |
+|---|---|---|---|
+| 50k | 0.985 | **0.08** | 7.6 ms |
+| 200k | 0.96 | **0.02** | 6.0 ms |
+
+"window reachable" = fraction of true nearest-canonical matches that the
+mention_count-ordered 5000-window can even see — i.e. the **hard ceiling
+on incremental-ER dedup today**. At 200k it is **2 %**: the window is
+structurally blind to 98 % of potential matches even after the
+`ORDER BY mention_count` fix. Native vector kNN recovers ~96–98 % at
+6–8 ms with no window. → strong justification for migrating
+`er_embedding` to a native vector property + index and replacing the
+window load with a per-entity kNN.
