@@ -125,6 +125,27 @@ def ensure_er_vector_index(store, dim: int) -> bool:
         return False
 
 
+COMMUNITY_LEVEL_INDEX_CYPHER = (
+    "CREATE INDEX community_level IF NOT EXISTS FOR (c:Community) ON (c.level)"
+)
+CHUNK_DOC_ID_INDEX_CYPHER = (
+    "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)"
+)
+
+
+def ensure_community_indexes(store) -> bool:
+    """Idempotent range indexes for the community/global read paths
+    (Community.level filter, Chunk.doc_id traversal).  Fail-open."""
+    ok = True
+    for cypher in (COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER):
+        try:
+            store.structured_query(cypher)
+        except Exception as exc:  # broad by design — fail-open
+            logger.warning("ensure_community_indexes failed: {e}", e=exc)
+            ok = False
+    return ok
+
+
 def _parse_triplets_strip_thinking(response: str, **kwargs):
     """Wrap the upstream parser with a `<think>...</think>` stripper.
 

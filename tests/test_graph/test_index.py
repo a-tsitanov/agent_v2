@@ -230,3 +230,23 @@ def test_ensure_er_vector_index_ddl_and_failopen():
             raise RuntimeError("no vector index support")
 
     assert ensure_er_vector_index(_Boom(), 768) is False
+
+
+def test_ensure_community_indexes_ddl_and_failopen():
+    from src.graph.index import (
+        COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER,
+        ensure_community_indexes,
+    )
+    assert "FOR (c:Community) ON (c.level)" in COMMUNITY_LEVEL_INDEX_CYPHER
+    assert "FOR (c:Chunk) ON (c.doc_id)" in CHUNK_DOC_ID_INDEX_CYPHER
+    assert all("IF NOT EXISTS" in q for q in (COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER))
+
+    ran = []
+    class _Store:
+        def structured_query(self, c, param_map=None): ran.append(c)
+    assert ensure_community_indexes(_Store()) is True
+    assert ran == [COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER]
+
+    class _Boom:
+        def structured_query(self, c, param_map=None): raise RuntimeError("x")
+    assert ensure_community_indexes(_Boom()) is False

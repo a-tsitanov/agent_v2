@@ -206,6 +206,8 @@ async def detect_communities(
     # Persist :Community nodes + member links (idempotent MERGE).
     try:
         await asyncio.to_thread(_run_query, store, _COMMUNITY_CONSTRAINT)
+        from src.graph.index import ensure_community_indexes
+        await asyncio.to_thread(ensure_community_indexes, store)
         # Prune the prior run's communities for THIS level FIRST so a
         # rebuild starts clean (Leiden may renumber/shrink ids, leaving
         # ghost :Community nodes + orphaned summaries).  Level-scoped.
