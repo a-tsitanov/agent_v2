@@ -364,6 +364,24 @@ class SubQueryResult(_Frozen):
     sources: list[SerializedNode] = Field(default_factory=list)
 
 
+class ConversationTurnDict(_Frozen):
+    role: str = "user"
+    content: str = ""
+
+
+class ContextualizeParams(_Frozen):
+    """Input to the ``contextualize_query`` activity."""
+
+    query: str
+    history: list[ConversationTurnDict] = Field(default_factory=list)
+
+
+class ContextualizeResult(_Frozen):
+    """Standalone, self-contained rewrite of ``query`` (== original on no-op/failure)."""
+
+    query: str
+
+
 class OrchestratorParams(_Frozen):
     """Workflow input for ``SearchOrchestratorWorkflow`` — what the
     ``/search/local`` route submits."""
@@ -377,6 +395,7 @@ class OrchestratorParams(_Frozen):
     # runtime (replay-safe).  Defaults mirror AgentSettings.
     coverage_check_enabled: bool = True
     max_coverage_rounds: int = 1
+    history: list[ConversationTurnDict] = Field(default_factory=list)
 
 
 class SearchOutcome(_Frozen):
@@ -564,3 +583,4 @@ class GlobalSearchParams(_Frozen):
     # and the partials are MERGED with caller-supplied local sources
     # rather than standing alone.  Plain global leaves this False.
     drift_mode: bool = False
+    history: list[ConversationTurnDict] = Field(default_factory=list)

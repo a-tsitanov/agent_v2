@@ -452,6 +452,12 @@ class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENT_", env_file=".env", extra="ignore")
 
     top_k: int = 10
+    # Conversation history (client-managed multi-turn): when enabled, prior
+    # turns supplied on the request are used to contextualise the query into
+    # a standalone form before retrieval.  Empty history = single-shot.
+    conversation_history_enabled: bool = True
+    history_max_turns: int = Field(default=6, ge=0, le=40)
+    history_max_chars: int = Field(default=4000, ge=0)
     # Plan-execute flow (R2): max sub-questions the planner may emit —
     # bounds the parallel SubQueryRetrievalWorkflow fan-out (and planner
     # LLM cost) regardless of what the small model returns.

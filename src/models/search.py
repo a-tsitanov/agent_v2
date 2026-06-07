@@ -12,6 +12,11 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ConversationTurn(BaseModel):
+    role: str = Field("user", description="user | assistant")
+    content: str
+
+
 class SearchRequest(BaseModel):
     """Search request shared by all ``/api/v1/search/*`` endpoints.
 
@@ -22,6 +27,10 @@ class SearchRequest(BaseModel):
     """
 
     query: str
+    history: list[ConversationTurn] = Field(
+        default_factory=list,
+        description="Prior turns (client-managed). Empty = single-shot, no contextualisation.",
+    )
     mode: str = Field(
         "hybrid",
         description="vector | hybrid | bypass",
