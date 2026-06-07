@@ -13,6 +13,7 @@
 | [`wikibase.md`](wikibase.md) | Самохостящийся Wikibase: bootstrap, push_wikibase activity, SPARQL/wdqs | Включение wikibase-фичи + смена `WIKIBASE_*` env |
 | [`wiki-editor.md`](wiki-editor.md) | Непрерывный редактор Wiki-статей из графа: dirty-mark + Schedule sweep, бот-секция, анти-дрейф, sitelink, gotcha'и | Включаешь wiki-фичу / меняешь `WIKI_*` |
 | [`er-native-vector-knn.md`](er-native-vector-knn.md) | Опциональный нативный векторный kNN для ER вместо окна 5000: backfill-скрипт → флаг `AGENT_ER_USE_NATIVE_VECTOR_KNN`, порядок включения, откат | Включаешь native-ER на большом графе (≫5000 сущностей) |
+| [`reresolve-graph.md`](reresolve-graph.md) | Пакетная консолидация: прогон ER по всему графу для слияния накопившихся дублей смысловых сущностей (`scripts/reresolve_graph.py`), сохранение типов связей, dry-run | Дедуп уже существующего графа без переингеста |
 
 ## Архитектурные документы (не runbook'и)
 

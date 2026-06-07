@@ -23,6 +23,9 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 ### Entity Resolution (ER) 🆕(native-vector)
 Кросс-чанковая + кросс-документная дедупликация семантически равных сущностей («BCC» ≡ «Базальноклеточный рак»; «Иванов И.И.» ≡ «Иван Иванов»). Конвейер: слияние имён внутри батча → консолидация телефонов → **ER** (`resolve_entities`): генерация кандидатов (векторизованный косинус + перекрытие имён), LLM-судья для пограничных пар (с кэшем Neo4j `:ERVerdict`), кластеризация union-find, зажим гипер-хабов, выбор канонического. Метки типов-идентификаторов исключаются (у них детерминированная канонизация). См. [§ Native-vector ER](#native-vector-er-) о новом пути kNN. — `graph/entity_resolution.py`, `activities/merge_and_resolve.py`
 
+### Пакетная консолидация графа 🆕
+`scripts/reresolve_graph.py` — прогон ER по **всему** графу для слияния дублей смысловых сущностей, накопившихся между ингестами (per-ingest ER сравнивает только новую пачку). Переиспользует `resolve_entities` как чистую функцию решения через read-only proxy; применяет мёржи через `_cleanup_stored_losers` с **сохранением типов связей** (в отличие от `merge_identifier_duplicates`, который плющит в `RELATED_TO`). Dry-run по умолчанию. — `scripts/reresolve_graph.py`, [`runbook/reresolve-graph.md`](runbook/reresolve-graph.md)
+
 ### Сборка property-графа
 Объединённые сущности/связи делаются upsert в Neo4j с рёбрами `(:Chunk)-[:MENTIONS]->(:__Entity__)`; эмбеддинги сущностей пишутся в нативный векторный индекс; гарантируются fulltext- и range-индексы. — `activities/build_property_graph.py`, `graph/index.py`
 
