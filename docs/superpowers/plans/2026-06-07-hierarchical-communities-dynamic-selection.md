@@ -39,6 +39,32 @@ CALL gds.graph.drop('spike') YIELD graphName;
 
 Write the finding (counts + chosen branch) into a `> SPIKE RESULT:` note here before proceeding.
 
+> **SPIKE RESULT (2026-06-07, dev graph 156 entities / 250 rels):**
+> `includeIntermediateCommunities` WORKS on our GDS install. But the
+> dendrogram is shallow + near-flat: **2 levels**, 98 (finest) vs 93
+> (coarsest, = final `communityId`) distinct communities — i.e. the
+> coarsest level is barely coarser than the finest, and is ~93
+> communities over 156 entities (≈1.7 entities/community). Coarsest
+> community sizes top-5: [13, 11, 8, 7, 6].
+>
+> **Interpretation:** single-run GDS Leiden gives the converged partition
+> as the coarsest level + finer dendrogram iterations below — it does NOT
+> synthesise a small "big-picture" top (consistent with GraphRAG, whose
+> level-0 is also the converged partition). The dev graph is far too small
+> to judge real hierarchy depth at 250k, BUT the structural fact holds:
+> the value of multi-level hierarchy + v2 descent is contingent on the
+> real graph having deeper, more-distinct dendrogram levels — which we
+> cannot measure without prod.
+>
+> **Chosen branch:** ship **v1 (semantic report selection)** first — it is
+> robust, high-value, and **hierarchy-independent** (works on a single
+> level, directly replaces the O(N) lexical scan). Build the hierarchy
+> materialisation (cheap, back-compat) so reports + descent are possible,
+> but treat **v2 descent + deep-hierarchy value as validate-on-real-scale**
+> (synthetic large graph in tests/eval/scale, or prod when available). Do
+> NOT add recursive coarsening now — backlog it if real dendrograms prove
+> too shallow.
+
 ---
 
 ## Phase 1 — hierarchy detection (levels + PARENT_OF + members_hash)
