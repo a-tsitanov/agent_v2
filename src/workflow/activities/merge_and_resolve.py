@@ -138,6 +138,8 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
                 judge_batch=settings.agent.er_judge_batch_size,
                 name_token_min_overlap=0.1,
                 verdict_cache_enabled=settings.agent.er_verdict_cache_enabled,
+                use_native_vector_knn=settings.agent.er_use_native_vector_knn,
+                vector_knn_k=settings.agent.er_vector_knn_k,
             ),
             # Reuse the Neo4j handle as the persistent verdict-cache
             # store (it exposes `structured_query`).  Cache stays

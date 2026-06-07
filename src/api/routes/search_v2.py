@@ -26,6 +26,7 @@ from src.models.search import DocumentRef, SearchRequest, SearchResponse, Source
 from src.observability.trace import trace_request
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import (
+    ConversationTurnDict,
     DetectCommunitiesParams,
     GlobalSearchParams,
     OrchestratorParams,
@@ -47,6 +48,11 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
         top_k=req.top_k,
         coverage_check_enabled=settings.agent.coverage_check_enabled,
         max_coverage_rounds=settings.agent.max_coverage_rounds,
+        history=[
+            ConversationTurnDict(role=t.role, content=t.content)
+            for t in req.history
+        ],
+        contextualize_enabled=settings.agent.conversation_history_enabled,
     )
 
 
@@ -58,6 +64,12 @@ def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSea
         max_communities=settings.agent.global_max_communities,
         map_parallelism=settings.agent.global_map_parallelism,
         drift_mode=drift_mode,
+        history=[
+            ConversationTurnDict(role=t.role, content=t.content)
+            for t in req.history
+        ],
+        contextualize_enabled=settings.agent.conversation_history_enabled,
+        community_selection=settings.agent.community_dynamic_selection,
     )
 
 
@@ -243,6 +255,7 @@ async def rebuild_communities() -> dict[str, str]:
             DetectCommunitiesParams(
                 min_size=settings.temporal.community_min_size,
                 level=0,
+                max_levels=settings.agent.community_max_levels,
             ),
             id=f"community-build-{request_id}",
             task_queue=settings.temporal.graph_build_task_queue,

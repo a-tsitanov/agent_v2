@@ -171,7 +171,25 @@ class ERConfig:
     and, once the graph exceeds this many canonicals, new mentions of a
     frequent entity could silently fail to match (→ duplicates).  Raise
     for larger graphs (memory ≈ window × embedding-dim × 4 bytes: 5k×768
-    ≈ 15 MB, 25k ≈ 75 MB); candidate-generation cost grows with it too."""
+    ≈ 15 MB, 25k ≈ 75 MB); candidate-generation cost grows with it too.
+
+    Ignored when ``use_native_vector_knn`` is on."""
+
+    use_native_vector_knn: bool = False
+    """Opt-in: replace the bounded ``incremental_window`` load + Python
+    brute-force candidate gen with a native Neo4j vector-index kNN per
+    new entity (``er_vec`` list property + ``er_embedding_vec`` index).
+    Removes the window ceiling entirely — measured on a synthetic 200k
+    graph the mention_count window reaches only ~2 % of true nearest
+    canonicals, native kNN ~96 % at ~6 ms/query (see
+    ``tests/eval/scale/bench_er_native``).  Requires the backfill
+    (``scripts/backfill_er_vector.py``) to have populated ``er_vec`` on
+    existing entities and built the index.  Default off — flip only after
+    backfill."""
+
+    vector_knn_k: int = 20
+    """Neighbours fetched per new entity from the ER vector index when
+    ``use_native_vector_knn`` is on (the per-entity candidate fan-out)."""
 
     verdict_cache_enabled: bool = True
     """When True AND an `er_store` is passed to `resolve_entities`,
@@ -376,6 +394,30 @@ async def _embed_entities(
 # ── candidate generation ───────────────────────────────────────────
 
 
+def _normalized_matrix(group: list[_Item]):
+    """Row-normalised float64 matrix of the group's embeddings, or None.
+
+    Lets ``_candidate_pairs`` get every pairwise cosine in one BLAS
+    matrix-vector product per row instead of an O(N²) pure-Python
+    ``_cosine`` loop (the candidate-gen cost cliff at scale).  Returns
+    None — keeping the slow but identical pure-Python path — when numpy
+    is unavailable or the embeddings are ragged, so behaviour never
+    silently changes.  Zero vectors keep cosine 0 (norm clamped to 1),
+    matching ``_cosine``.
+    """
+    try:
+        import numpy as np
+
+        m = np.asarray([it.embedding for it in group], dtype="float64")
+        if m.ndim != 2 or m.shape[0] != len(group):
+            return None
+        norms = np.linalg.norm(m, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        return m / norms
+    except Exception:  # broad by design — fall back to pure-Python cosine
+        return None
+
+
 def _candidate_pairs(
     items: list[_Item], cfg: ERConfig,
 ) -> tuple[list[tuple[str, str, float]], list[tuple[str, str, float]]]:
@@ -387,6 +429,11 @@ def _candidate_pairs(
                         cosine ≥ HIGH but cross-script.
 
     Pairs are reported by NORMALISED name (the union-find key).
+
+    Cosines come from a vectorised matrix product when numpy is
+    available (``_normalized_matrix``); otherwise an identical
+    pure-Python ``_cosine`` fallback runs.  The surrounding filter /
+    top-k / classification logic is unchanged either way.
     """
     by_label: dict[str, list[_Item]] = defaultdict(list)
     for it in items:
@@ -398,7 +445,15 @@ def _candidate_pairs(
     seen: set[tuple[str, str]] = set()
 
     for label, group in by_label.items():
+        mat = _normalized_matrix(group)
+        # Tokenise each name once (O(N)) instead of re-tokenising both
+        # sides of every pair inside the O(N²) loop below.
+        toks = [_name_tokens(it.name) for it in group]
         for i, a in enumerate(group):
+            # All cosines from `a` to the group in one shot (or None →
+            # per-pair pure-Python below).
+            cos_row = (mat @ mat[i]) if mat is not None else None
+            ta = toks[i]
             # Top-K nearest neighbors above LOW threshold.
             sims = []
             for j, b in enumerate(group):
@@ -409,7 +464,10 @@ def _candidate_pairs(
                     if not a.description or not b.description
                     else cfg.low
                 )
-                cos = _cosine(a.embedding, b.embedding)
+                cos = (
+                    float(cos_row[j]) if cos_row is not None
+                    else _cosine(a.embedding, b.embedding)
+                )
                 # High name-token overlap bypasses the cosine floor.
                 # `_embed_entities` keys on `name + description`, so two
                 # entities sharing the same Cyrillic surface but with
@@ -421,7 +479,8 @@ def _candidate_pairs(
                 # of the other, or shares ≥ half its content tokens),
                 # the cosine signal becomes secondary to the
                 # orthographic signal — let the LLM judge decide.
-                overlap = _name_token_overlap(a.name, b.name)
+                tb = toks[j]
+                overlap = (len(ta & tb) / len(ta | tb)) if ta and tb else 0.0
                 if cos < floor and overlap < cfg.name_overlap_floor_bypass:
                     continue
                 # Name-token guard: when both names share at least
@@ -886,6 +945,10 @@ async def _consolidate_cluster(
     }
     if er_review_needed:
         properties["er_review_needed"] = True
+    # Native vector kNN (opt-in): also store the embedding as a native
+    # list property so the ER vector index can find this canonical.
+    if cfg.use_native_vector_knn and canonical.embedding:
+        properties["er_vec"] = list(canonical.embedding)
 
     return EntityNode(
         name=canonical.name,
@@ -1024,10 +1087,17 @@ async def _cleanup_stored_losers(
     """Repoint relations from each loser stored node onto its
     canonical sibling, then detach-delete the loser.
 
-    Plain-Cypher only (no APOC dependency): we copy each loser's
-    incoming and outgoing edges to the canonical (label preserved
-    via CALL { ... }), then `DETACH DELETE` the loser.  Self-loops
-    are dropped.
+    Uses ``apoc.merge.relationship`` to copy each loser's incoming and
+    outgoing edges onto the canonical with the original (dynamic)
+    relationship type and dedup, then ``DETACH DELETE`` the loser.
+    APOC is already a project-wide dependency (e.g. ``graph_walk`` uses
+    ``apoc.coll.flatten``).
+
+    Failure is SAFE-BY-INACTION: if the repoint+delete throws (APOC
+    missing, transient error), the loser node is LEFT INTACT — it stays
+    an un-merged duplicate (recoverable on a later run) rather than
+    losing its relationships.  The old fallback ``DETACH DELETE``d the
+    loser *without* moving its edges, silently dropping them.
     """
     for loser_name, canon_name in pairs:
         try:
@@ -1062,34 +1132,15 @@ async def _cleanup_stored_losers(
                 {"loser": loser_name, "canon": canon_name},
             )
         except Exception as exc:  # noqa: BLE001
-            # APOC may be unavailable — fall back to plain Cypher
-            # (no merge dedup, but still moves edges).
+            # Safe-by-inaction: leave the loser node INTACT (with its
+            # edges) rather than deleting it without repointing.  Worst
+            # case is a lingering duplicate, which a later ER run can
+            # still merge — never silent relationship loss.
             logger.warning(
-                "ER stored-loser cleanup APOC failed for "
-                "{l}→{c}, falling back: {e}",
+                "ER stored-loser cleanup failed for {l}→{c}; leaving "
+                "loser intact (un-merged duplicate, recoverable): {e}",
                 l=loser_name, c=canon_name, e=exc,
             )
-            try:
-                await asyncio.to_thread(
-                    graph_store.structured_query,
-                    """
-                    MATCH (loser:__Entity__ {name: $loser})
-                    MATCH (canon:__Entity__ {name: $canon})
-                    WHERE elementId(loser) <> elementId(canon)
-                    OPTIONAL MATCH (loser)-[r_out]->(t)
-                    WHERE elementId(t) <> elementId(canon)
-                    OPTIONAL MATCH (s)-[r_in]->(loser)
-                    WHERE elementId(s) <> elementId(canon)
-                    DETACH DELETE loser
-                    """,
-                    {"loser": loser_name, "canon": canon_name},
-                )
-            except Exception as exc2:  # noqa: BLE001
-                logger.warning(
-                    "ER stored-loser cleanup failed entirely for "
-                    "{l}→{c}: {e}",
-                    l=loser_name, c=canon_name, e=exc2,
-                )
 
 
 async def _load_existing_canonicals(
@@ -1157,6 +1208,82 @@ async def _load_existing_canonicals(
             embedding=emb,
         ))
     return out
+
+
+async def _load_candidates_native(
+    graph_store: Any | None,
+    new_items: list[_Item],
+    *,
+    k: int,
+    dim: int,
+) -> list[_Item]:
+    """Native-vector-index alternative to ``_load_existing_canonicals``.
+
+    For each new entity, queries the ER vector index
+    (``er_embedding_vec`` over ``__Entity__.er_vec``) for its ``k``
+    nearest stored canonicals — across the WHOLE graph, no window — and
+    returns the deduplicated union as stored ``_Item``s.  Best-effort:
+    returns ``[]`` (→ within-batch ER only) when the store is missing or
+    every query errors (e.g. index not built yet — run the backfill).
+    """
+    if graph_store is None:
+        return []
+    # Idempotently ensure the index exists (no-op once built).
+    try:
+        from src.graph.index import ensure_er_vector_index
+
+        await asyncio.to_thread(ensure_er_vector_index, graph_store, dim)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure ER vector index failed: {e}", e=exc)
+
+    seen: dict[str, _Item] = {}
+    for it in new_items:
+        if not it.embedding:
+            continue
+        try:
+            rows = await asyncio.to_thread(
+                graph_store.structured_query,
+                """
+                CALL db.index.vector.queryNodes('er_embedding_vec', $k, $vec)
+                YIELD node
+                WHERE node.er_canonical_name IS NOT NULL
+                RETURN node.name AS name,
+                       labels(node) AS labels,
+                       node.er_vec AS er_vec,
+                       node.er_embedding AS er_embedding,
+                       coalesce(node.mention_count, 1) AS mention_count,
+                       coalesce(node.description, '') AS description
+                """,
+                param_map={"k": int(k), "vec": list(it.embedding)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ER native kNN query failed: {e}", e=exc)
+            continue
+        for row in rows or []:
+            name = row.get("name") or ""
+            if not name or name in seen:
+                continue
+            emb = row.get("er_vec")
+            if not emb:  # fall back to the legacy JSON column
+                raw = row.get("er_embedding") or "[]"
+                try:
+                    emb = json.loads(raw) if isinstance(raw, str) else list(raw)
+                except json.JSONDecodeError:
+                    emb = []
+            if not emb:
+                continue
+            labels = [lab for lab in (row.get("labels") or [])
+                      if lab not in ("__Entity__", "__Node__")]
+            seen[name] = _Item(
+                name=name,
+                norm=_normalize_entity_name(name),
+                label=labels[0] if labels else "Other",
+                description=row.get("description") or "",
+                mention_count=int(row.get("mention_count") or 1),
+                source="stored",
+                embedding=list(emb),
+            )
+    return list(seen.values())
 
 
 # ── public entry point ─────────────────────────────────────────────
@@ -1235,15 +1362,27 @@ async def resolve_entities(
     if not new_items:
         return entities, relations, {}
 
-    # 2. Load existing canonicals (incremental ER).
-    stored_items = await _load_existing_canonicals(
-        graph_store, limit=cfg.incremental_window,
-    )
-
-    # 3. Embed new entities.  Stored ones already have embeddings.
+    # 2. Embed new entities first — needed for candidate cosines and,
+    #    when native kNN is on, to query the ER vector index.  Stored
+    #    items already carry embeddings.
     if not await _embed_entities(new_items, embed_model):
         logger.warning("ER skipped: embed model failed")
         return entities, relations, {}
+
+    # 3. Load the stored canonicals to compare against.  Native vector
+    #    kNN (opt-in) queries the ER vector index per new entity over the
+    #    WHOLE graph (no window ceiling); otherwise the bounded
+    #    mention_count window.
+    if cfg.use_native_vector_knn:
+        from src.config import settings as _settings
+
+        stored_items = await _load_candidates_native(
+            graph_store, new_items, k=cfg.vector_knn_k, dim=_settings.milvus.dim,
+        )
+    else:
+        stored_items = await _load_existing_canonicals(
+            graph_store, limit=cfg.incremental_window,
+        )
 
     all_items = new_items + stored_items
     items_by_norm: dict[str, _Item] = {it.norm: it for it in all_items}
@@ -1411,6 +1550,8 @@ async def resolve_entities(
             ent.properties = {}
         ent.properties.setdefault("er_canonical_name", ent.name)
         ent.properties["er_embedding"] = json.dumps(it.embedding)
+        if cfg.use_native_vector_knn and it.embedding:
+            ent.properties["er_vec"] = list(it.embedding)
 
     # Build output entity list.
     by_canonical_norm = {

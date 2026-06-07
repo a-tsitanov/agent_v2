@@ -29,10 +29,13 @@ from src.workflow.contracts import (
 )
 from src.workflow.search.activities import global_search as gs_mod
 from src.workflow.search.activities.global_search import (
+    _cosine,
     is_relevant_partial,
     map_communities,
     map_community_partial,
     rank_summaries,
+    select_communities_descent,
+    select_communities_semantic,
 )
 from src.workflow.search.global_wf import (
     build_map_specs,
@@ -116,6 +119,279 @@ async def test_map_communities_no_store(monkeypatch):
     monkeypatch.setattr(gs_mod, "_get_store", lambda: None)
     out = await map_communities(MapCommunitiesParams(query="q"))
     assert out.communities == []
+
+
+# ── select_communities_semantic (stubbed store) ─────────────────────
+
+
+class _FakeVecStore:
+    """Records the queries it received; returns canned queryNodes rows."""
+
+    def __init__(self, rows=None, raise_=False):
+        self._rows = rows if rows is not None else []
+        self._raise = raise_
+        self.queries: list[tuple[str, dict]] = []
+
+    def structured_query(self, cypher, param_map=None):
+        self.queries.append((cypher, param_map or {}))
+        if self._raise:
+            raise RuntimeError("vector index down")
+        return self._rows
+
+
+class _FakeEmbed:
+    def __init__(self, vec=None, raise_=False):
+        self._vec = vec or [0.1, 0.2, 0.3]
+        self._raise = raise_
+
+    async def aget_text_embedding(self, text):
+        if self._raise:
+            raise RuntimeError("embed down")
+        return self._vec
+
+
+@pytest.mark.asyncio
+async def test_select_communities_semantic_builds_refs():
+    rows = [
+        {"community_id": 7, "level": 0, "summary": "строители"},
+        {"community_id": 8, "level": 0, "summary": "поставщики"},
+    ]
+    store = _FakeVecStore(rows=rows)
+    refs = await select_communities_semantic(
+        store, [0.1, 0.2], level=0, limit=5,
+    )
+    assert [r.community_id for r in refs] == ["7", "8"]
+    assert all(isinstance(r, CommunitySummaryRef) for r in refs)
+    assert refs[0].summary == "строители"
+    # passes the vector + limit through to queryNodes
+    _, params = store.queries[0]
+    assert params["vec"] == [0.1, 0.2]
+    assert params["limit"] == 5
+    assert params["level"] == 0
+
+
+@pytest.mark.asyncio
+async def test_select_communities_semantic_failsafe_on_error():
+    store = _FakeVecStore(raise_=True)
+    refs = await select_communities_semantic(
+        store, [0.1], level=0, limit=5,
+    )
+    assert refs == []
+
+
+# ── _cosine (pure) ──────────────────────────────────────────────────
+
+
+def test_cosine_orthogonal_identical_empty():
+    assert _cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+    assert _cosine([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == pytest.approx(1.0)
+    assert _cosine([], [1.0]) == 0.0
+    assert _cosine([0.0, 0.0], [1.0, 1.0]) == 0.0      # zero norm → 0
+    assert _cosine([1.0, 0.0], [1.0, 0.0, 0.0]) == 0.0  # length mismatch → 0
+
+
+# ── select_communities_descent (stubbed tree store) ─────────────────
+
+
+class _FakeTreeStore:
+    """Serves a fixed community tree for descent traversal.
+
+    ``roots`` are the level-0 rows; ``children`` maps a community_id to its
+    finer child rows.  Each row carries a ``report_vec``."""
+
+    def __init__(self, roots, children=None, raise_=False):
+        self._roots = roots
+        self._children = children or {}
+        self._raise = raise_
+        self.queries: list[tuple[str, dict]] = []
+
+    def structured_query(self, cypher, param_map=None):
+        self.queries.append((cypher, param_map or {}))
+        if self._raise:
+            raise RuntimeError("neo4j down")
+        if "PARENT_OF" in cypher:
+            return self._children.get(param_map.get("community_id"), [])
+        return self._roots
+
+
+def _row(cid, level, vec, summary=None):
+    return {
+        "community_id": cid,
+        "level": level,
+        "summary": summary or f"community {cid}",
+        "report_vec": vec,
+    }
+
+
+@pytest.mark.asyncio
+async def test_descent_returns_finest_relevant_child():
+    # Two roots: 1 is query-relevant (aligned vec) with level-1 children,
+    # 2 is irrelevant (orthogonal).  Child 11 aligns with the query; 12 not.
+    roots = [
+        _row(1, 0, [1.0, 0.0]),   # relevant root, has children
+        _row(2, 0, [0.0, 1.0]),   # irrelevant root, leaf
+    ]
+    children = {
+        1: [_row(11, 1, [1.0, 0.0]), _row(12, 1, [0.0, 1.0])],
+    }
+    store = _FakeTreeStore(roots=roots, children=children)
+    refs = await select_communities_descent(store, [1.0, 0.0], budget=2)
+    ids = {r.community_id for r in refs}
+    # the finest relevant child (11) is selected, NOT its parent (1).
+    assert "11" in ids
+    assert "1" not in ids
+    # all selected are leaves (level 1 child or childless root 2).
+    assert all(r.level in (0, 1) for r in refs)
+    levels = {r.community_id: r.level for r in refs}
+    assert levels["11"] == 1
+
+
+@pytest.mark.asyncio
+async def test_descent_respects_budget():
+    roots = [_row(i, 0, [1.0, 0.0]) for i in range(5)]  # all leaves
+    store = _FakeTreeStore(roots=roots, children={})
+    refs = await select_communities_descent(store, [1.0, 0.0], budget=2)
+    assert len(refs) == 2
+
+
+@pytest.mark.asyncio
+async def test_descent_no_children_fallback_top_root_by_cosine():
+    # Only level 0 exists → no leaf via PARENT_OF; childless roots are
+    # selected directly, ranked by cosine, capped at budget.
+    roots = [
+        _row(1, 0, [0.0, 1.0]),   # less relevant
+        _row(2, 0, [1.0, 0.0]),   # most relevant
+        _row(3, 0, [0.7, 0.7]),
+    ]
+    store = _FakeTreeStore(roots=roots, children={})
+    refs = await select_communities_descent(store, [1.0, 0.0], budget=2)
+    # childless roots become leaves; the two most query-relevant kept.
+    assert {r.community_id for r in refs} == {"2", "3"}
+
+
+@pytest.mark.asyncio
+async def test_descent_failsafe_on_store_error():
+    store = _FakeTreeStore(roots=[], raise_=True)
+    refs = await select_communities_descent(store, [1.0, 0.0], budget=3)
+    assert refs == []
+
+
+# ── map_communities selection switch ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_map_communities_semantic_uses_knn(monkeypatch):
+    rows = [{"community_id": 9, "level": 0, "summary": "строители"}]
+    store = _FakeVecStore(rows=rows)
+    monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(gs_mod, "_get_embed_model", lambda: _FakeEmbed())
+    out = await map_communities(MapCommunitiesParams(
+        query="строители", selection="semantic",
+    ))
+    assert [c.community_id for c in out.communities] == ["9"]
+    # used the vector index, never read the lexical summaries cypher
+    assert all("queryNodes" in q for q, _ in store.queries)
+
+
+@pytest.mark.asyncio
+async def test_map_communities_semantic_empty_falls_back_to_lexical(monkeypatch):
+    # semantic returns no rows → fall back to lexical read.
+    rows_for_semantic: list = []
+
+    class _SwitchStore:
+        def __init__(self):
+            self.queries: list[tuple[str, dict]] = []
+
+        def structured_query(self, cypher, param_map=None):
+            self.queries.append((cypher, param_map or {}))
+            if "queryNodes" in cypher:
+                return rows_for_semantic
+            # lexical path
+            return [{"community_id": 1, "level": 0,
+                     "summary": "строители", "member_count": 3}]
+
+    store = _SwitchStore()
+    monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(gs_mod, "_get_embed_model", lambda: _FakeEmbed())
+    out = await map_communities(MapCommunitiesParams(
+        query="строители", selection="semantic",
+    ))
+    assert [c.community_id for c in out.communities] == ["1"]
+    # the lexical cypher was read after the empty semantic result
+    assert any("MATCH (c:Community" in q for q, _ in store.queries)
+
+
+@pytest.mark.asyncio
+async def test_map_communities_semantic_embed_error_falls_back(monkeypatch):
+    store = _FakeStore(rows=[
+        {"community_id": 2, "level": 0, "summary": "строители", "member_count": 1},
+    ])
+    monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(
+        gs_mod, "_get_embed_model", lambda: _FakeEmbed(raise_=True),
+    )
+    out = await map_communities(MapCommunitiesParams(
+        query="строители", selection="semantic",
+    ))
+    assert [c.community_id for c in out.communities] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_map_communities_descent_uses_descent(monkeypatch):
+    roots = [_row(1, 0, [1.0, 0.0]), _row(2, 0, [0.0, 1.0])]
+    children = {1: [_row(11, 1, [1.0, 0.0])]}
+    store = _FakeTreeStore(roots=roots, children=children)
+    monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(gs_mod, "_get_embed_model", lambda: _FakeEmbed([1.0, 0.0]))
+    out = await map_communities(MapCommunitiesParams(
+        query="строители", selection="descent", limit=5,
+    ))
+    ids = {c.community_id for c in out.communities}
+    # descended to the finest relevant child, never read the lexical cypher.
+    assert "11" in ids
+    assert not any("c.summary IS NOT NULL" in q for q, _ in store.queries)
+
+
+@pytest.mark.asyncio
+async def test_map_communities_descent_empty_falls_back_to_lexical(monkeypatch):
+    class _SwitchStore:
+        def __init__(self):
+            self.queries: list[tuple[str, dict]] = []
+
+        def structured_query(self, cypher, param_map=None):
+            self.queries.append((cypher, param_map or {}))
+            if "PARENT_OF" in cypher:
+                return []
+            if "report_vec" in cypher:   # descent root read → empty
+                return []
+            # lexical summaries path
+            return [{"community_id": 1, "level": 0,
+                     "summary": "строители", "member_count": 3}]
+
+    store = _SwitchStore()
+    monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(gs_mod, "_get_embed_model", lambda: _FakeEmbed([1.0, 0.0]))
+    out = await map_communities(MapCommunitiesParams(
+        query="строители", selection="descent",
+    ))
+    assert [c.community_id for c in out.communities] == ["1"]
+    assert any("c.summary IS NOT NULL" in q for q, _ in store.queries)
+
+
+@pytest.mark.asyncio
+async def test_map_communities_lexical_default_unchanged(monkeypatch):
+    # default selection="lexical" never embeds / queries the vector index.
+    store = _FakeStore(rows=[
+        {"community_id": 7, "level": 0, "summary": "строители", "member_count": 5},
+    ])
+    monkeypatch.setattr(gs_mod, "_get_store", lambda: store)
+
+    def _boom_embed():
+        raise AssertionError("lexical path must not embed")
+
+    monkeypatch.setattr(gs_mod, "_get_embed_model", _boom_embed)
+    out = await map_communities(MapCommunitiesParams(query="строители"))
+    assert [c.community_id for c in out.communities] == ["7"]
 
 
 # ── map_community_partial activity (stubbed LLM) ────────────────────

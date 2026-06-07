@@ -49,10 +49,13 @@ def build_summarize_specs(
 ) -> list[SummarizeCommunityParams]:
     """Pure spec: detected communities → batchable summarize params.
 
-    One ``SummarizeCommunityParams`` per community, preserving id/level/
-    members.  Extracted so the fan-out shape is unit-testable outside
-    Temporal.  Re-running over the same detection yields identical specs
-    (idempotent) — the activity's MERGE then updates the same node.
+    One ``SummarizeCommunityParams`` per community that NEEDS a report,
+    preserving id/level/members.  Communities carried over unchanged from a
+    prior build (``needs_report=False``, set by ``detect_hierarchy``) are
+    skipped — their report is already persisted.  Extracted so the fan-out
+    shape is unit-testable outside Temporal.  Re-running over the same
+    detection yields identical specs (idempotent) — the activity's MERGE
+    then updates the same node.
     """
     return [
         SummarizeCommunityParams(
@@ -61,7 +64,26 @@ def build_summarize_specs(
             members=list(c.members),
         )
         for c in detect.communities
+        if getattr(c, "needs_report", True)
     ]
+
+
+def group_specs_by_level(
+    specs: list[SummarizeCommunityParams],
+) -> list[list[SummarizeCommunityParams]]:
+    """Group summarize specs by ``level``, FINEST-first.
+
+    Returns a list of per-level groups ordered so the FINEST level (highest
+    ``level`` number) comes first and the COARSEST (level 0) last.  The build
+    workflow processes groups in this order so a coarser parent's child
+    reports are already persisted before it runs (``_CHILD_REPORTS_CYPHER``
+    reads only children that already have a report).  Pure / unit-testable;
+    within-group order is preserved from ``specs``.
+    """
+    by_level: dict[int, list[SummarizeCommunityParams]] = {}
+    for spec in specs:
+        by_level.setdefault(spec.level, []).append(spec)
+    return [by_level[level] for level in sorted(by_level, reverse=True)]
 
 
 @workflow.defn
@@ -97,7 +119,13 @@ class CommunityBuildWorkflow:
         self._state["detected"] = len(specs)
         log.info("community_build  detected %d communities", len(specs))
 
-        # ── 2. summarize each (bounded parallelism) ─────────────────
+        # ── 2. summarize level-by-level, FINEST-first ───────────────
+        # A coarser parent's report is composed from its CHILD reports
+        # (_CHILD_REPORTS_CYPHER reads children that already have a report),
+        # so the finest level must be fully persisted before the next
+        # coarser level starts.  Within a level there is no such dependency,
+        # so it fans out with bounded parallelism.  Pure grouping +
+        # execute_activity only → replay-deterministic (no clock/random).
         self._state["phase"] = "summarize"
         sem = asyncio.Semaphore(
             max(1, settings.temporal.community_summary_parallelism),
@@ -116,11 +144,25 @@ class CommunityBuildWorkflow:
                     retry_policy=FAST_RETRY,
                 )
 
-        results: list[SummarizeCommunityResult] = await asyncio.gather(
-            *[_summarize_one(s) for s in specs],
-        )
-        summarized = sum(1 for r in results if r.persisted)
-        self._state["summarized"] = summarized
+        # Process finest level first (highest level number) so a coarser
+        # parent's child reports are persisted before it runs.  Partial
+        # failures degrade gracefully: a coarse report composes from
+        # whatever child reports DID persist + raw members (see
+        # _gather_context), and idempotent re-runs heal it — a level
+        # barrier means "this level finished", not "all children present".
+        summarized = 0
+        for group in group_specs_by_level(specs):
+            level = group[0].level  # group_specs_by_level never emits an empty group
+            results: list[SummarizeCommunityResult] = await asyncio.gather(
+                *[_summarize_one(s) for s in group],
+            )
+            level_persisted = sum(1 for r in results if r.persisted)
+            summarized += level_persisted
+            self._state["summarized"] = summarized
+            log.info(
+                "community_build  level=%d summarized %d/%d (running total %d)",
+                level, level_persisted, len(group), summarized,
+            )
         self._state["phase"] = "done"
         log.info(
             "community_build done  detected=%d  summarized=%d",

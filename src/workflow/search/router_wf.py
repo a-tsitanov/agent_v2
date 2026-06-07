@@ -27,6 +27,8 @@ from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
+        ContextualizeParams,
+        ContextualizeResult,
         GlobalSearchParams,
         OrchestratorParams,
         RouteLabel,
@@ -69,6 +71,13 @@ def merge_doc_ids(local: list[str], glob: list[str]) -> list[str]:
     return out
 
 
+def _drift_local_fallback(local: SearchOutcome) -> SearchOutcome:
+    """When the global pass of drift fails, degrade to the local answer
+    but keep the ``drift`` mode label (so callers/metrics see the request
+    was drift, just degraded)."""
+    return local.model_copy(update={"mode": "drift"})
+
+
 @workflow.defn
 class DriftSearchWorkflow:
     """Drift mode — local pass, then global community expansion."""
@@ -81,6 +90,26 @@ class DriftSearchWorkflow:
     ) -> SearchOutcome:
         log = workflow.logger
         log.info("drift_search start  query=%s", local_params.query[:80])
+
+        # 0. Contextualise the follow-up against conversation history ONCE
+        #    here, then pass the rewritten standalone query to BOTH children
+        #    with history CLEARED so neither the local orchestrator nor the
+        #    global pass re-runs contextualisation.  Empty history ⇒ skipped
+        #    (back-compat — children run exactly as before).
+        if local_params.history and local_params.contextualize_enabled:
+            ctx = await workflow.execute_activity(
+                "contextualize_query",
+                ContextualizeParams(
+                    query=local_params.query, history=list(local_params.history)),
+                start_to_close_timeout=LLM_START_TO_CLOSE,
+                schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+                retry_policy=FAST_RETRY,
+                result_type=ContextualizeResult,
+            )
+            local_params = local_params.model_copy(
+                update={"query": ctx.query, "history": []})
+            global_params = global_params.model_copy(
+                update={"query": ctx.query, "history": []})
 
         # 1. Local plan-execute pass (concrete chunk evidence) — REUSE the
         #    existing orchestrator unchanged as a child workflow.
@@ -95,12 +124,18 @@ class DriftSearchWorkflow:
         #    merges the local sources AHEAD of the community partials in the
         #    REDUCE context and labels the outcome "drift".
         drift_global = global_params.model_copy(update={"drift_mode": True})
-        outcome: SearchOutcome = await workflow.execute_child_workflow(
-            GlobalSearchWorkflow.run,
-            args=[drift_global, list(local.sources)],
-            id=f"{workflow.info().workflow_id}-global",
-            result_type=SearchOutcome,
-        )
+        try:
+            outcome: SearchOutcome = await workflow.execute_child_workflow(
+                GlobalSearchWorkflow.run,
+                args=[drift_global, list(local.sources)],
+                id=f"{workflow.info().workflow_id}-global",
+                result_type=SearchOutcome,
+            )
+        except Exception as exc:  # ChildWorkflowError / timeout / activity failure
+            log.warning(
+                "drift_search: global pass failed, degrading to local: %s", exc
+            )
+            return _drift_local_fallback(local)
         return outcome.model_copy(update={
             "documents": merge_doc_ids(list(local.documents), list(outcome.documents)),
         })

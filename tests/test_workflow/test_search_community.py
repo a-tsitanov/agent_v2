@@ -23,12 +23,16 @@ from src.workflow.contracts import (
 )
 from src.workflow.search.activities import community as community_mod
 from src.workflow.search.activities.community import summarize_community_activity
-from src.workflow.search.community_wf import build_summarize_specs
+from src.workflow.search.community_wf import (
+    build_summarize_specs,
+    group_specs_by_level,
+)
 
 
 class _FakeStore:
-    def __init__(self, *, member_rows=None, raise_on=None):
+    def __init__(self, *, member_rows=None, child_rows=None, raise_on=None):
         self._member_rows = member_rows or []
+        self._child_rows = child_rows or []
         self._raise_on = raise_on
         self.calls: list[tuple[str, dict]] = []
 
@@ -36,16 +40,45 @@ class _FakeStore:
         self.calls.append((cypher, param_map or {}))
         if self._raise_on and self._raise_on in cypher:
             raise RuntimeError("boom")
+        if "PARENT_OF" in cypher:
+            return self._child_rows
         if "RETURN" in cypher and "description" in cypher:
             return self._member_rows
         return []
 
 
-class _FakeLLM:
-    """Records the prompt; returns a canned summary."""
+class _FakeEmbed:
+    """Returns a fixed-length vector; records the embedded text."""
 
-    def __init__(self, text="Community of construction firms."):
-        self.text = text
+    def __init__(self, dim=4):
+        self.dim = dim
+        self.seen_text: str | None = None
+
+    async def aget_text_embedding(self, text):
+        self.seen_text = text
+        return [0.1] * self.dim
+
+
+def _report_json(title="Группа", summary="Сводка.", findings=None):
+    import json
+
+    return json.dumps(
+        {
+            "title": title,
+            "summary": summary,
+            "findings": findings
+            if findings is not None
+            else [{"statement": "Вывод.", "importance": 80}],
+        },
+        ensure_ascii=False,
+    )
+
+
+class _FakeLLM:
+    """Records the prompt; returns a canned structured-report JSON."""
+
+    def __init__(self, text=None):
+        self.text = text if text is not None else _report_json()
         self.seen_prompt: str | None = None
 
     async def acomplete(self, prompt, **_kw):
@@ -59,17 +92,26 @@ def _stub_activity_ctx(monkeypatch):
     mock.heartbeat = MagicMock()
     mock.logger = MagicMock()
     monkeypatch.setattr(community_mod, "activity", mock)
+    # Default embed stub so the activity never builds a real embedding
+    # model in unit tests (individual tests may override).
+    monkeypatch.setattr(community_mod, "_get_embed_model", lambda: _FakeEmbed())
 
 
 @pytest.mark.asyncio
-async def test_summarize_produces_summary_and_persists(monkeypatch):
+async def test_summarize_produces_report_and_persists(monkeypatch):
     store = _FakeStore(member_rows=[
         {"name": "Ромашка", "description": "Поставщик материалов."},
         {"name": "СтройИнвест", "description": "Подрядчик."},
     ])
-    llm = _FakeLLM("Группа строительных компаний.")
+    llm = _FakeLLM(_report_json(
+        title="Строительные компании",
+        summary="Группа строительных компаний.",
+        findings=[{"statement": "Тесно связаны контрактами.", "importance": 90}],
+    ))
+    embed = _FakeEmbed()
     monkeypatch.setattr(community_mod, "_get_store", lambda: store)
     monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
+    monkeypatch.setattr(community_mod, "_get_embed_model", lambda: embed)
 
     out = await summarize_community_activity(SummarizeCommunityParams(
         community_id="2", level=0, members=["Ромашка", "СтройИнвест"],
@@ -80,10 +122,88 @@ async def test_summarize_produces_summary_and_persists(monkeypatch):
     assert out.persisted is True
     # The member names made it into the prompt.
     assert "Ромашка" in (llm.seen_prompt or "")
-    # The summary MERGE was issued.
-    joined = "\n".join(c for c, _ in store.calls)
-    assert "MERGE (c:Community" in joined
-    assert "summary" in joined
+    # title + summary were embedded.
+    assert "Строительные компании" in (embed.seen_text or "")
+    assert "Группа строительных компаний." in (embed.seen_text or "")
+    # The report MERGE was issued with report/title/summary/report_vec.
+    write = next(
+        (pm for c, pm in store.calls if "report" in c and "MERGE" in c), None
+    )
+    assert write is not None
+    assert write["community_id"] == "2"
+    assert write["title"] == "Строительные компании"
+    assert write["summary"] == "Группа строительных компаний."
+    assert isinstance(write["report_vec"], list)
+    import json as _json
+    parsed = _json.loads(write["report"])
+    assert parsed["findings"][0]["importance"] == 90
+
+
+@pytest.mark.asyncio
+async def test_summarize_level_gt0_uses_child_reports(monkeypatch):
+    store = _FakeStore(
+        member_rows=[{"name": "X", "description": "y"}],
+        child_rows=[
+            {"title": "Дочернее A", "summary": "Сводка A."},
+            {"title": "Дочернее B", "summary": "Сводка B."},
+        ],
+    )
+    llm = _FakeLLM()
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="7", level=1, members=["X", "Z"],
+    ))
+
+    assert out.persisted is True
+    # Child-report context (not member context) drove the prompt.
+    assert "Дочернее A" in (llm.seen_prompt or "")
+    assert "Дочерние сообщества" in (llm.seen_prompt or "")
+    # The PARENT_OF child-report query was issued.
+    assert any("PARENT_OF" in c for c, _ in store.calls)
+
+
+@pytest.mark.asyncio
+async def test_summarize_level_gt0_falls_back_to_members(monkeypatch):
+    # No child reports yet → must fall back to member context.
+    store = _FakeStore(
+        member_rows=[{"name": "Альфа", "description": "Описание."}],
+        child_rows=[],
+    )
+    llm = _FakeLLM()
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
+
+    await summarize_community_activity(SummarizeCommunityParams(
+        community_id="7", level=1, members=["Альфа"],
+    ))
+
+    assert "Альфа" in (llm.seen_prompt or "")
+    assert "Сущности сообщества" in (llm.seen_prompt or "")
+
+
+@pytest.mark.asyncio
+async def test_summarize_persists_without_vec_on_embed_failure(monkeypatch):
+    store = _FakeStore(member_rows=[{"name": "A", "description": "x"}])
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _FakeLLM())
+
+    class _BoomEmbed:
+        async def aget_text_embedding(self, _t):
+            raise RuntimeError("embed down")
+
+    monkeypatch.setattr(community_mod, "_get_embed_model", lambda: _BoomEmbed())
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="3", level=0, members=["A", "B"],
+    ))
+    assert out.persisted is True
+    write = next(
+        (pm for c, pm in store.calls if "report" in c and "MERGE" in c), None
+    )
+    assert write is not None
+    assert write["report_vec"] is None
 
 
 @pytest.mark.asyncio
@@ -140,6 +260,115 @@ def test_build_summarize_specs_empty():
     assert build_summarize_specs(DetectCommunitiesResult(communities=[])) == []
 
 
+def test_build_summarize_specs_skips_carried_over_reports():
+    # needs_report=False communities (carried over unchanged from a prior
+    # build) are skipped — only those needing a (re)summary emit specs.
+    detect = DetectCommunitiesResult(communities=[
+        CommunityRef(community_id="1", level=0, members=["A", "B", "C"],
+                     needs_report=True),
+        CommunityRef(community_id="2", level=0, members=["D", "E", "F"],
+                     needs_report=False),  # carried over → skip
+        CommunityRef(community_id="3", level=1, members=["G", "H"],
+                     needs_report=True),
+    ])
+    specs = build_summarize_specs(detect)
+    assert [s.community_id for s in specs] == ["1", "3"]
+
+
+# ── pure helper: level grouping (finest-first) ──────────────────────
+
+
+def test_group_specs_by_level_orders_finest_first():
+    specs = [
+        SummarizeCommunityParams(community_id="c0a", level=0, members=["a"]),
+        SummarizeCommunityParams(community_id="c1a", level=1, members=["b"]),
+        SummarizeCommunityParams(community_id="c2a", level=2, members=["c"]),
+        SummarizeCommunityParams(community_id="c1b", level=1, members=["d"]),
+        SummarizeCommunityParams(community_id="c0b", level=0, members=["e"]),
+    ]
+    groups = group_specs_by_level(specs)
+    # Finest (highest level number) first, coarsest (level 0) last.
+    assert [g[0].level for g in groups] == [2, 1, 0]
+    assert [s.community_id for s in groups[0]] == ["c2a"]
+    assert [s.community_id for s in groups[1]] == ["c1a", "c1b"]
+    assert [s.community_id for s in groups[2]] == ["c0a", "c0b"]
+
+
+def test_group_specs_by_level_single_level():
+    specs = [
+        SummarizeCommunityParams(community_id="1", level=0, members=["a"]),
+        SummarizeCommunityParams(community_id="2", level=0, members=["b"]),
+    ]
+    groups = group_specs_by_level(specs)
+    assert len(groups) == 1
+    assert [s.community_id for s in groups[0]] == ["1", "2"]
+
+
+def test_group_specs_by_level_empty():
+    assert group_specs_by_level([]) == []
+
+
+# ── pure helper: structured-report parser ───────────────────────────
+
+
+def test_parse_report_valid_json():
+    text = (
+        '{"title": "T", "summary": "S", '
+        '"findings": [{"statement": "f1", "importance": 70}]}'
+    )
+    out = community_mod._parse_report(text)
+    assert out["title"] == "T"
+    assert out["summary"] == "S"
+    assert out["findings"] == [{"statement": "f1", "importance": 70}]
+
+
+def test_parse_report_strips_code_fence_and_prose():
+    text = "Вот отчёт:\n```json\n" + _report_json("X", "Y", []) + "\n```\nготово"
+    out = community_mod._parse_report(text)
+    assert out["title"] == "X"
+    assert out["summary"] == "Y"
+
+
+def test_parse_report_garbage_falls_back_to_raw():
+    out = community_mod._parse_report("just some prose, no json here")
+    assert out["title"] == ""
+    assert out["summary"] == "just some prose, no json here"
+    assert out["findings"] == []
+
+
+def test_parse_report_empty_string():
+    out = community_mod._parse_report("")
+    assert out == {"title": "", "summary": "", "findings": []}
+
+
+def test_parse_report_tolerates_bad_finding_shapes():
+    text = (
+        '{"title": 5, "summary": "S", "findings": '
+        '["not a dict", {"importance": 9}, {"statement": "ok", "importance": "x"}]}'
+    )
+    out = community_mod._parse_report(text)
+    # non-str title → "", missing/blank statement dropped, non-int importance → 0
+    assert out["title"] == ""
+    assert out["summary"] == "S"
+    assert out["findings"] == [{"statement": "ok", "importance": 0}]
+
+
+def test_write_report_cypher_shape():
+    cy = community_mod._WRITE_REPORT_CYPHER
+    assert "MERGE (c:Community {id: $community_id, level: $level})" in cy
+    for field in ("c.report = $report", "c.title = $title",
+                  "c.summary = $summary", "c.report_vec = $report_vec",
+                  "c.summarized_at = timestamp()"):
+        assert field in cy
+
+
+def test_child_reports_cypher_shape():
+    cy = community_mod._CHILD_REPORTS_CYPHER
+    assert "-[:PARENT_OF]->(child:Community)" in cy
+    assert "child.report IS NOT NULL" in cy
+    assert "ORDER BY child.member_count DESC" in cy
+
+
 def test_project_cypher_is_undirected_for_leiden():
     # Leiden rejects a directed graph ("works only with undirected graphs").
     # The projection MUST mark all relationship types undirected.
@@ -148,3 +377,59 @@ def test_project_cypher_is_undirected_for_leiden():
     cypher = _project_cypher("g-test")
     assert "undirectedRelationshipTypes: ['*']" in cypher
     assert "gds.graph.project(" in cypher
+
+
+@pytest.mark.asyncio
+async def test_detect_activity_hierarchy_branch_and_one_shot_index(monkeypatch):
+    """max_levels>1 routes to detect_hierarchy and ensures the report vector
+    index exactly ONCE (one-shot), not per community."""
+    import src.graph.communities as communities_mod
+    import src.graph.index as index_mod
+    from src.workflow.search.activities.community import detect_communities_activity
+    from src.workflow.contracts import DetectCommunitiesParams, CommunityRef
+
+    calls = {"hierarchy": 0, "single": 0, "ensure": 0}
+
+    async def fake_hierarchy(store, *, max_levels, min_size):
+        calls["hierarchy"] += 1
+        return [CommunityRef(community_id="1", level=0, members=["a", "b"])]
+
+    async def fake_single(store, *, min_size, level=0):
+        calls["single"] += 1
+        return []
+
+    def fake_ensure(store, dim):
+        calls["ensure"] += 1
+        return True
+
+    monkeypatch.setattr(community_mod, "_get_store", lambda: object())
+    monkeypatch.setattr(communities_mod, "detect_hierarchy", fake_hierarchy)
+    monkeypatch.setattr(communities_mod, "detect_communities", fake_single)
+    monkeypatch.setattr(index_mod, "ensure_community_report_vector_index", fake_ensure)
+
+    out = await detect_communities_activity(
+        DetectCommunitiesParams(min_size=1, max_levels=3))
+    assert calls == {"hierarchy": 1, "single": 0, "ensure": 1}
+    assert [c.community_id for c in out.communities] == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_detect_activity_index_ensure_failopen(monkeypatch):
+    """A raising one-shot index ensure must NOT crash the detect activity."""
+    import src.graph.communities as communities_mod
+    import src.graph.index as index_mod
+    from src.workflow.search.activities.community import detect_communities_activity
+    from src.workflow.contracts import DetectCommunitiesParams
+
+    async def fake_single(store, *, min_size, level=0):
+        return []
+
+    def boom_ensure(store, dim):
+        raise RuntimeError("no vector index support")
+
+    monkeypatch.setattr(community_mod, "_get_store", lambda: object())
+    monkeypatch.setattr(communities_mod, "detect_communities", fake_single)
+    monkeypatch.setattr(index_mod, "ensure_community_report_vector_index", boom_ensure)
+
+    out = await detect_communities_activity(DetectCommunitiesParams(min_size=1))
+    assert out.communities == []  # fail-open, single-level branch (max_levels=1)

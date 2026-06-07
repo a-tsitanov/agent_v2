@@ -452,6 +452,12 @@ class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENT_", env_file=".env", extra="ignore")
 
     top_k: int = 10
+    # Conversation history (client-managed multi-turn): when enabled, prior
+    # turns supplied on the request are used to contextualise the query into
+    # a standalone form before retrieval.  Empty history = single-shot.
+    conversation_history_enabled: bool = True
+    history_max_turns: int = Field(default=6, ge=0, le=40)
+    history_max_chars: int = Field(default=4000, ge=0)
     # Plan-execute flow (R2): max sub-questions the planner may emit —
     # bounds the parallel SubQueryRetrievalWorkflow fan-out (and planner
     # LLM cost) regardless of what the small model returns.
@@ -471,6 +477,15 @@ class AgentSettings(BaseSettings):
     # docs skip the LLM.  OPTIONAL + FAIL-SAFE: any Neo4j error or a
     # missing store falls back to pure LLM judging.
     er_verdict_cache_enabled: bool = True
+    # Opt-in: native Neo4j vector-index kNN for ER instead of the bounded
+    # 5000-entity window.  Removes the window ceiling (at 200k canonicals
+    # the window reaches only ~2% of true nearest matches; native kNN
+    # ~96%).  REQUIRES running `scripts/backfill_er_vector.py` first to
+    # populate `er_vec` + build the index.  Default off.
+    er_use_native_vector_knn: bool = False
+    # Neighbours fetched per new entity from the ER vector index when
+    # native kNN is on.
+    er_vector_knn_k: int = Field(default=20, ge=1, le=100)
     # Process-wide concurrency cap for LLM calls (search-side).
     # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
     # graph_search's LLMSynonymRetriever, judge) share this gate.
@@ -514,6 +529,11 @@ class AgentSettings(BaseSettings):
     # (the tool clamps it to GRAPH_WALK_MAX_HOPS).
     graph_walk_enabled: bool = True
     graph_walk_hops: int = Field(default=2, ge=1, le=3)
+    # When on, graph_walk is seeded from BOTH the top graph_search entity
+    # AND the top find_entity_by_name (fulltext) entity when they differ —
+    # so a fulltext-matched entity (partial name / typo) still contributes
+    # its neighbourhood even if graph_search already returned something.
+    graph_walk_dual_seed: bool = True
     # ``path_depth`` for the similarity graph_search inside the local
     # pipeline: how many triplet-hops of neighbours aretrieve pulls around
     # each matched entity. Default 1 (current behaviour); raise (≤3) to
@@ -530,6 +550,15 @@ class AgentSettings(BaseSettings):
     # linker + alias storage ship as building blocks and are NOT yet
     # wired into the ingest activity.
     canonical_linker_enabled: bool = False
+    # Community build: how many Leiden dendrogram levels to materialise.
+    # 1 = single-level (today's cost/behaviour); raise to build the
+    # hierarchy (offline, additive). Safety-capped.
+    community_max_levels: int = Field(default=1, ge=1, le=10)
+    # Global/drift community selection strategy. "lexical" = today's
+    # word-overlap; "semantic" = kNN over report_vec; "descent" = GraphRAG
+    # hierarchy descent. Default lexical (query behaviour unchanged) — flip
+    # only after a hierarchy build has populated reports + report_vec.
+    community_dynamic_selection: Literal["lexical", "semantic", "descent"] = "lexical"
 
 
 class LLMPoolSettings(BaseSettings):

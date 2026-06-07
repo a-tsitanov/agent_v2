@@ -38,6 +38,8 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
         AgenticStepStatDict,
         CommunitySummaryRef,
+        ContextualizeParams,
+        ContextualizeResult,
         DocumentsForCommunitiesParams,
         DocumentsForCommunitiesResult,
         GlobalSearchParams,
@@ -169,6 +171,24 @@ class GlobalSearchWorkflow:
             mode, params.query[:80], params.max_communities,
         )
 
+        # ── 0. contextualise the query against conversation history ──
+        # Only when history is present + the feature is on.  Rewrites the
+        # follow-up into a standalone question so the whole map-reduce uses
+        # the standalone query.  Empty history ⇒ skipped (back-compat).
+        # NOTE: drift dispatches global as a child with history CLEARED, so
+        # this block does NOT re-run for the drift path.
+        if params.history and params.contextualize_enabled:
+            ctx = await workflow.execute_activity(
+                "contextualize_query",
+                ContextualizeParams(
+                    query=params.query, history=list(params.history)),
+                start_to_close_timeout=LLM_START_TO_CLOSE,
+                schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+                retry_policy=FAST_RETRY,
+                result_type=ContextualizeResult,
+            )
+            params = params.model_copy(update={"query": ctx.query})
+
         # ── 1. read community summaries (ranked + capped) ───────────
         self._state["phase"] = "map_communities"
         comm: MapCommunitiesResult = await workflow.execute_activity(
@@ -177,6 +197,7 @@ class GlobalSearchWorkflow:
                 query=params.query,
                 level=params.level,
                 limit=params.max_communities,
+                selection=params.community_selection,
             ),
             result_type=MapCommunitiesResult,
             start_to_close_timeout=timedelta(minutes=2),

@@ -99,6 +99,92 @@ def ensure_entity_lookup_indexes(store) -> bool:
     return ok
 
 
+# Native vector index over `__Entity__.er_vec` — backs the opt-in
+# entity-resolution kNN (`ERConfig.use_native_vector_knn`) that replaces
+# the bounded 5000-entity window with a per-entity nearest-neighbour
+# lookup across the whole graph.  Cosine to match the ER embeddings.
+ER_VECTOR_INDEX_CYPHER = (
+    "CREATE VECTOR INDEX er_embedding_vec IF NOT EXISTS "
+    "FOR (e:__Entity__) ON e.er_vec "
+    "OPTIONS {indexConfig: {`vector.dimensions`: $dim, "
+    "`vector.similarity_function`: 'cosine'}}"
+)
+
+
+def ensure_er_vector_index(store, dim: int) -> bool:
+    """Idempotently create the ER vector index on ``__Entity__.er_vec``.
+
+    Fail-open: logs and returns False on any error (e.g. a Neo4j version
+    without vector indexes), so the ER path can fall back to the window.
+    """
+    try:
+        store.structured_query(ER_VECTOR_INDEX_CYPHER, param_map={"dim": int(dim)})
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_er_vector_index failed: {e}", e=exc)
+        return False
+
+
+# Native vector index over `Community.report_vec` — backs the structured
+# community-report retrieval (Phase 2a of the hierarchical-communities
+# track).  Reports are embedded from `title + summary`; cosine to match
+# the project embedding model (mirrors `er_embedding_vec` on entities).
+COMMUNITY_REPORT_VECTOR_INDEX_CYPHER = (
+    "CREATE VECTOR INDEX community_report_vec IF NOT EXISTS "
+    "FOR (c:Community) ON c.report_vec "
+    "OPTIONS {indexConfig: {`vector.dimensions`: $dim, "
+    "`vector.similarity_function`: 'cosine'}}"
+)
+
+
+def ensure_community_report_vector_index(store, dim: int) -> bool:
+    """Idempotently create the community-report vector index on
+    ``Community.report_vec``.
+
+    Fail-open: logs and returns False on any error (e.g. a Neo4j version
+    without vector indexes), so the report-build path can persist reports
+    without the native index and fall back to lexical/summary search.
+    """
+    try:
+        store.structured_query(
+            COMMUNITY_REPORT_VECTOR_INDEX_CYPHER, param_map={"dim": int(dim)}
+        )
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_community_report_vector_index failed: {e}", e=exc)
+        return False
+
+
+# Range indexes for the community / global read paths.
+#   * community_level — backs `MATCH (c:Community {level: $level})`
+#     (global_search summary read).  NOT redundant with the
+#     `community_key` UNIQUE constraint on `(c.id, c.level)`: a composite
+#     index is only usable when its LEADING column (id) is bound, so it
+#     can't serve a level-only lookup — this standalone index is required.
+#   * chunk_doc_id — backs the `(:Chunk)-[:MENTIONS]->…->(:Community)`
+#     traversal returning `c.doc_id` (verified live: Chunk nodes carry
+#     `doc_id`).
+COMMUNITY_LEVEL_INDEX_CYPHER = (
+    "CREATE INDEX community_level IF NOT EXISTS FOR (c:Community) ON (c.level)"
+)
+CHUNK_DOC_ID_INDEX_CYPHER = (
+    "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)"
+)
+
+
+def ensure_community_indexes(store) -> bool:
+    """Idempotent range indexes for the community/global read paths
+    (Community.level filter, Chunk.doc_id traversal).  Fail-open."""
+    ok = True
+    for cypher in (COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER):
+        try:
+            store.structured_query(cypher)
+        except Exception as exc:  # broad by design — fail-open
+            logger.warning("ensure_community_indexes failed: {e}", e=exc)
+            ok = False
+    return ok
+
+
 def _parse_triplets_strip_thinking(response: str, **kwargs):
     """Wrap the upstream parser with a `<think>...</think>` stripper.
 

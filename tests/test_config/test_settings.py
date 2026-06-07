@@ -149,6 +149,15 @@ def test_agent_graph_similarity_top_k_default():
     assert settings.agent.graph_similarity_top_k == 20
 
 
+def test_community_build_selection_defaults():
+    """Opt-in defaults: single-level build + lexical selection ⇒ today's
+    behaviour unchanged until an operator flips these."""
+    from src.config import AgentSettings
+    s = AgentSettings()
+    assert s.community_max_levels == 1
+    assert s.community_dynamic_selection == "lexical"
+
+
 def test_llm_pool_settings_defaults():
     from src.config import LLMPoolSettings
     s = LLMPoolSettings()

@@ -476,3 +476,107 @@ async def test_load_existing_canonicals_none_store_returns_empty():
     from src.graph.entity_resolution import _load_existing_canonicals
 
     assert await _load_existing_canonicals(None, limit=10) == []
+
+
+def _mk_item(name: str, vec: list[float], *, label: str = "Person", desc: str = "d"):
+    from src.graph.entity_resolution import _Item, _normalize_entity_name
+    return _Item(
+        name=name, norm=_normalize_entity_name(name), label=label,
+        description=desc, mention_count=3, source="new", embedding=vec,
+    )
+
+
+def test_candidate_pairs_numpy_path_matches_pure_python(monkeypatch):
+    """The vectorised cosine path is an optimisation — it must yield the
+    EXACT same candidate set as the pure-Python `_cosine` fallback, never
+    a behaviour change."""
+    import src.graph.entity_resolution as er
+
+    items = [
+        _mk_item("Alpha One", [1.0, 0.0, 0.0, 0.0]),
+        _mk_item("Alpha Two", [0.99, 0.10, 0.0, 0.0]),   # near-dup of Alpha
+        _mk_item("Beta Core", [0.0, 1.0, 0.0, 0.0]),
+        _mk_item("Beta Prime", [0.02, 0.98, 0.05, 0.0]),  # near-dup of Beta
+        _mk_item("Gamma", [0.0, 0.0, 1.0, 0.0]),
+        _mk_item("Delta", [0.0, 0.0, 0.0, 1.0]),
+        _mk_item("Beta Two", [0.0, 0.97, 0.10, 0.0]),     # another Beta-ish
+        _mk_item("Empty Desc", [0.9, 0.2, 0.0, 0.0], desc=""),  # empty-desc floor
+    ]
+    cfg = ERConfig()
+
+    auto_np, bord_np = er._candidate_pairs(items, cfg)
+    set_np = {(a, b) for a, b, _ in [*auto_np, *bord_np]}
+
+    monkeypatch.setattr(er, "_normalized_matrix", lambda group: None)
+    auto_py, bord_py = er._candidate_pairs(items, cfg)
+    set_py = {(a, b) for a, b, _ in [*auto_py, *bord_py]}
+
+    assert set_np == set_py
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stored_losers_safe_on_failure():
+    """When the repoint+delete query fails (e.g. APOC missing), the loser
+    node must be LEFT INTACT — exactly one query attempt per pair, no
+    second `DETACH DELETE` that would drop its edges, and no raise."""
+    from src.graph.entity_resolution import _cleanup_stored_losers
+
+    calls: list[dict] = []
+
+    class _BoomStore:
+        def structured_query(self, query, param_map=None):
+            calls.append({"query": query, "param_map": param_map})
+            raise RuntimeError("apoc.merge.relationship not found")
+
+    # Must not raise.
+    await _cleanup_stored_losers(_BoomStore(), [("Loser A", "Canon A")])
+
+    # Exactly one attempt (the APOC repoint) — no destructive fallback.
+    assert len(calls) == 1
+    assert "DETACH DELETE" not in calls[0]["query"] or "apoc.merge" in calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_singletons_get_er_vec_when_native_knn_enabled() -> None:
+    """With native kNN on, singletons also get the native `er_vec` list
+    (alongside the legacy `er_embedding` JSON) so the vector index can
+    find them."""
+    embed = _EmbeddingStub(table={"Unique Concept:": [0.1, 0.2, 0.3, 0.4]})
+    out_ents, _, _ = await resolve_entities(
+        [_ent("Unique Concept", desc="Solo.")], [], [],
+        llm=_ScriptedJudgeLLM(), embed_model=embed,
+        config=ERConfig(use_native_vector_knn=True),  # graph_store=None → no kNN load
+    )
+    props = out_ents[0].properties or {}
+    assert props.get("er_vec") == [0.1, 0.2, 0.3, 0.4]
+    assert json.loads(props.get("er_embedding")) == [0.1, 0.2, 0.3, 0.4]
+
+
+@pytest.mark.asyncio
+async def test_load_candidates_native_builds_deduped_items_from_knn() -> None:
+    from src.graph.entity_resolution import _Item, _load_candidates_native
+
+    knn_rows = [
+        {"name": "Stored A", "labels": ["__Entity__", "Person"],
+         "er_vec": [1.0, 0.0], "er_embedding": None,
+         "mention_count": 7, "description": "d"},
+        {"name": "Stored B", "labels": ["__Entity__", "Organization"],
+         "er_vec": None, "er_embedding": "[0.0, 1.0]",  # JSON fallback
+         "mention_count": 3, "description": ""},
+    ]
+
+    class _Store:
+        def structured_query(self, query, param_map=None):
+            return knn_rows if "queryNodes" in query else []  # else = index DDL
+
+    new = [_Item(name="New X", norm="new x", label="Person",
+                 description="", mention_count=1, source="new",
+                 embedding=[1.0, 0.0])]
+    out = await _load_candidates_native(_Store(), new, k=10, dim=2)
+
+    by_name = {it.name: it for it in out}
+    assert set(by_name) == {"Stored A", "Stored B"}
+    assert by_name["Stored A"].embedding == [1.0, 0.0]
+    assert by_name["Stored A"].source == "stored"
+    assert by_name["Stored B"].embedding == [0.0, 1.0]  # parsed from JSON
+    assert by_name["Stored B"].label == "Organization"

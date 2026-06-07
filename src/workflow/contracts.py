@@ -364,6 +364,24 @@ class SubQueryResult(_Frozen):
     sources: list[SerializedNode] = Field(default_factory=list)
 
 
+class ConversationTurnDict(_Frozen):
+    role: str = "user"
+    content: str = ""
+
+
+class ContextualizeParams(_Frozen):
+    """Input to the ``contextualize_query`` activity."""
+
+    query: str
+    history: list[ConversationTurnDict] = Field(default_factory=list)
+
+
+class ContextualizeResult(_Frozen):
+    """Standalone, self-contained rewrite of ``query`` (== original on no-op/failure)."""
+
+    query: str
+
+
 class OrchestratorParams(_Frozen):
     """Workflow input for ``SearchOrchestratorWorkflow`` — what the
     ``/search/local`` route submits."""
@@ -377,6 +395,11 @@ class OrchestratorParams(_Frozen):
     # runtime (replay-safe).  Defaults mirror AgentSettings.
     coverage_check_enabled: bool = True
     max_coverage_rounds: int = 1
+    history: list[ConversationTurnDict] = Field(default_factory=list)
+    # Conversation-history contextualisation gate — resolved from
+    # AgentSettings at submit time (like coverage_check_enabled) so the
+    # workflow never reads env at runtime (replay-safe).
+    contextualize_enabled: bool = True
 
 
 class SearchOutcome(_Frozen):
@@ -406,6 +429,9 @@ class CommunityRef(_Frozen):
     community_id: str
     level: int = 0
     members: list[str] = Field(default_factory=list)
+    members_hash: str = ""
+    parent_id: str = ""
+    needs_report: bool = True
 
     @property
     def member_count(self) -> int:
@@ -417,11 +443,15 @@ class DetectCommunitiesParams(_Frozen):
 
     ``min_size`` drops communities below the threshold (noise); ``level``
     tags the written ``:Community`` nodes (single-level for R6, kept for a
-    future hierarchical pass).
+    future hierarchical pass).  ``max_levels`` selects detection mode:
+    ``1`` (default) == single-level/back-compat (``detect_communities``);
+    ``>1`` == materialise the dendrogram HIERARCHY (``detect_hierarchy``).
+    Phase 5 wires ``max_levels`` from config.
     """
 
     min_size: int = 3
     level: int = 0
+    max_levels: int = 1
 
 
 class DetectCommunitiesResult(_Frozen):
@@ -504,11 +534,19 @@ class MapCommunitiesParams(_Frozen):
 
     ``level`` selects the community level to read; ``limit`` bounds how
     many summaries enter the (parallel) MAP step so a huge corpus doesn't
-    fan out unbounded."""
+    fan out unbounded.
+
+    ``selection`` picks the community-selection strategy: ``"lexical"``
+    (default — query/summary word-overlap, today's behaviour) or
+    ``"semantic"`` (kNN over ``c.report_vec`` via the
+    ``community_report_vec`` index, with lexical as the fail-open
+    fallback).  Unknown values are treated as lexical (v2 descent lands
+    later)."""
 
     query: str
     level: int = 0
     limit: int = 20
+    selection: str = "lexical"
 
 
 class MapCommunitiesResult(_Frozen):
@@ -564,3 +602,11 @@ class GlobalSearchParams(_Frozen):
     # and the partials are MERGED with caller-supplied local sources
     # rather than standing alone.  Plain global leaves this False.
     drift_mode: bool = False
+    history: list[ConversationTurnDict] = Field(default_factory=list)
+    # Resolved from AgentSettings at submit time (replay-safe gate).
+    contextualize_enabled: bool = True
+    # Community-selection strategy for the MAP step, resolved from
+    # AgentSettings at submit time (replay-safe). "lexical" (default —
+    # today's behaviour), "semantic", or "descent". Threaded into
+    # ``MapCommunitiesParams.selection`` inside the workflow.
+    community_selection: str = "lexical"
