@@ -43,7 +43,7 @@ Two long-lived processes plus a stack of stateful backends:
 - **MCP servers** (`src/mcp/`) — two optional surfaces (stdio + HTTP/SSE)
   that expose search to external LLM clients (OpenWebUI / Claude
   Desktop / Cursor): **MCP-1** `:9001` (`kb_search`, submits the search
-  workflow) and **MCP-2** `:9002` (6 atomic in-process retrieval tools).
+  workflow) and **MCP-2** `:9002` (8 atomic in-process retrieval tools).
   See [`runbook/mcp.md`](runbook/mcp.md).
 
 Cross-cutting:
