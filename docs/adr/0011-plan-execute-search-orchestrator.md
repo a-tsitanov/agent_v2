@@ -1,53 +1,57 @@
-# ADR-0011: Plan-execute SearchOrchestratorWorkflow (Self-RAG/ReAct removed) + bounded coverage loop
+# ADR-0011: Plan-execute SearchOrchestratorWorkflow (Self-RAG/ReAct удалён) + ограниченный цикл покрытия
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-The original local search was an open-ended ReAct loop where the LLM decided
-the next tool each step. That is slow (serial LLM turns), non-deterministic in
-cost/latency, and hard to reason about under Temporal's determinism model. A
-RAG question usually decomposes into a small fixed set of sub-questions that can
-be retrieved in parallel.
+Изначальный локальный поиск был открытым циклом ReAct, где LLM решал, какой
+инструмент использовать следующим на каждом шаге. Это медленно (последовательные
+ходы LLM), недетерминированно по стоимости/латентности и трудно для рассуждений в
+модели детерминизма Temporal. RAG-вопрос обычно декомпозируется в небольшой
+фиксированный набор подвопросов, которые можно извлечь параллельно.
 
-## Decision
+## Решение
 
-Replace the ReAct loop with a **plan-execute-synthesize**
+Заменяем цикл ReAct на **plan-execute-synthesize**
 `SearchOrchestratorWorkflow`:
-1. optional history `contextualize_query`;
-2. `plan_subquestions` (small planner) splits the query into atomic sub-Qs
-   (`[query]` if atomic);
-3. fan-out one `SubQueryRetrievalWorkflow` child **per sub-question in parallel**
-   (`asyncio.gather` over child workflows); merge + dedup by chunk_id;
-4. a **bounded coverage loop** — `coverage_check` asks if evidence fully covers
-   the question; a named gap issues one extra sub-query round, bounded by
-   `max_coverage_rounds` and **fail-open** (any error → straight to synthesis);
-5. a unified graph+vector cross-encoder `rerank_sources` (fail-open, bounded);
-6. **one** large-tier `synthesize_answer`, pinned to `kb-search-large`.
+1. опциональный `contextualize_query` по истории;
+2. `plan_subquestions` (small-планировщик) разбивает запрос на атомарные
+   под-вопросы (`[query]`, если атомарный);
+3. fan-out одного дочернего `SubQueryRetrievalWorkflow` **на под-вопрос
+   параллельно** (`asyncio.gather` по дочерним workflow); merge + dedup по
+   chunk_id;
+4. **ограниченный цикл покрытия** — `coverage_check` спрашивает, полностью ли
+   доказательства покрывают вопрос; названный пробел запускает один
+   дополнительный раунд под-запросов, ограниченный `max_coverage_rounds` и
+   **fail-open** (любая ошибка → сразу к синтезу);
+5. единый граф+вектор cross-encoder `rerank_sources` (fail-open, ограниченный);
+6. **один** large-tier `synthesize_answer`, закреплённый за `kb-search-large`.
 
-The only LLM "decisions" are the up-front planner and the final synthesizer —
-there is no "LLM picks next tool" step. The legacy ReAct `SearchWorkflow` (and
-its `agent_reasoning_step`/`tool_execution`/`distill_observation` activities)
-was removed in the R7b cutover; orphaned reflective-synthesis paths are dead.
+Единственные «решения» LLM — это начальный планировщик и финальный синтезатор —
+нет шага «LLM выбирает следующий инструмент». Legacy ReAct `SearchWorkflow` (и его
+activity `agent_reasoning_step`/`tool_execution`/`distill_observation`) был удалён
+при переходе R7b; осиротевшие пути рефлексивного синтеза мертвы.
 
-## Consequences
+## Последствия
 
-- Bounded, parallel, mostly-deterministic latency and cost; fewer serial LLM
-  turns than ReAct.
-- Multiple fail-open gates (coverage, rerank) ensure the answer is never blocked
-  by a flaky auxiliary call; synthesis always runs large-tier on its own queue.
-- Loses ReAct's open-ended tool exploration — accepted, since fixed plan-execute
-  covers the RAG workload and is far easier to operate.
+- Ограниченная, параллельная, в основном детерминированная латентность и
+  стоимость; меньше последовательных ходов LLM, чем у ReAct.
+- Множественные fail-open гейты (покрытие, rerank) гарантируют, что ответ никогда
+  не блокируется ненадёжным вспомогательным вызовом; синтез всегда выполняется
+  large-tier на своей очереди.
+- Теряется открытое исследование инструментов ReAct — принято, поскольку
+  фиксированный plan-execute покрывает RAG-нагрузку и гораздо проще в
+  эксплуатации.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **ReAct / Self-RAG open-ended agent loop** (the prior design) — slow,
-  unbounded, non-deterministic; removed.
+- **Открытый агентный цикл ReAct / Self-RAG** (прежний дизайн) — медленный,
+  неограниченный, недетерминированный; удалён.
 
-## References
+## Ссылки
 
 - `src/workflow/search/orchestrator.py`, `src/workflow/search/subquery_wf.py`,
   `src/workflow/search/_coverage.py`, `_merge.py`; `src/workflow/worker.py`
-  (R7b cutover note)
-- `docs/SEARCH.md`, `docs/SEARCH-FLOW.md`; CONCEPTS.md → "Plan-execute search"
+  (заметка о переходе R7b)
+- `docs/SEARCH.md`, `docs/SEARCH-FLOW.md`; CONCEPTS.md → «Plan-execute search»

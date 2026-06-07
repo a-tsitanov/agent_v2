@@ -1,51 +1,52 @@
-# ADR-0008: Opt-in native-vector kNN ER over the 5000-row window
+# ADR-0008: Опциональный native-vector kNN ER поверх окна в 5000 строк
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Incremental cross-document ER (ADR-0007) compares each new entity against
-already-stored canonicals. The default loads a bounded window
-(`incremental_window`, default 5000) of canonicals ordered by `mention_count
-DESC` and brute-forces candidates in Python. Past that many canonicals the
-window covers only a fraction of the true nearest neighbours — on a synthetic
-200k graph the mention-count window reaches ~2% of true nearest canonicals, so
-new mentions of a frequent entity can silently fragment into duplicates.
+Инкрементальный междокументный ER (ADR-0007) сравнивает каждую новую сущность с
+уже сохранёнными канониками. По умолчанию загружается ограниченное окно
+(`incremental_window`, по умолчанию 5000) каноников, упорядоченных по
+`mention_count DESC`, и кандидаты перебираются в лоб на Python. За пределами
+такого числа каноников окно покрывает лишь долю истинных ближайших соседей — на
+синтетическом графе из 200k окно по mention-count достигает ~2% истинных
+ближайших каноников, поэтому новые упоминания частой сущности могут молчаливо
+фрагментироваться в дубликаты.
 
-## Decision
+## Решение
 
-Add an **opt-in native Neo4j vector-index kNN** path
-(`ERConfig.use_native_vector_knn`, env `ER_USE_NATIVE_VECTOR_KNN`). When on, ER
-stores each canonical's embedding as a native `er_vec` list property and queries
-an `er_embedding_vec` index per new entity for its k nearest stored canonicals
-across the **whole** graph — no window ceiling (measured ~96% recall at
-~6 ms/query). It is **default off**, enabled only after running the backfill:
-`scripts/backfill_er_vector.py` parses each existing entity's legacy
-`er_embedding` JSON into `er_vec` and builds the index. The ordering is
-**backfill-then-flag** — the kNN path can only find canonicals that already
-have `er_vec`.
+Добавляем **опциональный путь native kNN по векторному индексу Neo4j**
+(`ERConfig.use_native_vector_knn`, env `ER_USE_NATIVE_VECTOR_KNN`). Когда включён,
+ER хранит эмбеддинг каждого каноника как native list-свойство `er_vec` и
+запрашивает индекс `er_embedding_vec` для каждой новой сущности на её k ближайших
+сохранённых каноников по **всему** графу — без потолка окна (измерено ~96% recall
+при ~6 мс/запрос). Он **по умолчанию выключен**, включается только после прогона
+backfill: `scripts/backfill_er_vector.py` парсит legacy JSON `er_embedding`
+каждой существующей сущности в `er_vec` и строит индекс. Порядок —
+**backfill-затем-флаг** — путь kNN может найти только каноники, у которых уже есть
+`er_vec`.
 
-## Consequences
+## Последствия
 
-- Removes the window ceiling and the duplicate-fragmentation failure at scale,
-  at native-index speed.
-- Strict operational ordering: flipping the flag before backfilling yields an
-  empty/partial index (it fails open to within-batch ER, never crashes). Adds
-  an `er_vec` property + index to maintain.
-- The default path is unchanged, so existing deployments are unaffected until
-  they opt in.
+- Убирает потолок окна и сбой дубликат-фрагментации на масштабе, на скорости
+  native-индекса.
+- Строгий операционный порядок: переключение флага до backfill даёт
+  пустой/частичный индекс (он fail-open к внутрибатчевому ER, никогда не падает).
+  Добавляет свойство `er_vec` + индекс для поддержки.
+- Путь по умолчанию не меняется, поэтому существующие деплои не затронуты, пока
+  они не выберут opt-in.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Raise `incremental_window`** — only postpones the ceiling and grows memory
-  (≈ window × dim × 4 bytes) and candidate-gen cost linearly.
-- **Flip the flag without backfill** — the index would miss un-migrated
-  canonicals; rejected, hence the explicit backfill-then-flag order.
+- **Повысить `incremental_window`** — лишь откладывает потолок и линейно
+  наращивает память (≈ окно × dim × 4 байта) и стоимость генерации кандидатов.
+- **Переключить флаг без backfill** — индекс пропустит немигрированные каноники;
+  отклонено, отсюда явный порядок backfill-затем-флаг.
 
-## References
+## Ссылки
 
 - `src/graph/entity_resolution.py` (`use_native_vector_knn`,
   `_load_candidates_native`), `scripts/backfill_er_vector.py`,
   `src/graph/index.py` (`ensure_er_vector_index`)
-- `docs/runbook/er-native-vector-knn.md`; CONCEPTS.md → "Native-vector ER at scale"
+- `docs/runbook/er-native-vector-knn.md`; CONCEPTS.md → «Native-vector ER at scale»

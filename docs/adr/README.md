@@ -1,68 +1,71 @@
-# Architecture Decision Records
+# Records архитектурных решений (Architecture Decision Records)
 
-This directory records the **significant architectural decisions** behind
-`kb-llamaindex` — a Temporal-orchestrated RAG system over a Neo4j knowledge
-graph, Milvus chunk index, and a local Wikibase canonical anchor.
+В этом каталоге фиксируются **значимые архитектурные решения**, лежащие в
+основе `kb-llamaindex` — RAG-системы, оркестрируемой через Temporal, поверх
+графа знаний Neo4j, индекса чанков Milvus и локального канонического якоря
+Wikibase.
 
-## What an ADR is
+## Что такое ADR
 
-An Architecture Decision Record captures a single decision: the **context**
-(the forces in play), the **decision** itself, its **consequences** (what it
-commits us to, good and bad), the **alternatives** rejected, and **references**
-to the code that implements it. ADRs are immutable once Accepted — a later
-decision that overturns an earlier one gets its own record (and the old one is
-marked Superseded), so the log reads as the project's reasoning over time.
+Architecture Decision Record фиксирует одно решение: его **контекст** (силы,
+которые на него влияют), само **решение**, его **последствия** (к чему оно нас
+обязывает, как хорошее, так и плохое), отклонённые **альтернативы** и **ссылки**
+на код, который его реализует. ADR неизменяемы после принятия (Accepted) — более
+позднее решение, отменяющее раннее, получает собственную запись (а старая
+помечается как Superseded), так что журнал читается как ход рассуждений проекта
+во времени.
 
-Each ADR is grounded in the actual codebase, not aspiration. Where an ADR
-describes something still partly latent or unverified against live infra, it
-says so explicitly.
+Каждый ADR опирается на реальную кодовую базу, а не на пожелания. Там, где ADR
+описывает что-то всё ещё частично латентное или не проверенное на живой
+инфраструктуре, это указывается явно.
 
-## How an ADR relates to CONCEPTS.md
+## Как ADR соотносится с CONCEPTS.md
 
-ADRs answer **"why did we choose this?"**. `docs/CONCEPTS.md` (the educational
-companion) answers **"what is this and how does it work?"** — it is the place
-to learn entity resolution, GraphRAG communities, claim-check staging, the LLM
-pool, etc. Read CONCEPTS.md to understand a mechanism; read the matching ADR to
-understand why it was adopted over the alternatives.
+ADR отвечают на вопрос **«почему мы это выбрали?»**. `docs/CONCEPTS.md`
+(образовательный спутник) отвечает на вопрос **«что это и как оно работает?»** —
+это место, где изучают entity resolution, сообщества GraphRAG, claim-check
+staging, пул LLM и т. д. Читайте CONCEPTS.md, чтобы понять механизм; читайте
+соответствующий ADR, чтобы понять, почему он был принят вместо альтернатив.
 
-> Note: `docs/CONCEPTS.md` is the planned educational companion for these
-> records. Until it lands, the deep-dive docs it will draw on already exist:
-> `docs/ARCHITECTURE.md`, `docs/QUEUES.md`, `docs/SEARCH.md`,
-> `docs/MODELS.md`, `docs/INGEST.md`, and the `docs/runbook/` guides.
+> Примечание: `docs/CONCEPTS.md` — это планируемый образовательный спутник для
+> этих записей. Пока он не появился, уже существуют углублённые документы, на
+> которые он будет опираться: `docs/ARCHITECTURE.md`, `docs/QUEUES.md`,
+> `docs/SEARCH.md`, `docs/MODELS.md`, `docs/INGEST.md` и руководства в
+> `docs/runbook/`.
 
-## Template
+## Шаблон
 
 ```
 # ADR-NNNN: <title>
-- Status: Accepted
-- Date: YYYY-MM-DD
-## Context
-<the forces/problem — 2-5 sentences>
-## Decision
-<what we chose, specifically>
-## Consequences
-<positive + negative/tradeoffs; what this commits us to>
-## Alternatives considered
-<what we rejected and why>
-## References
-<source files + the related concept in docs/CONCEPTS.md + any runbook>
+- Статус: Принято
+- Дата: YYYY-MM-DD
+## Контекст
+<силы/проблема — 2-5 предложений>
+## Решение
+<что именно мы выбрали>
+## Последствия
+<плюсы + минусы/компромиссы; к чему это нас обязывает>
+## Рассмотренные альтернативы
+<что мы отклонили и почему>
+## Ссылки
+<исходные файлы + соответствующий концепт в docs/CONCEPTS.md + любой runbook>
 ```
 
-## Index
+## Индекс
 
-| #    | Title                                                                          | Status   |
+| #    | Заголовок                                                                      | Статус   |
 | ---- | ------------------------------------------------------------------------------ | -------- |
-| [0001](0001-temporal-durable-orchestration.md) | Temporal for durable orchestration            | Accepted |
-| [0002](0002-claim-check-staging-minio.md)       | Claim-check staging via MinIO for heavy state | Accepted |
-| [0003](0003-task-queue-isolation.md)            | Task-queue isolation to avoid head-of-line blocking | Accepted |
-| [0004](0004-per-process-llm-pool.md)            | Per-process LLMPool owns LLM concurrency        | Accepted |
-| [0005](0005-deterministic-identifier-canonicalization.md) | Deterministic identifier canonicalization before LLM extraction | Accepted |
-| [0006](0006-milvus-hnsw-default-index.md)       | Milvus HNSW as the default chunk index          | Accepted |
-| [0007](0007-entity-resolution-pipeline.md)      | Entity Resolution = candidate-gen + LLM-judge + cache + union-find | Accepted |
-| [0008](0008-native-vector-knn-er.md)            | Opt-in native-vector kNN ER over the 5000-row window | Accepted |
-| [0009](0009-hierarchical-leiden-communities.md) | Hierarchical Leiden communities + structured reports | Accepted |
-| [0010](0010-dynamic-community-selection.md)     | Dynamic community selection (lexical/semantic/descent) | Accepted |
-| [0011](0011-plan-execute-search-orchestrator.md)| Plan-execute SearchOrchestratorWorkflow         | Accepted |
-| [0012](0012-wikibase-anchor-continuous-wiki.md) | Wikibase canonical anchor + continuous wiki editor | Accepted |
-| [0013](0013-multi-model-role-tier-selection.md) | Multi-model role/tier selection + submit-time snapshots | Accepted |
-| [0014](0014-source-download-stable-endpoint.md) | Source download via stable API endpoint         | Accepted |
+| [0001](0001-temporal-durable-orchestration.md) | Temporal для надёжной оркестрации            | Принято |
+| [0002](0002-claim-check-staging-minio.md)       | Claim-check staging через MinIO для тяжёлого состояния | Принято |
+| [0003](0003-task-queue-isolation.md)            | Изоляция очередей задач во избежание head-of-line блокировки | Принято |
+| [0004](0004-per-process-llm-pool.md)            | Per-process LLMPool владеет конкурентностью LLM        | Принято |
+| [0005](0005-deterministic-identifier-canonicalization.md) | Детерминированная канонизация идентификаторов до извлечения LLM | Принято |
+| [0006](0006-milvus-hnsw-default-index.md)       | Milvus HNSW как индекс чанков по умолчанию          | Принято |
+| [0007](0007-entity-resolution-pipeline.md)      | Entity Resolution = генерация кандидатов + LLM-судья + кэш + union-find | Принято |
+| [0008](0008-native-vector-knn-er.md)            | Опциональный native-vector kNN ER поверх окна в 5000 строк | Принято |
+| [0009](0009-hierarchical-leiden-communities.md) | Иерархические сообщества Leiden + структурированные отчёты | Принято |
+| [0010](0010-dynamic-community-selection.md)     | Динамический выбор сообществ (лексический/семантический/спуск) | Принято |
+| [0011](0011-plan-execute-search-orchestrator.md)| Plan-execute SearchOrchestratorWorkflow         | Принято |
+| [0012](0012-wikibase-anchor-continuous-wiki.md) | Канонический якорь Wikibase + непрерывный wiki-редактор | Принято |
+| [0013](0013-multi-model-role-tier-selection.md) | Мультимодельный выбор role/tier + снимки на момент отправки | Принято |
+| [0014](0014-source-download-stable-endpoint.md) | Скачивание исходников через стабильный API-endpoint         | Принято |

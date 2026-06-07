@@ -1,47 +1,49 @@
-# ADR-0002: Claim-check staging via MinIO for heavy workflow state
+# ADR-0002: Claim-check staging через MinIO для тяжёлого состояния workflow
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Ingest activities produce large in-memory state — parsed LlamaIndex nodes, KG
-entity/relation lists — that the next activity needs. Temporal passes activity
-inputs/outputs through its payload converter and persists them in workflow
-history; shipping multi-megabyte blobs through history is slow and hits size
-limits.
+Activity ingest-а порождают большое состояние в памяти — распарсенные узлы
+LlamaIndex, списки сущностей/отношений KG — которое нужно следующей activity.
+Temporal прогоняет входы/выходы activity через свой конвертер payload и сохраняет
+их в истории workflow; протаскивание блобов в несколько мегабайт через историю
+медленно и упирается в ограничения размера.
 
-## Decision
+## Решение
 
-Apply the **claim-check pattern**: an activity pickles its heavy output to
-MinIO under `s3://{staging_bucket}/{workflow_run_id}/{stage}.pkl` and passes
-only the `s3://` URI to the next activity (`StagingStore.write_pickle` /
-`read_pickle`). Pickle is acceptable because producer and consumer share the
-same Python image and blobs live only for one workflow run. `finalize` and
-`mark_failed` call `delete_prefix(workflow_run_id)`; a `cleanup_orphans` sweep
-(`list_orphan_runs`, default 24h) reclaims prefixes from runs that died before
-either ran.
+Применяем **паттерн claim-check**: activity сериализует (pickle) свой тяжёлый
+вывод в MinIO по пути `s3://{staging_bucket}/{workflow_run_id}/{stage}.pkl` и
+передаёт следующей activity только URI вида `s3://`
+(`StagingStore.write_pickle` / `read_pickle`). Pickle допустим, потому что
+производитель и потребитель используют один и тот же Python-образ, а блобы живут
+лишь в течение одного прогона workflow. `finalize` и `mark_failed` вызывают
+`delete_prefix(workflow_run_id)`; проход `cleanup_orphans` (`list_orphan_runs`,
+по умолчанию 24ч) освобождает префиксы прогонов, которые умерли до выполнения
+любого из них.
 
-## Consequences
+## Последствия
 
-- Workflow history stays small (just URIs); arbitrarily large stage state is
-  supported.
-- Adds a MinIO dependency on the hot path and a cleanup obligation; orphaned
-  blobs are bounded by the age-threshold sweep, not eliminated.
-- Pickle ties the staging format to one shared image and Python version — it is
-  never read by anything outside the package.
+- История workflow остаётся небольшой (только URI); поддерживается сколь угодно
+  большое состояние этапа.
+- Добавляет зависимость от MinIO на горячем пути и обязанность по очистке;
+  осиротевшие блобы ограничены проходом по порогу возраста, но не устранены
+  полностью.
+- Pickle привязывает формат staging к одному общему образу и версии Python — его
+  никогда не читает ничего за пределами пакета.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Pass blobs through Temporal payloads directly** — exceeds payload/history
-  size limits and bloats history storage.
-- **A typed external store (Postgres/Neo4j) for intermediate state** — heavier
-  schema work for short-lived, single-run scratch data; pickle-to-object-store
-  is simpler for ephemeral blobs.
+- **Передавать блобы напрямую через payload Temporal** — превышает ограничения
+  размера payload/истории и раздувает хранилище истории.
+- **Типизированное внешнее хранилище (Postgres/Neo4j) для промежуточного
+  состояния** — более тяжёлая работа со схемой ради короткоживущих временных
+  данных одного прогона; pickle в object-store проще для эфемерных блобов.
 
-## References
+## Ссылки
 
-- `src/workflow/staging.py`; consumers e.g.
+- `src/workflow/staging.py`; потребители, например
   `src/workflow/activities/inject_canonical.py`, `push_wikibase.py`,
   `finalize.py`; `scripts/cleanup_staging.py`
-- CONCEPTS.md → "Claim-check staging"
+- CONCEPTS.md → «Claim-check staging»

@@ -1,51 +1,54 @@
-# ADR-0009: Hierarchical Leiden communities + structured reports (GraphRAG-style global)
+# ADR-0009: Иерархические сообщества Leiden + структурированные отчёты (GraphRAG-style global)
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Local retrieval (chunk + entity neighbourhood) answers specific questions but
-cannot answer corpus-spanning "global" questions ("what are the main themes
-across all documents?"). GraphRAG's answer is to detect communities in the
-entity graph and summarise each into a report that a map-reduce global search
-can consume. Community detection over GDS Leiden and per-community
-summarization are heavy and must never touch the query hot path.
+Локальный retrieval (чанк + окрестность сущности) отвечает на конкретные вопросы,
+но не может ответить на «глобальные» вопросы, охватывающие весь корпус («каковы
+основные темы по всем документам?»). Ответ GraphRAG — детектировать сообщества в
+графе сущностей и суммировать каждое в отчёт, который может потреблять
+map-reduce глобальный поиск. Детектирование сообществ через GDS Leiden и
+суммаризация по сообществам тяжелы и никогда не должны касаться горячего пути
+запросов.
 
-## Decision
+## Решение
 
-Run an **offline** `CommunityBuildWorkflow` on the dedicated `kb-graph-build`
-queue (admin endpoint / optional schedule, never a search). `detect_hierarchy`
-projects the `__Entity__` subgraph (undirected — Leiden requires it), runs
-`gds.leiden.stream` with `includeIntermediateCommunities`, and materialises the
-full dendrogram: level 0 carries `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`
-links; finer levels are wired `(:Community {level:k-1})-[:PARENT_OF]->(...)`.
-`summarize_community_activity` produces a **structured report**
-`{title, summary, findings:[{statement, importance}]}` via the small-tier LLM,
-embeds `title+summary` into a native `report_vec`, and persists it
-idempotently. Reports are built bottom-up (level>0 reads child reports) and
-carried over unchanged when `(level, members_hash)` matches a prior build.
+Запускаем **офлайн** `CommunityBuildWorkflow` на выделенной очереди
+`kb-graph-build` (admin endpoint / опциональное расписание, никогда не поиск).
+`detect_hierarchy` проецирует подграф `__Entity__` (неориентированный — Leiden
+этого требует), запускает `gds.leiden.stream` с `includeIntermediateCommunities`
+и материализует полную дендрограмму: уровень 0 несёт связи
+`(:__Entity__)-[:IN_COMMUNITY]->(:Community)`; более тонкие уровни связаны
+`(:Community {level:k-1})-[:PARENT_OF]->(...)`. `summarize_community_activity`
+порождает **структурированный отчёт**
+`{title, summary, findings:[{statement, importance}]}` через small-tier LLM,
+эмбеддит `title+summary` в native `report_vec` и сохраняет его идемпотентно.
+Отчёты строятся снизу вверх (level>0 читает дочерние отчёты) и переносятся без
+изменений, когда `(level, members_hash)` совпадает с предыдущим построением.
 
-## Consequences
+## Последствия
 
-- Enables GraphRAG global search (ADR-0010) without burdening queries;
-  idempotent/incremental rebuilds keep summaries fresh and skip unchanged work.
-- Everything is fail-safe (a `None` store or any GDS/Cypher error → `[]`,
-  logged, never raised) so a partial rebuild degrades gracefully.
-- Commits us to a Neo4j GDS install. The exact GDS 2.x calls are **unverified
-  against a live GDS install in this sandbox** (no Neo4j/GDS available) — see
-  the module docstring / R6 report.
+- Включает глобальный поиск GraphRAG (ADR-0010) без нагрузки на запросы;
+  идемпотентные/инкрементальные перестроения держат суммаризации свежими и
+  пропускают неизменённую работу.
+- Всё fail-safe (`None`-store или любая ошибка GDS/Cypher → `[]`, логируется,
+  никогда не выбрасывается), так что частичное перестроение деградирует мягко.
+- Обязывает нас к установке Neo4j GDS. Точные вызовы GDS 2.x **не проверены на
+  живой установке GDS в этой песочнице** (нет доступного Neo4j/GDS) — см.
+  docstring модуля / отчёт R6.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **No community layer (local-only RAG)** — cannot answer global/thematic
-  questions.
-- **Compute communities on the query path** — far too slow; the offline,
-  decoupled queue is the whole point.
+- **Без слоя сообществ (только локальный RAG)** — не может отвечать на
+  глобальные/тематические вопросы.
+- **Вычислять сообщества на пути запроса** — слишком медленно; офлайн,
+  развязанная очередь — это весь смысл.
 
-## References
+## Ссылки
 
 - `src/graph/communities.py` (`detect_hierarchy`, `detect_communities`),
   `src/workflow/search/activities/community.py`,
-  `src/workflow/search/community_wf.py`; `docs/QUEUES.md` ("kb-graph-build")
-- CONCEPTS.md → "GraphRAG communities and reports"
+  `src/workflow/search/community_wf.py`; `docs/QUEUES.md` («kb-graph-build»)
+- CONCEPTS.md → «GraphRAG communities and reports»

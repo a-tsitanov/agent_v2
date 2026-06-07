@@ -1,48 +1,51 @@
-# ADR-0003: Task-queue isolation to avoid head-of-line blocking
+# ADR-0003: Изоляция очередей задач во избежание head-of-line блокировки
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Running every activity on one Temporal task queue lets one workload starve
-another. Concretely, a burst of `extract_kg` tasks filled a single FIFO queue
-and a document's `merge_and_resolve` — enqueued behind all pending extracts —
-starved (the vector half finished fast while the graph half waited out the
-extract backlog). Search sessions, the heavyweight final synthesis, and the
-offline community rebuild each have very different concurrency and tier needs.
+Запуск каждой activity в одной очереди задач Temporal позволяет одной нагрузке
+голодоморить другую. Конкретно: всплеск задач `extract_kg` заполнял единственную
+FIFO-очередь, и `merge_and_resolve` документа — поставленная в очередь позади
+всех ожидающих извлечений — голодала (векторная половина завершалась быстро,
+пока графовая ждала, когда рассосётся бэклог извлечений). Сессии поиска,
+тяжеловесный финальный синтез и офлайн-перестроение сообществ имеют очень разные
+потребности в конкурентности и tier-ах.
 
-## Decision
+## Решение
 
-Host **several Worker pools in one process, each polling its own task queue**,
-sized by `TEMPORAL_*_ACTIVITY_CONCURRENCY`:
+Размещаем **несколько пулов Worker в одном процессе, каждый опрашивает свою
+очередь задач**, размер задаётся через `TEMPORAL_*_ACTIVITY_CONCURRENCY`:
 
-- `kb-ingest` (main IO/embedding + `DocumentIngestWorkflow`),
-- `kb-ingest-llm` (`extract_kg` only),
-- `kb-ingest-merge` (`GraphBuildWorkflow` + merge/build activities),
-- `kb-search-small` (plan/retrieve/coverage/rerank/route + search workflows),
-- `kb-search-large` (`synthesize_answer` only, low cap),
-- `kb-graph-build` (offline Leiden + summarize, low cap),
-- `kb-wiki` (continuous wiki editor).
+- `kb-ingest` (основной IO/эмбеддинг + `DocumentIngestWorkflow`),
+- `kb-ingest-llm` (только `extract_kg`),
+- `kb-ingest-merge` (`GraphBuildWorkflow` + activity слияния/построения),
+- `kb-search-small` (plan/retrieve/coverage/rerank/route + workflow поиска),
+- `kb-search-large` (только `synthesize_answer`, низкий cap),
+- `kb-graph-build` (офлайн Leiden + summarize, низкий cap),
+- `kb-wiki` (непрерывный wiki-редактор).
 
-Merge inherits its child workflow's queue (no `task_queue` override) while
-`extract_kg` stays pinned, so they poll independent queues and interleave.
+Merge наследует очередь своего дочернего workflow (без переопределения
+`task_queue`), тогда как `extract_kg` остаётся закреплённым, так что они опрашивают
+независимые очереди и чередуются.
 
-## Consequences
+## Последствия
 
-- A flood in one lane no longer blocks a sibling lane; ingest vs search vs
-  offline rebuild GPU budgets are tunable independently.
-- More queues to configure and restart on rename/upgrade (documented per-queue
-  in QUEUES.md). Queue caps are an **isolation** boundary, not the real GPU
-  ceiling — that is the LLMPool (ADR-0004), and the caps must be ≥ the matching
-  pool lane ceiling so the pool binds first.
+- Поток в одной полосе больше не блокирует соседнюю; GPU-бюджеты ingest vs поиск
+  vs офлайн-перестроение настраиваются независимо.
+- Больше очередей для конфигурирования и перезапуска при переименовании/апгрейде
+  (задокументировано по каждой очереди в QUEUES.md). Cap-ы очередей — это граница
+  **изоляции**, а не реальный потолок GPU — им является LLMPool (ADR-0004), и
+  cap-ы должны быть ≥ потолка соответствующей полосы пула, чтобы пул связывал
+  первым.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Single task queue** — simplest, but suffers head-of-line blocking between
-  extract and merge and offers no per-workload concurrency control.
+- **Единая очередь задач** — проще всего, но страдает от head-of-line блокировки
+  между extract и merge и не даёт контроля конкурентности на уровне нагрузки.
 
-## References
+## Ссылки
 
 - `src/workflow/worker.py`, `docs/QUEUES.md`, `src/config.py` (`TemporalSettings`)
-- CONCEPTS.md → "Task-queue isolation"
+- CONCEPTS.md → «Task-queue isolation»

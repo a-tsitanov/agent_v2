@@ -1,51 +1,53 @@
-# ADR-0010: Dynamic community selection (lexical / semantic / descent, fail-open)
+# ADR-0010: Динамический выбор сообществ (лексический / семантический / спуск, fail-open)
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Global search map-reduces over community reports (ADR-0009). Mapping over
-**every** community wastes small-tier LLM calls on irrelevant ones, but a fixed
-"largest-first" cut ignores query relevance. We want to spend the map budget on
-the communities most relevant to the question, and we cannot let a missing
-vector index or embed failure break search.
+Глобальный поиск делает map-reduce по отчётам сообществ (ADR-0009). Маппинг по
+**каждому** сообществу тратит вызовы small-tier LLM на нерелевантные, но
+фиксированный срез «крупнейшие-первыми» игнорирует релевантность запросу. Мы
+хотим тратить бюджет map на сообщества, наиболее релевантные вопросу, и не можем
+позволить отсутствующему векторному индексу или сбою эмбеддинга сломать поиск.
 
-## Decision
+## Решение
 
-`map_communities` selects which summaries to map over via a strategy switch:
-- **lexical** — read stored summaries, rank by query word-overlap (deterministic,
-  LLM-free); the default and the universal fallback;
-- **semantic** — kNN over the native `report_vec` index (`community_report_vec`);
-- **descent** — GraphRAG dynamic selection: start at the coarsest level and
-  greedily descend `PARENT_OF` toward the finest query-relevant communities
-  (cosine of query vs `report_vec`), capped at a budget.
+`map_communities` выбирает, по каким суммаризациям делать маппинг, через
+переключатель стратегий:
+- **lexical** — читает сохранённые суммаризации, ранжирует по перекрытию слов
+  запроса (детерминированно, без LLM); значение по умолчанию и универсальный
+  резерв;
+- **semantic** — kNN по native-индексу `report_vec` (`community_report_vec`);
+- **descent** — динамический выбор GraphRAG: начать с самого грубого уровня и
+  жадно спускаться по `PARENT_OF` к самым тонким релевантным запросу сообществам
+  (косинус запроса vs `report_vec`), ограниченный бюджетом.
 
-Both vector strategies **fall open to lexical** on an empty result or any
-error. Each mapped community gets a small-tier partial answer
-(`map_community_partial`) that self-reports `НЕТ` (score 0) when off-topic so
-REDUCE drops it; REDUCE reuses the large-tier `synthesize_answer` (ADR-0011's R5
-pattern).
+Обе векторные стратегии **fail-open к lexical** при пустом результате или любой
+ошибке. Каждое сматченное сообщество получает small-tier частичный ответ
+(`map_community_partial`), который сам сообщает `НЕТ` (оценка 0), когда не по
+теме, так что REDUCE его отбрасывает; REDUCE переиспользует large-tier
+`synthesize_answer` (паттерн R5 из ADR-0011).
 
-## Consequences
+## Последствия
 
-- The map budget concentrates on relevant communities; descent gives
-  coarse→fine pruning at hierarchy scale.
-- Robust: missing index / embed failure silently degrades to lexical, never
-  failing the search. Off-topic communities are filtered at map time, before
-  the expensive reduce.
-- Commits us to keeping `report_vec` and its index in sync for the vector
-  strategies to add value.
+- Бюджет map концентрируется на релевантных сообществах; спуск даёт обрезку
+  грубое→тонкое на масштабе иерархии.
+- Устойчиво: отсутствующий индекс / сбой эмбеддинга молча деградирует до lexical,
+  никогда не проваливая поиск. Не по теме сообщества фильтруются на этапе map, до
+  дорогого reduce.
+- Обязывает нас держать `report_vec` и его индекс синхронными, чтобы векторные
+  стратегии давали пользу.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Map over all communities** — wasteful and noisy at scale.
-- **Static largest-first cut** — ignores query relevance; the lexical/semantic/
-  descent strategies all rank by the query instead.
+- **Маппить по всем сообществам** — расточительно и шумно на масштабе.
+- **Статический срез крупнейшие-первыми** — игнорирует релевантность запросу;
+  стратегии lexical/semantic/descent все ранжируют по запросу взамен.
 
-## References
+## Ссылки
 
 - `src/workflow/search/activities/global_search.py` (`map_communities`,
   `select_communities_semantic`, `select_communities_descent`,
   `rank_summaries`), `src/workflow/search/global_wf.py`
-- `docs/SEARCH.md`; CONCEPTS.md → "Dynamic community selection"
+- `docs/SEARCH.md`; CONCEPTS.md → «Dynamic community selection»

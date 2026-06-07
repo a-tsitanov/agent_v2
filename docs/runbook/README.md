@@ -1,6 +1,6 @@
-# Runbook index
+# Индекс runbook'ов
 
-Operator-facing руководства по эксплуатации kb-llamaindex.  Каждый файл самодостаточен — читать линейно.
+Руководства по эксплуатации kb-llamaindex для операторов. Каждый файл самодостаточен — читать линейно.
 
 ## Runbook'и
 
@@ -18,16 +18,16 @@ Operator-facing руководства по эксплуатации kb-llamaind
 
 | Файл | Что |
 |---|---|
-| [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | Top-level data flow + storage components + layer responsibilities |
-| [`../MODELS.md`](../MODELS.md) | Model selection guidance, capability flags, escalation path |
-| [`../DEPLOYMENT.md`](../DEPLOYMENT.md) | Deploy-сценарии |
-| [`../SEARCH.md`](../SEARCH.md) | Search-подсистема: архитектура R7b (`/search/{local,global,drift,auto}`), workflows, очереди |
+| [`../ARCHITECTURE.md`](../ARCHITECTURE.md) | Верхнеуровневый data flow + компоненты хранения + ответственность слоёв |
+| [`../MODELS.md`](../MODELS.md) | Рекомендации по выбору моделей, флаги возможностей, путь эскалации |
+| [`../DEPLOYMENT.md`](../DEPLOYMENT.md) | Сценарии деплоя |
+| [`../SEARCH.md`](../SEARCH.md) | Подсистема поиска: архитектура R7b (`/search/{local,global,drift,auto}`), workflows, очереди |
 | [`../diagrams/system_architecture.svg`](../diagrams/system_architecture.svg) / [`../diagrams/system_architecture.d2`](../diagrams/system_architecture.d2) | Визуальная карта системы (рендер + D2-источник) |
 
-## Плэны и specs
+## Планы и спеки
 
 `docs/superpowers/plans/` — припаркованные/закрытые планы спринтов.
-`docs/superpowers/specs/` — design specs.
+`docs/superpowers/specs/` — design-спеки.
 
 ## Что обновляется когда
 
@@ -36,13 +36,13 @@ Operator-facing руководства по эксплуатации kb-llamaind
 - Меняешь модели / роли → `MODELS.md`
 - Меняешь Grafana JSON → секция в `analytics.md` обновляется
 
-## Recently shipped (хронологически)
+## Недавно выпущенное (хронологически)
 
-| Sprint | Что добавилось | Runbook |
+| Спринт | Что добавилось | Runbook |
 |---|---|---|
-| `feature/wiki-editor` | Per-entity MediaWiki articles from the graph (dirty-mark + Schedule sweep, bot-section rewrite, anti-drift) | [`wiki-editor.md`](wiki-editor.md) |
-| `feature/wikibase-population` | Wikibase push activity, base classes, identifier folding | [`wikibase.md`](wikibase.md) |
+| `feature/wiki-editor` | MediaWiki-статьи на сущность из графа (dirty-mark + Schedule sweep, переписывание бот-секции, анти-дрейф) | [`wiki-editor.md`](wiki-editor.md) |
+| `feature/wikibase-population` | Активность push в Wikibase, базовые классы, сворачивание идентификаторов | [`wikibase.md`](wikibase.md) |
 | `feature/analytics-grafana` | Prometheus + Grafana + `ingest_metrics` + version_tag | [`analytics.md`](analytics.md) |
-| `feature/multimodel-and-child` | Per-role LLM (extraction/judge/search) + `GraphBuildWorkflow` child + per-activity model + LiteLLM model validator | [`multimodel.md`](multimodel.md) |
-| `R7b cutover` | Legacy ReAct `/search`,`/agent`,`/selfrag` + `SearchWorkflow` УДАЛЕНЫ. Единственная поверхность — `/search/{local,global,drift,auto}` (plan-execute + GraphRAG global/drift/auto) | [`search-usage.md`](search-usage.md) · [`../SEARCH.md`](../SEARCH.md) |
-| `feature/search-mcp` | Search → Temporal `SearchWorkflow` (`kb-search-llm` queue, configurable cap). `atomic_tools.py` (7 pure functions) + `BoundedLLM` (process-wide GPU semaphore). Два MCP-сервера: MCP-1 `kb_search` через workflow + progress streaming, MCP-2 atomic tools прямо in-process | [`mcp.md`](mcp.md) |
+| `feature/multimodel-and-child` | Per-role LLM (extraction/judge/search) + child `GraphBuildWorkflow` + model по активностям + валидатор моделей LiteLLM | [`multimodel.md`](multimodel.md) |
+| `R7b cutover` | Легаси ReAct `/search`,`/agent`,`/selfrag` + `SearchWorkflow` УДАЛЕНЫ. Единственная поверхность — `/search/{local,global,drift,auto}` (plan-execute + GraphRAG global/drift/auto) | [`search-usage.md`](search-usage.md) · [`../SEARCH.md`](../SEARCH.md) |
+| `feature/search-mcp` | Search → Temporal `SearchWorkflow` (очередь `kb-search-llm`, настраиваемый cap). `atomic_tools.py` (7 чистых функций) + `BoundedLLM` (общепроцессный GPU-семафор). Два MCP-сервера: MCP-1 `kb_search` через workflow + стриминг прогресса, MCP-2 atomic-tools прямо in-process | [`mcp.md`](mcp.md) |

@@ -1,46 +1,53 @@
-# ADR-0001: Temporal for durable orchestration
+# ADR-0001: Temporal для надёжной оркестрации
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Document ingestion is a long, multi-stage pipeline (fetch → parse/chunk →
-inject canonicals → vector index → extract KG → merge/resolve → build property
-graph → push Wikibase → finalize), and search is a multi-step plan-execute
-flow. These stages are LLM- and IO-bound, fail transiently, and must survive
-worker restarts without losing or double-processing work. The project
-originally drove ingest through taskiq on RabbitMQ.
+Загрузка документов (ingestion) — это длинный многоэтапный конвейер (получение →
+парсинг/чанкинг → внедрение каноников → векторная индексация → извлечение KG →
+слияние/резолвинг → построение property graph → push в Wikibase → финализация),
+а поиск — это многошаговый поток plan-execute. Эти этапы ограничены LLM и IO,
+дают транзиентные сбои и должны переживать перезапуски воркеров, не теряя и не
+обрабатывая работу дважды. Изначально проект гонял ingest через taskiq поверх
+RabbitMQ.
 
-## Decision
+## Решение
 
-Orchestrate both ingest and search with **Temporal**. `/ingest` starts a
-`DocumentIngestWorkflow` directly (no broker); each stage is a Temporal
-activity with explicit retry profiles (`_FAST_FOREVER` for IO/embedding,
-`_HEAVY_FOREVER` for LLM-bound), `schedule_to_close_timeout` as the wall-clock
-budget, and structured heartbeats. The graph half is best-effort
-(`graph_status='vector_only'` on exhaustion); the vector half failing triggers
-`mark_failed` and fails the workflow. taskiq and RabbitMQ were removed.
+Оркеструем и ingest, и поиск через **Temporal**. `/ingest` запускает
+`DocumentIngestWorkflow` напрямую (без брокера); каждый этап — это Temporal
+activity с явными профилями ретраев (`_FAST_FOREVER` для IO/эмбеддинга,
+`_HEAVY_FOREVER` для LLM-нагрузок), `schedule_to_close_timeout` как бюджет по
+настенным часам и структурированными heartbeat-ами. Графовая половина выполняется
+best-effort (`graph_status='vector_only'` при исчерпании); сбой векторной
+половины вызывает `mark_failed` и проваливает workflow. taskiq и RabbitMQ были
+удалены.
 
-## Consequences
+## Последствия
 
-- Durable, resumable execution: a worker crash mid-stage resumes from the last
-  completed activity; retries and timeouts are declarative, not hand-rolled.
-- Visibility (workflow histories) is reused for `ingest_metrics` (see ADR-0013).
-- Commits us to running a Temporal cluster + worker process and to writing
-  workflow code under determinism constraints (`workflow.unsafe.imports_passed_through`).
-- Permanent input errors must be raised as `ApplicationError(non_retryable=True)`
-  or they loop for the full retry budget.
+- Надёжное, возобновляемое выполнение: падение воркера посреди этапа
+  возобновляется с последней завершённой activity; ретраи и таймауты
+  декларативны, а не написаны вручную.
+- Видимость (истории workflow) переиспользуется для `ingest_metrics` (см.
+  ADR-0013).
+- Обязывает нас запускать кластер Temporal + процесс воркера и писать код
+  workflow под ограничениями детерминизма
+  (`workflow.unsafe.imports_passed_through`).
+- Постоянные ошибки входных данных должны выбрасываться как
+  `ApplicationError(non_retryable=True)`, иначе они зацикливаются на весь бюджет
+  ретраев.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **taskiq + RabbitMQ** (the prior design): a message broker gives queueing but
-  not durable workflow state, built-in retries/timeouts, or history-based
-  observability; orchestration logic had to live in application code. Removed.
+- **taskiq + RabbitMQ** (прежний дизайн): брокер сообщений даёт очереди, но не
+  даёт надёжного состояния workflow, встроенных ретраев/таймаутов или
+  наблюдаемости на основе истории; логика оркестрации вынужденно жила в коде
+  приложения. Удалено.
 
-## References
+## Ссылки
 
 - `src/workflow/document_ingest.py`, `src/workflow/worker.py`,
   `src/workflow/client.py`, `src/api/routes/ingest.py`
-- Commit `6ea90b5` ("remove taskiq + RabbitMQ now that ingest runs on Temporal")
-- `docs/ARCHITECTURE.md`; CONCEPTS.md → "Durable orchestration with Temporal"
+- Коммит `6ea90b5` («remove taskiq + RabbitMQ now that ingest runs on Temporal»)
+- `docs/ARCHITECTURE.md`; CONCEPTS.md → «Durable orchestration with Temporal»

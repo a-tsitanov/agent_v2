@@ -1,46 +1,47 @@
-# ADR-0004: Per-process LLMPool (tier + role lanes) owns LLM concurrency
+# ADR-0004: Per-process LLMPool (полосы tier + role) владеет конкурентностью LLM
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-The true scarce resource is upstream LLM capacity (local GPU for the small
-tier, OpenAI budget for the large tier), shared across ingest AND search in the
-same process. Temporal per-queue caps isolate workloads but cannot arbitrate a
-global GPU budget, and the earlier scattered `BoundedLLM` instances each held
-their own ad-hoc semaphore with no shared ceiling.
+Настоящий дефицитный ресурс — это вышестоящая ёмкость LLM (локальный GPU для
+small-tier, бюджет OpenAI для large-tier), разделяемая между ingest И поиском в
+одном процессе. Per-queue cap-ы Temporal изолируют нагрузки, но не могут
+арбитрировать глобальный GPU-бюджет, а прежние разрозненные экземпляры
+`BoundedLLM` каждый держал свой ad-hoc семафор без общего потолка.
 
-## Decision
+## Решение
 
-Introduce a **per-process `LLMPool`** (process singleton) that owns all LLM
-gating. It holds a per-tier global semaphore (`small`, `large`) plus a per-role
-**lane** ceiling. Each role resolves to one wrapped `BoundedLLM`; a call
-acquires its lane first, then the tier-global (consistent order → no deadlock).
-Small-tier lanes deliberately over-subscribe the tier total (sum of ceilings >
-tier total) so one role can fill the GPU while none monopolizes it, and a
-`judge_floor` reserves capacity so merge/judge never starves under an extraction
-flood. This supersedes a single global cap and the scattered bounded LLMs.
+Вводим **per-process `LLMPool`** (синглтон процесса), который владеет всем
+гейтингом LLM. Он держит per-tier глобальный семафор (`small`, `large`) плюс
+потолок **полосы** на каждую роль. Каждая роль резолвится в один обёрнутый
+`BoundedLLM`; вызов сначала захватывает свою полосу, затем tier-глобальный
+(согласованный порядок → нет дедлоков). Полосы small-tier намеренно
+переподписывают суммарный tier (сумма потолков > суммы tier) так, что одна роль
+может заполнить GPU, при этом ни одна не монополизирует его, а `judge_floor`
+резервирует ёмкость, чтобы merge/judge никогда не голодали под наплывом
+извлечения. Это вытесняет единый глобальный cap и разрозненные bounded LLM.
 
-## Consequences
+## Последствия
 
-- One place arbitrates GPU/upstream concurrency for the whole process; roles
-  interleave dynamically and the GPU stays utilized.
-- Temporal queue caps (ADR-0003) must be ≥ the matching pool lane ceiling or
-  Temporal throttles before the pool can arbitrate — this is why `kb-ingest-llm`
-  / `kb-ingest-merge` were raised to 18/14.
-- It is a **per-process** control, not distributed: the cross-process ceiling
-  still belongs at the LiteLLM proxy (out of scope here).
+- Одно место арбитрирует конкурентность GPU/вышестоящих ресурсов для всего
+  процесса; роли чередуются динамически, и GPU остаётся загруженным.
+- Cap-ы очередей Temporal (ADR-0003) должны быть ≥ потолка соответствующей полосы
+  пула, иначе Temporal троттлит раньше, чем пул успеет арбитрировать — поэтому
+  `kb-ingest-llm` / `kb-ingest-merge` были подняты до 18/14.
+- Это **per-process** контроль, не распределённый: межпроцессный потолок
+  по-прежнему относится к прокси LiteLLM (вне области данного решения).
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **A single global semaphore / one cap** — cannot express per-role floors or
-  let one role fill spare capacity; coarse and prone to starvation.
-- **Per-call-site `BoundedLLM` instances** — no shared ceiling; the real GPU
-  limit was unenforced. Collapsed into one gate per role.
+- **Единый глобальный семафор / один cap** — не может выразить per-role полы или
+  позволить одной роли заполнить свободную ёмкость; грубо и склонно к голоданию.
+- **Экземпляры `BoundedLLM` на каждую точку вызова** — нет общего потолка;
+  реальный лимит GPU не обеспечивался. Свёрнуто в один гейт на роль.
 
-## References
+## Ссылки
 
 - `src/retrieval/llm_pool.py`, `src/retrieval/llm_semaphore.py`,
-  `src/config.py` (`LLMPoolSettings`); `docs/QUEUES.md` ("Queue caps vs the LLMPool")
-- CONCEPTS.md → "The LLM pool: tiers and lanes"
+  `src/config.py` (`LLMPoolSettings`); `docs/QUEUES.md` («Queue caps vs the LLMPool»)
+- CONCEPTS.md → «The LLM pool: tiers and lanes»

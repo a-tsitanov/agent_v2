@@ -1,9 +1,9 @@
-# Multimodel · GraphBuildWorkflow runbook
+# Multimodel · GraphBuildWorkflow — runbook
 
 Самодостаточный гид по фиче, которая шипалась в спринте `feature/multimodel-and-child` (7 коммитов поверх analytics). Содержит ссылки на конкретные файлы/строки и code-выдержки — читать линейно сверху вниз.
 
-> **Если ты пришёл за «куда смотреть когда сломалось»** — иди в [§ 11. Troubleshooting](#11-troubleshooting).
-> **Если хочешь смокнуть end-to-end** — [§ 9. Smoke verification](#9-smoke-verification).
+> **Если ты пришёл за «куда смотреть когда сломалось»** — иди в [§ 11. Траблшутинг](#11-траблшутинг).
+> **Если хочешь смокнуть end-to-end** — [§ 9. Smoke-верификация](#9-smoke-верификация).
 
 ---
 
@@ -17,22 +17,22 @@
 >    *model* env-vars больше нет. Ролей теперь **семь** (extraction,
 >    judge, search, route, plan, retrieve, synthesis). См.
 >    [`../MODELS.md`](../MODELS.md).
-> 2. **Concurrency LLM-вызовов теперь принадлежит `LLMPool`**
+> 2. **Конкурентность LLM-вызовов теперь принадлежит `LLMPool`**
 >    (per-process, `src/retrieval/llm_pool.py`): tier-ceiling +
 >    per-role lane. Temporal queue-caps теперь только isolation. См.
->    [§ 3.5](#35-llmpool--concurrency-owner). Старый
+>    [§ 3.5](#35-llmpool--владелец-конкурентности). Старый
 >    `AGENT_LLM_MAX_CONCURRENT` — мёртв.
 >
 > Механика **snapshot-at-submit → per-row `ingest_metrics.model`**
 > (ради чего спринт делался) — без изменений, всё ниже в §6–§7 верно.
 
-## 1. Overview — что изменилось
+## 1. Обзор — что изменилось
 
 До спринта проект использовал **одну глобальную LLM** для всех LLM-вызовов: extract_kg, ER-judge, агент, Self-RAG synth, переводчик. Multimodel ввёл независимые роли, у каждой своя модель. **Сегодня** роль выбирает не модель напрямую, а **tier** (`small`/`large`), и tier указывает на одну из двух физических моделей (`LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE`). Дефолт: всё `small`, кроме `synthesis` → `large`.
 
 Параллельно вынесли тяжёлую graph-часть workflow (`merge_and_resolve` + `build_property_graph`) в отдельный **child Temporal workflow** `GraphBuildWorkflow`. Это дало три практических профита, описанных в [§ 4](#4-graphbuildworkflow--зачем-child-workflow).
 
-Совокупно эти две вещи делают возможным то, ради чего user пришёл: **per-activity model в `ingest_metrics`** (Postgres-таблица из analytics-спринта) — теперь каждая строка таблицы знает, какая модель **реально использовалась** для именно этой активности. См. [§ 7](#7-ingest_metrics--per-activity-model).
+Совокупно эти две вещи делают возможным то, ради чего user пришёл: **per-activity model в `ingest_metrics`** (Postgres-таблица из analytics-спринта) — теперь каждая строка таблицы знает, какая модель **реально использовалась** для именно этой активности. См. [§ 7](#7-ingest_metrics--модель-на-активность).
 
 **Связь с другими runbook'ами:**
 - [`analytics.md`](analytics.md) — Grafana-дашборды, как читать `ingest_metrics`, version_tag-механика
@@ -41,23 +41,23 @@
 
 ---
 
-## 2. Terminology cheat-sheet
+## 2. Шпаргалка по терминологии
 
 | Термин | Что значит |
 |---|---|
 | **Role** | Назначение LLM-вызова. Семь: `extraction` / `judge` / `search` / `route` / `plan` / `retrieve` / `synthesis` (`src/config.py:LLMRole`). Не модель, а *роль*. |
 | **Tier** | Физический «слот»: `small` (GPU/local, high-volume) или `large` (synthesis). Роль → tier → одна из двух моделей (`LITELLM_MODEL_SMALL/LARGE`). |
 | **Pool accessor** | `get_llm_pool().get(role)` (`src/retrieval/llm_pool.py`) — возвращает ОДИН shared, concurrency-gated `BoundedLLM` на роль. Заменил прямые `build_*_llm()` фабрики на call-site'ах. |
-| **LLMPool** | Per-process owner LLM-concurrency: tier-ceiling + per-role lane, lane-first → tier-global. См. [§ 3.5](#35-llmpool--concurrency-owner). |
+| **LLMPool** | Пер-процессный владелец LLM-конкурентности: tier-ceiling + per-role lane, lane-first → tier-global. См. [§ 3.5](#35-llmpool--владелец-конкурентности). |
 | **Parent workflow** | `DocumentIngestWorkflow` — основной flow, запускается с `POST /api/v1/ingest`. ID-формат: `ingest-{doc_id}`. |
 | **Child workflow** | `GraphBuildWorkflow` — содержит `merge_and_resolve` + `build_property_graph`. ID-формат: `graph-{doc_id}`. |
-| **vector_only fallback** | Когда graph-часть упала (LLM down, ER timeout) — parent ловит ошибку, помечает `graph_status="vector_only"`, документ остаётся доступен для vector-поиска, KG не строится. |
+| **vector_only fallback** | Когда graph-часть упала (LLM лежит, ER timeout) — parent ловит ошибку, помечает `graph_status="vector_only"`, документ остаётся доступен для vector-поиска, KG не строится. |
 | **Snapshot моделей** | API в момент `/ingest` снимает резолв-результат per-role моделей (`cfg.model_for(role)`) и кладёт в `IngestParams` — смена env между ingest'ами отражается только на новых документах. |
-| **`models_per_role`** | dict `{role: model}` который extractor получает в момент finalize, чтобы заполнить `model` колонку. |
+| **`models_per_role`** | dict `{role: model}`, который extractor получает в момент finalize, чтобы заполнить колонку `model`. |
 
 ---
 
-## 3. Per-role LLM configuration
+## 3. Пер-ролевая конфигурация LLM
 
 ### 3.1 Env-переменные (две модели + tier-map)
 
@@ -77,7 +77,7 @@
 
 Полная таблица ролей и tier-карта — в [`docs/MODELS.md`](../MODELS.md#roles-and-the-role--tier-map).
 
-### 3.2 Где определено в config
+### 3.2 Где определено в конфиге
 
 [`src/config.py`](../../src/config.py), `LiteLLMSettings`:
 
@@ -97,13 +97,13 @@ def model_for(self, role: LLMRole) -> str:
 
 `LLMRole` (`src/config.py`): `Literal["extraction","judge","search","route","plan","retrieve","synthesis"]`. Дефолтная tier-карта `_DEFAULT_ROLE_TIERS` — всё `small`, кроме `synthesis: large`.
 
-### 3.3 Factory + pool
+### 3.3 Фабрика + пул
 
 [`src/retrieval/llm.py`](../../src/retrieval/llm.py) держит `build_llm(role)` и тонкие фабрики (`build_extraction_llm` / `build_judge_llm` / `build_search_llm` / `build_synthesis_llm`). Но **production call-site'ы их напрямую не зовут** — они идут через `get_llm_pool().get(role)` (`src/retrieval/llm_pool.py`), который под капотом один раз делает `build_llm(role)` и оборачивает в gated `BoundedLLM`. `build_llm()` без аргумента сохранён только для diag-скриптов.
 
-### 3.4 Какой callsite на какую роль маппится
+### 3.4 Какой call-site на какую роль маппится
 
-| Файл | Вызов | Role |
+| Файл | Вызов | Роль |
 |---|---|---|
 | [`src/workflow/activities/extract_kg.py:92`](../../src/workflow/activities/extract_kg.py) | `get_llm_pool().get("extraction")` | extraction |
 | [`src/workflow/activities/parse_and_chunk.py:40`](../../src/workflow/activities/parse_and_chunk.py) | `get_llm_pool().get("extraction")` | extraction |
@@ -116,7 +116,7 @@ def model_for(self, role: LLMRole) -> str:
 | [`src/workflow/_search_deps.py:151`](../../src/workflow/_search_deps.py) | `get_llm_pool().get("synthesis")` | synthesis |
 | [`src/workflow/wiki/wiki_sweep.py:63`](../../src/workflow/wiki/wiki_sweep.py) | `get_llm_pool().get("synthesis")` | synthesis |
 
-### 3.5 LLMPool — concurrency owner
+### 3.5 LLMPool — владелец конкурентности
 
 `LLMPool` (`src/retrieval/llm_pool.py`, один на процесс, `get_llm_pool()`) — **новый единственный владелец** LLM-concurrency. Два уровня гейтов, acquired **lane-first → tier-global**:
 
@@ -172,11 +172,11 @@ DocumentIngestWorkflow (parent, queue=kb-ingest)
 
 ### 4.2 Три практических профита
 
-**(1) Независимый retry/timeout.** Stuck merge_and_resolve не валит весь ingest. Retry-policy задана на уровне child workflow, не parent'а.
+**(1) Независимый retry/timeout.** Зависший merge_and_resolve не валит весь ingest. Retry-policy задана на уровне child workflow, а не parent'а.
 
-**(2) Раздельная visibility в Temporal UI.** В `http://localhost:8080`:
-- `ingest-{doc_id}` — parent, видна vector-половина (fetch/parse/index/inject/extract) проходящая за секунды
-- `graph-{doc_id}` — child рядом, своя timeline где каждый ER-judge LLM-call виден отдельно с его длительностью
+**(2) Раздельная видимость в Temporal UI.** В `http://localhost:8080`:
+- `ingest-{doc_id}` — parent, видна vector-половина (fetch/parse/index/inject/extract), проходящая за секунды
+- `graph-{doc_id}` — child рядом, своя timeline, где каждый ER-judge LLM-вызов виден отдельно с его длительностью
 
 **(3) Чистый vector_only fallback.** Parent ловит `ChildWorkflowError` (а не только `ActivityError`) → автоматически downgrade'ит `graph_status="vector_only"` → продолжает ingest.
 
@@ -206,7 +206,7 @@ merged = gb_result.merged
 built = gb_result.built
 ```
 
-И сразу под этим — except, который покрывает обе ошибки ([line 190](../../src/workflow/document_ingest.py)):
+И сразу под этим — except, который покрывает обе ошибки ([строка 190](../../src/workflow/document_ingest.py)):
 
 ```python
 except (ActivityError, ChildWorkflowError) as exc:
@@ -246,7 +246,7 @@ class GraphBuildWorkflow:
         return GraphBuildResult(merged=merged, built=built)
 ```
 
-Возвращает `GraphBuildResult` — composition `Merged + GraphBuilt`. См. [`src/workflow/contracts.py:118-128`](../../src/workflow/contracts.py).
+Возвращает `GraphBuildResult` — композицию `Merged + GraphBuilt`. См. [`src/workflow/contracts.py:118-128`](../../src/workflow/contracts.py).
 
 ### 4.5 Регистрация worker'а
 
@@ -273,54 +273,54 @@ llm_worker = Worker(
 )
 ```
 
-`build_property_graph` зарегистрирован в обоих пулах (см. [`src/workflow/activities/__init__.py`](../../src/workflow/activities/__init__.py)) чтобы child мог её клеймить локально без cross-queue dispatch.
+`build_property_graph` зарегистрирован в обоих пулах (см. [`src/workflow/activities/__init__.py`](../../src/workflow/activities/__init__.py)), чтобы child мог её клеймить локально без cross-queue dispatch.
 
 > **Обновлено:** комментарий «GPU-cap (concurrency=1)» в сниппете
 > отражает старое состояние. Сейчас `llm_activity_concurrency=18`
 > (и merge вынесен на свою очередь `kb-ingest-merge`,
 > `merge_activity_concurrency=14`). Эти Temporal-капы больше **не**
-> сериализуют GPU — реальную concurrency держит LLMPool (tier+lane,
-> [§ 3.5](#35-llmpool--concurrency-owner)); Temporal-капы лишь
+> сериализуют GPU — реальную конкурентность держит LLMPool (tier+lane,
+> [§ 3.5](#35-llmpool--владелец-конкурентности)); Temporal-капы лишь
 > isolation и выставлены ≥ соответствующих lane-cap, чтобы pool
 > связывал первым.
 
 ---
 
-## 5. Code map — где что лежит
+## 5. Карта кода — где что лежит
 
 ### 5.1 Новые файлы (этот спринт)
 
 | Файл | Что |
 |---|---|
 | [`src/workflow/graph_build.py`](../../src/workflow/graph_build.py) | Определение `GraphBuildWorkflow` |
-| [`src/observability/role_map.py`](../../src/observability/role_map.py) | `ACTIVITY_TO_ROLE` static map |
-| [`tests/test_workflow/test_graph_build_workflow.py`](../../tests/test_workflow/test_graph_build_workflow.py) | Child workflow integration test |
-| [`tests/test_retrieval/test_llm_factory.py`](../../tests/test_retrieval/test_llm_factory.py) | 3 wrapper + legacy fallback tests |
+| [`src/observability/role_map.py`](../../src/observability/role_map.py) | Статическая карта `ACTIVITY_TO_ROLE` |
+| [`tests/test_workflow/test_graph_build_workflow.py`](../../tests/test_workflow/test_graph_build_workflow.py) | Интеграционный тест child workflow |
+| [`tests/test_retrieval/test_llm_factory.py`](../../tests/test_retrieval/test_llm_factory.py) | 3 wrapper'а + тесты legacy-fallback |
 
 ### 5.2 Изменённые файлы
 
 | Файл | Что изменилось |
 |---|---|
-| [`src/config.py`](../../src/config.py) | `LLMRole` literal, `LiteLLMSettings.{extraction,judge,search}_model` + `model_for(role)` |
+| [`src/config.py`](../../src/config.py) | литерал `LLMRole`, `LiteLLMSettings.{extraction,judge,search}_model` + `model_for(role)` |
 | [`src/retrieval/llm.py`](../../src/retrieval/llm.py) | Полностью переписан: `build_llm(role)` + 3 wrapper'а |
 | [`src/workflow/contracts.py`](../../src/workflow/contracts.py) | `IngestParams` + `FinalizeIn` пополнены `extraction_model/judge_model/search_model`; новый `GraphBuildResult` |
 | [`src/workflow/document_ingest.py`](../../src/workflow/document_ingest.py) | Inline `merge_and_resolve + build_property_graph` → `execute_child_workflow`; `except (ActivityError, ChildWorkflowError)` |
 | [`src/workflow/worker.py`](../../src/workflow/worker.py) | `llm_worker` теперь хостит `GraphBuildWorkflow` |
 | [`src/workflow/activities/__init__.py`](../../src/workflow/activities/__init__.py) | `build_property_graph` зарегистрирована в обоих пулах |
-| [`src/workflow/activities/{extract_kg,parse_and_chunk,merge_and_resolve}.py`](../../src/workflow/activities/) | Переключены на role-specific factories |
-| [`src/workflow/activities/finalize.py`](../../src/workflow/activities/finalize.py) | `_persist_ingest_metrics` теперь fetch'ит parent + child history |
+| [`src/workflow/activities/{extract_kg,parse_and_chunk,merge_and_resolve}.py`](../../src/workflow/activities/) | Переключены на role-specific фабрики |
+| [`src/workflow/activities/finalize.py`](../../src/workflow/activities/finalize.py) | `_persist_ingest_metrics` теперь fetch'ит историю parent + child |
 | [`src/api/routes/ingest.py`](../../src/api/routes/ingest.py) | Snapshot per-role моделей + 3 новых Search Attributes |
-| [`src/observability/ingest_metrics_extractor.py`](../../src/observability/ingest_metrics_extractor.py) | `models_per_role` kwarg + role-map lookup |
-| [`scripts/setup_db.py`](../../scripts/setup_db.py) | Регистрация `ExtractionModel/JudgeModel/SearchModel` Search Attributes |
-| [`infra/grafana/dashboards/02-version-compare.json`](../../infra/grafana/dashboards/02-version-compare.json) | `model_A/model_B` колонки + "Per-stage model usage" panel |
+| [`src/observability/ingest_metrics_extractor.py`](../../src/observability/ingest_metrics_extractor.py) | kwarg `models_per_role` + lookup по role-map |
+| [`scripts/setup_db.py`](../../scripts/setup_db.py) | Регистрация Search Attributes `ExtractionModel/JudgeModel/SearchModel` |
+| [`infra/grafana/dashboards/02-version-compare.json`](../../infra/grafana/dashboards/02-version-compare.json) | колонки `model_A/model_B` + панель "Per-stage model usage" |
 
 ---
 
 ## 6. Walkthrough: что происходит на POST /ingest
 
-Step-by-step с указанием файлов:
+Пошагово, с указанием файлов:
 
-### Step 1: HTTP-приём в API
+### Шаг 1: HTTP-приём в API
 
 [`src/api/routes/ingest.py:58-180`](../../src/api/routes/ingest.py) — `upload_document`:
 
@@ -339,26 +339,26 @@ Step-by-step с указанием файлов:
 6. `start_workflow(DocumentIngestWorkflow.run, IngestParams(..., extraction_model, judge_model, search_model, version_tag, env), search_attributes={"VersionTag", "ExtractionModel", "JudgeModel", "SearchModel", "Env"})`
 7. Возвращает `202 + {"job_id": doc_id}` — клиент уходит, дальше всё async
 
-### Step 2: Parent DocumentIngestWorkflow (queue=kb-ingest)
+### Шаг 2: Parent DocumentIngestWorkflow (queue=kb-ingest)
 
 [`src/workflow/document_ingest.py`](../../src/workflow/document_ingest.py):
 
-| Stage | Что делает | LLM? |
+| Стадия | Что делает | LLM? |
 |---|---|---|
 | `fetch_source` | Скачивает файл из MinIO в локальный temp dir ([fetch_source.py](../../src/workflow/activities/fetch_source.py)) | — |
 | `parse_and_chunk` | LlamaIndex IngestionPipeline: parse + semantic chunking + опц. translator ([parse_and_chunk.py](../../src/workflow/activities/parse_and_chunk.py)) | `extraction` |
-| `index_vector` | BGE-M3 embeddings → Milvus collection ([index_vector.py](../../src/workflow/activities/index_vector.py)) | embedding only |
-| `inject_canonical` | Regex для 24 identifier-типов (ИНН, IMEI, …) ([inject_canonical.py](../../src/workflow/activities/inject_canonical.py)) | — |
-| `extract_kg` | LightRAG-style KG-извлечение (на `kb-ingest-llm` queue) ([extract_kg.py](../../src/workflow/activities/extract_kg.py)) | `extraction` |
+| `index_vector` | BGE-M3 embeddings → коллекция Milvus ([index_vector.py](../../src/workflow/activities/index_vector.py)) | только embedding |
+| `inject_canonical` | Regex для 24 типов идентификаторов (ИНН, IMEI, …) ([inject_canonical.py](../../src/workflow/activities/inject_canonical.py)) | — |
+| `extract_kg` | KG-извлечение в стиле LightRAG (на очереди `kb-ingest-llm`) ([extract_kg.py](../../src/workflow/activities/extract_kg.py)) | `extraction` |
 
-### Step 3: Child GraphBuildWorkflow (queue=kb-ingest-llm)
+### Шаг 3: Child GraphBuildWorkflow (queue=kb-ingest-llm)
 
 [§ 4.4](#44-code-выдержка-child-workflow) выше показал код. Что внутри по существу:
 
 1. **`merge_and_resolve` activity** ([merge_and_resolve.py](../../src/workflow/activities/merge_and_resolve.py)):
    - Читает `KGExtracted` (новые ноды документа) из staging-blob (MinIO)
-   - Зовёт `merge_kg_extraction` ([`src/graph/merge.py`](../../src/graph/merge.py)) — orthographic dedup внутри документа
-   - Зовёт `consolidate_phone_entities` ([`src/graph/phone_consolidation.py`](../../src/graph/phone_consolidation.py)) — E.164 нормализация
+   - Зовёт `merge_kg_extraction` ([`src/graph/merge.py`](../../src/graph/merge.py)) — орфографический dedup внутри документа
+   - Зовёт `consolidate_phone_entities` ([`src/graph/phone_consolidation.py`](../../src/graph/phone_consolidation.py)) — нормализация E.164
    - Зовёт **`resolve_entities`** ([`src/graph/entity_resolution.py`](../../src/graph/entity_resolution.py)) — это и есть **сличение новых сущностей с уже-сохранёнными в Neo4j** (см. [§ 8](#8-entity-resolution--как-новые-ноды-сличаются-с-существующими-graph-нодами))
    - Пишет результат в staging-blob, возвращает `Merged`
 
@@ -369,22 +369,22 @@ Step-by-step с указанием файлов:
 
 Child возвращает `GraphBuildResult(merged=..., built=...)` обратно в parent.
 
-### Step 4: Parent продолжает после child
+### Шаг 4: Parent продолжает после child
 
-- `push_wikibase` ([push_wikibase.py](../../src/workflow/activities/push_wikibase.py)) — только если `graph_status=="completed"` И wikibase enabled. См. [`wikibase.md`](wikibase.md).
+- `push_wikibase` ([push_wikibase.py](../../src/workflow/activities/push_wikibase.py)) — только если `graph_status=="completed"` И wikibase включён. См. [`wikibase.md`](wikibase.md).
 - **`finalize`** ([finalize.py](../../src/workflow/activities/finalize.py)):
   1. UPDATE `documents.status`
-  2. Cleanup staging-blobs из MinIO
+  2. Очистка staging-blob'ов из MinIO
   3. Rmtree локального temp dir
-  4. **`_persist_ingest_metrics(payload)`** ← см. [§ 7](#7-ingest_metrics--per-activity-model)
+  4. **`_persist_ingest_metrics(payload)`** ← см. [§ 7](#7-ingest_metrics--модель-на-активность)
 
 ---
 
-## 7. `ingest_metrics` — per-activity model
+## 7. `ingest_metrics` — модель на активность
 
 ### 7.1 Зачем
 
-`ingest_metrics` — Postgres-таблица из analytics-спринта ([`analytics.md`](analytics.md)). Одна строка на (workflow, activity, attempt) с длительностью + tag-метаданными. До multimodel'а `model` колонка была одинаковая для всех 8 строк ingest'а (snapshot `LITELLM_LLM_MODEL` на submit). Теперь — **per-row**, отражает фактически использованную модель.
+`ingest_metrics` — Postgres-таблица из analytics-спринта ([`analytics.md`](analytics.md)). Одна строка на (workflow, activity, attempt) с длительностью + tag-метаданными. До multimodel'а колонка `model` была одинаковая для всех 8 строк ingest'а (snapshot `LITELLM_LLM_MODEL` на submit). Теперь — **per-row**, отражает фактически использованную модель.
 
 ### 7.2 Маппинг activity → role → model
 
@@ -406,7 +406,7 @@ ACTIVITY_TO_ROLE: Final[dict[str, LLMRole | None]] = {
 
 `None` ⇒ `model=NULL` в Postgres — честно, никакая LLM не звалась.
 
-### 7.3 Extractor — resolve логика
+### 7.3 Extractor — логика резолвинга
 
 [`src/observability/ingest_metrics_extractor.py:91-104`](../../src/observability/ingest_metrics_extractor.py):
 
@@ -425,7 +425,7 @@ else:
     )
 ```
 
-### 7.4 Где finalize тянет ОБЕ history
+### 7.4 Где finalize тянет ОБЕ истории
 
 [`src/workflow/activities/finalize.py:88-145`](../../src/workflow/activities/finalize.py):
 
@@ -487,7 +487,7 @@ build_property_graph |                    | mm-judge-swap  |         460
 push_wikibase        |                    | mm-judge-swap  |           3
 ```
 
-Видно: extraction (`extract_kg`, `parse_and_chunk`) → small (gpt-4o-mini); judge (`merge_and_resolve`) → large (gpt-4o); всё non-LLM → NULL.
+Видно: extraction (`extract_kg`, `parse_and_chunk`) → small (gpt-4o-mini); judge (`merge_and_resolve`) → large (gpt-4o); всё, что не-LLM → NULL.
 
 ---
 
@@ -521,9 +521,9 @@ push_wikibase        |                    | mm-judge-swap  |           3
     and merged_relations, drop self-loops, re-aggregate.
 ```
 
-**Conservative ER** — LLM-judge default'ит на `DIFFERENT` при timeout / failure. False-negative (не смерджили хотя надо) лучше чем false-positive (смерджили двух разных людей → KG испорчен).
+**Консервативный ER** — LLM-judge дефолтится на `DIFFERENT` при timeout / failure. False-negative (не смёрджили, хотя надо было) лучше, чем false-positive (смёрджили двух разных людей → KG испорчен).
 
-### 8.2 Load existing canonicals — выдержка
+### 8.2 Загрузка существующих каноникалов — выдержка
 
 [`src/graph/entity_resolution.py:976-1004`](../../src/graph/entity_resolution.py):
 
@@ -558,7 +558,7 @@ async def _load_existing_canonicals(
     ...
 ```
 
-Загружает до 5000 канонических сущностей с embedding'ами из Neo4j. Дальше в `resolve_entities` они кладутся в одну корзину с новыми и идут через embedding cosine + LLM-judge pipeline.
+Загружает до 5000 канонических сущностей с embedding'ами из Neo4j. Дальше в `resolve_entities` они кладутся в одну корзину с новыми и идут через pipeline embedding-cosine + LLM-judge.
 
 ### 8.3 Когда сличение фактически произойдёт
 
@@ -568,7 +568,7 @@ async def _load_existing_canonicals(
 stored_items = await _load_existing_canonicals(graph_store)
 ```
 
-Затем `stored_items` сливаются с новыми из текущего документа в one big list, после чего KNN-cosine + judge pipeline решает кто duplicate чего. Если `Иван Иванов (stored)` и `Иванов И.И. (new)` дали cosine 0.92 + same-script — auto-merge. Если cosine 0.7 — borderline → LLM-judge с моделью роли `judge` (по дефолту small tier = `LITELLM_MODEL_SMALL`).
+Затем `stored_items` сливаются с новыми из текущего документа в один большой список, после чего pipeline KNN-cosine + judge решает, кто чей дубликат. Если `Иван Иванов (stored)` и `Иванов И.И. (new)` дали cosine 0.92 + одинаковый script — auto-merge. Если cosine 0.7 — пограничный случай → LLM-judge с моделью роли `judge` (по дефолту small tier = `LITELLM_MODEL_SMALL`).
 
 ### 8.4 Что увидишь в worker-логе
 
@@ -585,17 +585,17 @@ stored_items = await _load_existing_canonicals(graph_store)
   ER done  new_entities=3  canonical_clusters=1  merged=1  review=0
 ```
 
-Третья строка — пример **именно того что ты спрашивал**: 'Морозова А. С.' (новая из текущего документа) смерджилась с 'Анна Морозова (stored)' (уже в Neo4j). Canonical name выбран как 'Анна Морозова'. Когда дальше `build_property_graph` напишет в Neo4j — обновит существующую ноду 'Анна Морозова' с новыми chunk-references, не создаст вторую.
+Третья строка — пример **именно того, что ты спрашивал**: 'Морозова А. С.' (новая из текущего документа) смёрджилась с 'Анна Морозова (stored)' (уже в Neo4j). Каноническое имя выбрано как 'Анна Морозова'. Когда дальше `build_property_graph` напишет в Neo4j — обновит существующую ноду 'Анна Морозова' с новыми chunk-references, не создаст вторую.
 
 ### 8.5 Запись обратно в Neo4j
 
-После ER кластеризации `resolve_entities` возвращает `name_map: dict[str, str]` который применяется к chunk-level KG metadata. Затем `build_property_graph` идёт в Neo4j через LlamaIndex `PropertyGraphIndex`. Каждый узел делается через `MERGE (n:__Entity__ {name: $name})` — Cypher's `MERGE` это upsert: создаст ноду если её нет, прочитает если есть. Через тот же MERGE добавляются property (`mention_count++`, `er_canonical_name`, embedding если меняется).
+После ER-кластеризации `resolve_entities` возвращает `name_map: dict[str, str]`, который применяется к chunk-level KG-метаданным. Затем `build_property_graph` идёт в Neo4j через LlamaIndex `PropertyGraphIndex`. Каждый узел делается через `MERGE (n:__Entity__ {name: $name})` — `MERGE` в Cypher это upsert: создаст ноду, если её нет, прочитает, если есть. Через тот же MERGE добавляются property (`mention_count++`, `er_canonical_name`, embedding если меняется).
 
 ---
 
-## 9. Smoke verification
+## 9. Smoke-верификация
 
-End-to-end проверка multimodel-фичи. Предполагает что compose уже поднят (`docker compose -p kb-llamaindex ps` → 13 healthy сервисов).
+End-to-end-проверка multimodel-фичи. Предполагает, что compose уже поднят (`docker compose -p kb-llamaindex ps` → 13 healthy-сервисов).
 
 ```bash
 # 0. Pre-flight: setup_db регистрирует новые SA + создаёт ingest_metrics
@@ -654,14 +654,14 @@ fetch_source         |                    | smoke-B
 ```
 
 **Что валидирует:**
-- ✅ Per-role snapshot работает (только judge изменился)
-- ✅ Other LLM activities не затронуты
-- ✅ Non-LLM activities получают NULL
-- ✅ Child workflow history (merge_and_resolve, build_property_graph) сливается с parent в один список
+- ✅ Per-role snapshot работает (изменился только judge)
+- ✅ Остальные LLM-активности не затронуты
+- ✅ Не-LLM-активности получают NULL
+- ✅ История child workflow (merge_and_resolve, build_property_graph) сливается с parent в один список
 
-5. **Visual check в Temporal UI** — `http://localhost:8080` → найди `ingest-<job_id>` → должна быть nested `graph-<job_id>` со своими timing'ами.
+5. **Визуальная проверка в Temporal UI** — `http://localhost:8080` → найди `ingest-<job_id>` → должна быть вложенная `graph-<job_id>` со своими timing'ами.
 
-6. **Grafana compare** — `http://localhost:3001/d/kb-ingest-version-compare/` → выбери `smoke-A` vs `smoke-B` → delta-таблица покажет `model_A` / `model_B` колонки.
+6. **Grafana-сравнение** — `http://localhost:3001/d/kb-ingest-version-compare/` → выбери `smoke-A` vs `smoke-B` → delta-таблица покажет колонки `model_A` / `model_B`.
 
 ---
 
@@ -669,18 +669,18 @@ fetch_source         |                    | smoke-B
 
 ### 10.1 Temporal UI (http://localhost:8080)
 
-- `ingest-{doc_id}` — parent workflow. Видна полная цепочка активностей + ChildWorkflowExecutionStarted/Completed events для graph-стадии.
-- `graph-{doc_id}` — child workflow. Отдельная execution с двумя активностями (merge_and_resolve + build_property_graph). Открой Pending Activities если ER завис.
+- `ingest-{doc_id}` — parent workflow. Видна полная цепочка активностей + events ChildWorkflowExecutionStarted/Completed для graph-стадии.
+- `graph-{doc_id}` — child workflow. Отдельная execution с двумя активностями (merge_and_resolve + build_property_graph). Открой Pending Activities, если ER завис.
 
-### 10.2 Grafana dashboards (http://localhost:3001)
+### 10.2 Grafana-дашборды (http://localhost:3001)
 
-| Dashboard | Что показывает |
+| Дашборд | Что показывает |
 |---|---|
-| `kb-ingest-overview` | Live: pollers, slots, p50/p95 per activity, throughput, failed rate, recent ingests |
-| `kb-ingest-version-compare` | Two tag side-by-side + delta table + **per-stage model usage** (наш Stage 5 add) |
-| `kb-ingest-run-drilldown` | Один doc_id: bar per activity duration, timeline table |
+| `kb-ingest-overview` | Live: pollers, slots, p50/p95 на активность, throughput, failed rate, недавние ingest'ы |
+| `kb-ingest-version-compare` | Два тега бок о бок + delta-таблица + **per-stage model usage** (наше добавление Stage 5) |
+| `kb-ingest-run-drilldown` | Один doc_id: bar на длительность активности, timeline-таблица |
 
-### 10.3 Postgres queries
+### 10.3 Postgres-запросы
 
 ```sql
 -- Какие модели использовались на стейдже X?
@@ -701,47 +701,47 @@ SELECT DISTINCT version_tag FROM ingest_metrics ORDER BY version_tag;
 
 ### 10.4 Prometheus (http://localhost:9092)
 
-`temporal_activity_execution_latency_*` — histogram per `activity_type` label. Per-model graphs пока **не** доступны через Prometheus — Temporal SDK не лейблит метрики моделью. Если нужна per-model latency aggregation — иди в Grafana → PG datasource.
+`temporal_activity_execution_latency_*` — histogram по label'у `activity_type`. Per-model-графики пока **не** доступны через Prometheus — Temporal SDK не лейблит метрики моделью. Если нужна per-model-агрегация латентности — иди в Grafana → PG datasource.
 
 ---
 
-## 11. Troubleshooting
+## 11. Траблшутинг
 
 | Симптом | Причина | Действие |
 |---|---|---|
-| **`500` от LiteLLM "can't compare num_retry and None" + "model not found"** | `LITELLM_*_MODEL` env указывает на модель, **не зарегистрированную** в LiteLLM proxy (нет в `docker/litellm_config.yaml` или в DB-store если `store_model_in_db: true`).  Внутренний бажный path в litellm сравнивает `retries < router.num_retries` где router-level `num_retries=None` → `TypeError`. | (1) Проверить boot-логи API/worker'а: должна быть строка `LiteLLM model validation FAILED ... missing=<role>='<name>' ... Available models: [...]` — там готовый список доступных + два пути fix.  (2) Зарегистрировать модель: dev → дополнить `docker/litellm_config.yaml` `model_list` + `docker compose restart litellm`; prod (DB-store) → добавить через LiteLLM Admin UI или `POST /model/new`.  (3) Band-aid: `general_settings.num_retries: 0` в proxy-config (уже выставлено в `litellm_settings.num_retries: 0` в нашем `docker/litellm_config.yaml`).  Strict-mode валидатор: `LITELLM_VALIDATE_MODELS_STRICT=true` чтобы worker падал на старте а не warning'ом. |
-| `ingest_metrics.model = NULL` для `extract_kg` строки | API сабмитил **без** snapshot'а (старый процесс) или env пустой и `llm_model` тоже | `psql -c "SELECT version_tag FROM ingest_metrics ..."` — если `unspecified` → старый процесс. Перезапустить API из multimodel worktree |
-| `merge_and_resolve.model = gpt-4o-mini` хотя поднял judge на large (`LITELLM_ROLE_TIERS`/`LITELLM_MODEL_LARGE`) | API не перезапущен после env-change (snapshot снимается в момент submit) | `pkill -f uvicorn` + restart API. Сабмит ДО рестарта получит старую модель — это by design (snapshot at submit time) |
-| `merge_and_resolve.model` всё ещё small, env применён | `LITELLM_ROLE_TIERS` — JSON-string; pydantic мёржит его на дефолты. Опечатка в JSON ⇒ парс падает/игнор | Проверь синтаксис: `LITELLM_ROLE_TIERS='{"judge":"large"}'` (кавычки!). Роль должна быть из `LLMRole`, tier ∈ {small,large} |
-| Lane `…` saturated — caller waiting (warning в логе) | Роль упёрлась в свой LLMPool lane-cap; новые вызовы ждут | Норма под нагрузкой. Если хронически — подними `LLM_POOL_LANE_CAPS` для роли (и tier-total, если упёрлись в него). См. [§ 3.5](#35-llmpool--concurrency-owner) |
-| Two distinct workflow IDs `ingest-X` и `graph-X` для одного ingest'а | Нормально — child workflow живёт отдельной execution | Это not bug. См. [§ 4.2](#42-три-практических-профита) |
-| `graph_status="vector_only"` после ingest'а | Child workflow failed (LLM down, ER timeout, Neo4j unreachable) | Открой `graph-{doc_id}` в Temporal UI — там видна activity которая упала + её stack. Это **best-effort** — документ доступен для vector-поиска |
-| Worker занят на старых workflow'ах из других worktree'ов | Несколько worker'ов из разных worktree подключены к одному Temporal cluster и конкурируют за task queue | `lsof -p <pid>` → `cwd` показывает worktree. Убей `kill <pid>` тот что не нужен |
-| `ingest_metrics: child history fetch skipped` warning в worker log | Path был `vector_only` → child не запускался → `get_workflow_handle("graph-X").fetch_history()` вернул NotFound | Это норма — warning'у не валит pipeline; metrics-rows для parent части записываются нормально |
-| Temporal SA registration в `setup_db` падает с "advanced visibility unsupported" | Postgres visibility store не поддерживает custom SA | Не блокирует — `ingest_metrics` path работает без SA. Можно проигнорить, либо мигрировать Temporal на ES visibility (большой шаг) |
+| **`500` от LiteLLM "can't compare num_retry and None" + "model not found"** | env `LITELLM_*_MODEL` указывает на модель, **не зарегистрированную** в прокси LiteLLM (нет в `docker/litellm_config.yaml` или в DB-store, если `store_model_in_db: true`).  Внутренний баговый путь в litellm сравнивает `retries < router.num_retries`, где на уровне router `num_retries=None` → `TypeError`. | (1) Проверить boot-логи API/worker'а: должна быть строка `LiteLLM model validation FAILED ... missing=<role>='<name>' ... Available models: [...]` — там готовый список доступных + два пути фикса.  (2) Зарегистрировать модель: dev → дополнить `model_list` в `docker/litellm_config.yaml` + `docker compose restart litellm`; prod (DB-store) → добавить через LiteLLM Admin UI или `POST /model/new`.  (3) Костыль: `general_settings.num_retries: 0` в proxy-config (уже выставлено как `litellm_settings.num_retries: 0` в нашем `docker/litellm_config.yaml`).  Валидатор strict-mode: `LITELLM_VALIDATE_MODELS_STRICT=true`, чтобы worker падал на старте, а не warning'ом. |
+| `ingest_metrics.model = NULL` для строки `extract_kg` | API сабмитил **без** snapshot'а (старый процесс) или env пустой и `llm_model` тоже | `psql -c "SELECT version_tag FROM ingest_metrics ..."` — если `unspecified` → старый процесс. Перезапустить API из multimodel-worktree |
+| `merge_and_resolve.model = gpt-4o-mini`, хотя поднял judge на large (`LITELLM_ROLE_TIERS`/`LITELLM_MODEL_LARGE`) | API не перезапущен после смены env (snapshot снимается в момент submit) | `pkill -f uvicorn` + рестарт API. Сабмит ДО рестарта получит старую модель — это by design (snapshot в момент submit) |
+| `merge_and_resolve.model` всё ещё small, env применён | `LITELLM_ROLE_TIERS` — JSON-строка; pydantic мёржит её на дефолты. Опечатка в JSON ⇒ парсинг падает/игнорируется | Проверь синтаксис: `LITELLM_ROLE_TIERS='{"judge":"large"}'` (кавычки!). Роль должна быть из `LLMRole`, tier ∈ {small,large} |
+| Lane `…` saturated — caller waiting (warning в логе) | Роль упёрлась в свой LLMPool lane-cap; новые вызовы ждут | Норма под нагрузкой. Если хронически — подними `LLM_POOL_LANE_CAPS` для роли (и tier-total, если упёрлись в него). См. [§ 3.5](#35-llmpool--владелец-конкурентности) |
+| Два разных workflow ID `ingest-X` и `graph-X` для одного ingest'а | Нормально — child workflow живёт отдельной execution | Это не баг. См. [§ 4.2](#42-три-практических-профита) |
+| `graph_status="vector_only"` после ingest'а | Child workflow упал (LLM лежит, ER timeout, Neo4j недостижим) | Открой `graph-{doc_id}` в Temporal UI — там видна активность, которая упала, + её stack. Это **best-effort** — документ доступен для vector-поиска |
+| Worker занят старыми workflow'ами из других worktree'ов | Несколько worker'ов из разных worktree подключены к одному Temporal-кластеру и конкурируют за task queue | `lsof -p <pid>` → `cwd` показывает worktree. Убей `kill <pid>` тот, что не нужен |
+| Warning `ingest_metrics: child history fetch skipped` в worker-логе | Путь был `vector_only` → child не запускался → `get_workflow_handle("graph-X").fetch_history()` вернул NotFound | Это норма — warning не валит pipeline; metrics-строки для parent-части записываются нормально |
+| Регистрация Temporal SA в `setup_db` падает с "advanced visibility unsupported" | Postgres visibility-store не поддерживает custom SA | Не блокирует — путь `ingest_metrics` работает без SA. Можно проигнорить либо мигрировать Temporal на ES visibility (большой шаг) |
 
 ---
 
-## 12. Cross-references
+## 12. Перекрёстные ссылки
 
 ### 12.1 Связанные runbook'и
-- [`docs/runbook/analytics.md`](analytics.md) — Grafana dashboards setup, `ingest_metrics` schema, version_tag mechanics
-- [`docs/runbook/wikibase.md`](wikibase.md) — Wikibase population (orthogonal feature)
+- [`docs/runbook/analytics.md`](analytics.md) — настройка Grafana-дашбордов, схема `ingest_metrics`, механика version_tag
+- [`docs/runbook/wikibase.md`](wikibase.md) — population Wikibase (ортогональная фича)
 
 ### 12.2 Архитектурные документы
-- [`docs/MODELS.md`](../MODELS.md) — per-role model guidance, escalation path
-- [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) — top-level system map
-- [`docs/diagrams/system_architecture.svg`](../diagrams/system_architecture.svg) / [`docs/diagrams/system_architecture.d2`](../diagrams/system_architecture.d2) — визуальная карта (рендер + D2 source)
+- [`docs/MODELS.md`](../MODELS.md) — guidance по per-role-моделям, путь эскалации
+- [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) — верхнеуровневая карта системы
+- [`docs/diagrams/system_architecture.svg`](../diagrams/system_architecture.svg) / [`docs/diagrams/system_architecture.d2`](../diagrams/system_architecture.d2) — визуальная карта (рендер + D2-source)
 
-### 12.3 Specs
-- `docs/superpowers/specs/2026-05-15-ingest-temporal-workflow-design.md` — original Temporal workflow design
-- `docs/superpowers/plans/2026-05-18-multimodel-and-child-merge-workflow.md` — этого спринта
+### 12.3 Спеки
+- `docs/superpowers/specs/2026-05-15-ingest-temporal-workflow-design.md` — оригинальный дизайн Temporal-workflow'а
+- `docs/superpowers/plans/2026-05-18-multimodel-and-child-merge-workflow.md` — план этого спринта
 
 ### 12.4 Тесты как живая документация
-- [`tests/test_retrieval/test_llm_factory.py`](../../tests/test_retrieval/test_llm_factory.py) — 5 case'ов: legacy fallback + 3 wrapper + per-role fallback
+- [`tests/test_retrieval/test_llm_factory.py`](../../tests/test_retrieval/test_llm_factory.py) — 5 case'ов: legacy-fallback + 3 wrapper'а + per-role fallback
 - [`tests/test_observability/test_ingest_metrics_extractor.py`](../../tests/test_observability/test_ingest_metrics_extractor.py) — 9 case'ов: empty, single, retry, in-flight, per-role resolution, fallback, models_per_role omitted
-- [`tests/test_workflow/test_graph_build_workflow.py`](../../tests/test_workflow/test_graph_build_workflow.py) — child chain test
-- [`tests/test_workflow/test_document_ingest_workflow.py`](../../tests/test_workflow/test_document_ingest_workflow.py) — 5 случаев включая `test_graph_failure_via_child_downgrades`
+- [`tests/test_workflow/test_graph_build_workflow.py`](../../tests/test_workflow/test_graph_build_workflow.py) — тест цепочки child
+- [`tests/test_workflow/test_document_ingest_workflow.py`](../../tests/test_workflow/test_document_ingest_workflow.py) — 5 случаев, включая `test_graph_failure_via_child_downgrades`
 
 ### 12.5 Ключевые env vars (общий список)
 ```env

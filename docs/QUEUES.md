@@ -1,169 +1,170 @@
-# Temporal task queues
+# Очереди задач Temporal
 
-The worker process (`uv run python -m src.workflow.worker`) hosts
-several Worker pools against the same Temporal client, each polling its
-own task queue so GPU / LLM pressure can be capped independently.
+Процесс worker'а (`uv run python -m src.workflow.worker`) поднимает
+несколько пулов Worker'ов против одного и того же Temporal-клиента,
+каждый из которых поллит свою task queue, чтобы нагрузку на GPU / LLM
+можно было ограничивать независимо.
 
-| Queue (config field) | Default | Hosts | Concurrency cap |
+| Очередь (поле конфига) | Default | Что хостит | Лимит конкурентности |
 | --- | --- | --- | --- |
-| `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding activities | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
-| `llm_task_queue` | `kb-ingest-llm` | `extract_kg` ONLY (the extract lane) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (18) |
-| `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (the merge lane) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (14) |
-| `search_task_queue` | `kb-search-small` | `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` + `GlobalSearchWorkflow` + `DriftSearchWorkflow` + `AutoSearchWorkflow` + their activities (plan / retrieve / coverage_check / rerank_sources / route / map_communities / documents_for_communities) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
-| `large_task_queue` | `kb-search-large` | `synthesize_answer` ONLY (final large-tier synthesis, Search R5) — activities-only Worker, no workflows | `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) |
-| `graph_build_task_queue` | `kb-graph-build` | `CommunityBuildWorkflow` + `detect_communities_activity` / `summarize_community_activity` (OFFLINE GDS-Leiden community build, Search R6) | `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY` (2) |
-| `wiki.task_queue` | `kb-wiki` | `WikiSweepWorkflow` + `select_dirty_entities` / `write_entity_article` (continuous per-entity MediaWiki article editor) | `WIKI_ACTIVITY_CONCURRENCY` (4) |
+| `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding-активности | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
+| `llm_task_queue` | `kb-ingest-llm` | ТОЛЬКО `extract_kg` (extract-полоса) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (18) |
+| `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (merge-полоса) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (14) |
+| `search_task_queue` | `kb-search-small` | `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` + `GlobalSearchWorkflow` + `DriftSearchWorkflow` + `AutoSearchWorkflow` + их активности (plan / retrieve / coverage_check / rerank_sources / route / map_communities / documents_for_communities) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
+| `large_task_queue` | `kb-search-large` | ТОЛЬКО `synthesize_answer` (финальный синтез на large-tier, Search R5) — Worker только с активностями, без workflow'ов | `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) |
+| `graph_build_task_queue` | `kb-graph-build` | `CommunityBuildWorkflow` + `detect_communities_activity` / `summarize_community_activity` (ОФФЛАЙН-сборка сообществ GDS-Leiden, Search R6) | `TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY` (2) |
+| `wiki.task_queue` | `kb-wiki` | `WikiSweepWorkflow` + `select_dirty_entities` / `write_entity_article` (непрерывный пер-сущностный редактор статей MediaWiki) | `WIKI_ACTIVITY_CONCURRENCY` (4) |
 
-## Queue caps vs the LLMPool — who actually owns concurrency
+## Лимиты очередей против LLMPool — кто на самом деле владеет конкурентностью
 
-Two independent limiters apply to every LLM-bound activity:
+К каждой LLM-зависимой активности применяются два независимых ограничителя:
 
-1. **Temporal per-queue `max_concurrent_activities`** (the table above) —
-   how many activities of that queue a worker will run at once. This is an
-   **isolation** boundary: it keeps one workload (e.g. an `extract_kg`
-   burst) from occupying every slot a sibling lane (merge) needs.
-2. **The per-process `LLMPool`** (`src/retrieval/llm_pool.py`,
-   `LLM_POOL_*`) — the real GPU/upstream concurrency arbiter, shared
-   across ingest AND search in the same process. It enforces a
-   hierarchical limit: a small-tier global total
-   (`LLM_POOL_TIER_SMALL_TOTAL`, default 25) and a large-tier total
-   (`LLM_POOL_TIER_LARGE_TOTAL`, default 8), combined with per-role lane
-   ceilings (`LLM_POOL_LANE_CAPS`: extraction 18, judge 14, search 14,
-   plan 4, route 2, retrieve 4, synthesis 8). Small-tier lanes
-   deliberately over-subscribe (sum of ceilings > tier total) so one role
-   can fill the GPU while none monopolizes it; `LLM_POOL_JUDGE_FLOOR`
-   (default 7) reserves capacity so merge/judge never starves under an
-   extraction flood (sizing rule: extraction ceiling ≤
+1. **Temporal'овский пер-очередной `max_concurrent_activities`** (таблица выше) —
+   сколько активностей этой очереди worker запустит одновременно. Это граница
+   **изоляции**: она не даёт одной нагрузке (например, всплеску `extract_kg`)
+   занять все слоты, нужные соседней полосе (merge).
+2. **Пер-процессный `LLMPool`** (`src/retrieval/llm_pool.py`,
+   `LLM_POOL_*`) — настоящий арбитр конкурентности GPU/upstream, общий
+   для ingest И search в одном процессе. Он навязывает иерархический
+   лимит: глобальный потолок small-tier
+   (`LLM_POOL_TIER_SMALL_TOTAL`, default 25) и потолок large-tier
+   (`LLM_POOL_TIER_LARGE_TOTAL`, default 8), в сочетании с пер-ролевыми
+   потолками полос (`LLM_POOL_LANE_CAPS`: extraction 18, judge 14, search 14,
+   plan 4, route 2, retrieve 4, synthesis 8). Полосы small-tier
+   намеренно подписаны с избытком (сумма потолков > tier-total), чтобы одна
+   роль могла забить GPU, но ни одна не монополизировала его; `LLM_POOL_JUDGE_FLOOR`
+   (default 7) резервирует ёмкость, чтобы merge/judge никогда не голодал под
+   потоком extraction (правило сайзинга: потолок extraction ≤
    `tier_small_total − judge_floor`).
 
-**The Temporal caps must be ≥ the matching pool lane ceiling** so the pool
-binds first — otherwise Temporal throttles before the pool can arbitrate.
-That is exactly why the `kb-ingest-llm` / `kb-ingest-merge` caps were
-raised to 18 / 14 (matching the extraction / judge lane ceilings) rather
-than left at the old concurrency-1.
+**Temporal-лимиты ОБЯЗАНЫ быть ≥ соответствующего потолка полосы пула**, чтобы пул
+связывал первым — иначе Temporal задросселирует раньше, чем пул успеет
+арбитрировать. Именно поэтому лимиты `kb-ingest-llm` / `kb-ingest-merge` были
+подняты до 18 / 14 (под потолки полос extraction / judge), а не оставлены на
+старой конкурентности-1.
 
-## Dedicated merge queue: `kb-ingest-merge`
+## Выделенная merge-очередь: `kb-ingest-merge`
 
-`extract_kg` and the merge stage (`GraphBuildWorkflow` →
-`merge_and_resolve` + `build_property_graph`) used to share the single
-`kb-ingest-llm` queue at concurrency 1. When many documents ingest at
-once, a burst of `extract_kg` tasks fills that FIFO queue and a
-document's merge — enqueued *behind* all the pending extracts — starves
-(head-of-line blocking). The vector half completes fast but the graph
-half waits out the whole extract backlog.
+`extract_kg` и стадия merge (`GraphBuildWorkflow` →
+`merge_and_resolve` + `build_property_graph`) раньше делили единую
+очередь `kb-ingest-llm` на конкурентности 1. Когда множество документов
+ингестятся одновременно, всплеск задач `extract_kg` заполняет эту FIFO-очередь,
+и merge документа — поставленный в очередь *позади* всех ожидающих
+extract'ов — голодает (head-of-line blocking). Векторная половина
+завершается быстро, а графовая половина ждёт, пока рассосётся весь бэклог extract'ов.
 
-**Fix**: merge gets its own queue + Worker pool (`kb-ingest-merge`). The
-parent `DocumentIngestWorkflow` starts the `GraphBuildWorkflow` child on
-`merge_task_queue`; its `merge_and_resolve` / `build_property_graph`
-activities carry NO `task_queue` override, so they inherit the child's
-queue and ride the merge lane automatically. `extract_kg` stays pinned
-to `kb-ingest-llm`. Now extract and merge poll independent queues and
-interleave instead of serialising through one FIFO.
+**Фикс**: merge получает собственную очередь + пул Worker'ов (`kb-ingest-merge`).
+Родительский `DocumentIngestWorkflow` запускает дочерний `GraphBuildWorkflow` на
+`merge_task_queue`; его активности `merge_and_resolve` / `build_property_graph`
+НЕ несут override `task_queue`, поэтому наследуют очередь child'а и едут по
+merge-полосе автоматически. `extract_kg` остаётся прибит к
+`kb-ingest-llm`. Теперь extract и merge поллят независимые очереди и
+чередуются вместо сериализации через одну FIFO.
 
-**LLM concurrency is now owned by the per-process LLMPool** (`src/retrieval/llm_pool.py`), not by Temporal caps alone. The Temporal `llm`/`merge` caps were raised to 18/14 so the pool binds first — they must be ≥ the pool's per-role lane ceilings or Temporal would throttle before the pool gets a chance to arbitrate. The pool enforces a hierarchical limit: a small-tier global total (default 25, `LLM_POOL_TIER_SMALL_TOTAL`) combined with per-role lane ceilings (`LLM_POOL_LANE_CAPS`), so extract and merge interleave dynamically and the GPU stays utilized without either role monopolizing capacity. `build_property_graph` remains registered in `MAIN_ACTIVITIES` too (Neo4j-write, not GPU-bound) so single-pool deployments still work.
+**LLM-конкурентностью теперь владеет пер-процессный LLMPool** (`src/retrieval/llm_pool.py`), а не одни только Temporal-лимиты. Temporal-лимиты `llm`/`merge` были подняты до 18/14, чтобы пул связывал первым — они обязаны быть ≥ пер-ролевых потолков полос пула, иначе Temporal задросселировал бы раньше, чем пул получит шанс арбитрировать. Пул навязывает иерархический лимит: глобальный потолок small-tier (default 25, `LLM_POOL_TIER_SMALL_TOTAL`) в сочетании с пер-ролевыми потолками полос (`LLM_POOL_LANE_CAPS`), так что extract и merge динамически чередуются, и GPU остаётся загружен, без монополизации ёмкости любой из ролей. `build_property_graph` остаётся зарегистрирована и в `MAIN_ACTIVITIES` тоже (запись в Neo4j, не GPU-bound), так что развёртывания с одним пулом всё ещё работают.
 
-**Operator action on upgrade**: set `TEMPORAL_MERGE_TASK_QUEUE` /
-`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` if non-default (keep them ≥ the
-corresponding pool lane ceiling), and restart the worker so it polls the
-new `kb-ingest-merge` queue.
+**Действие оператора при апгрейде**: задайте `TEMPORAL_MERGE_TASK_QUEUE` /
+`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY`, если они не дефолтные (держите их ≥
+соответствующего потолка полосы пула), и перезапустите worker, чтобы он поллил
+новую очередь `kb-ingest-merge`.
 
-## Offline graph-community build queue: `kb-graph-build` (Search R6)
+## Оффлайн-очередь сборки сообществ графа: `kb-graph-build` (Search R6)
 
-Fully **decoupled / offline** — this queue is NEVER touched on the query
-hot path. The worker process hosts a dedicated `Worker` pool on
-`kb-graph-build` (same process, same Temporal client) running
-`CommunityBuildWorkflow` and its two activities:
+Полностью **развязана / оффлайн** — эта очередь НИКОГДА не задействуется на
+горячем пути запроса. Процесс worker'а хостит выделенный пул `Worker` на
+`kb-graph-build` (тот же процесс, тот же Temporal-клиент), выполняющий
+`CommunityBuildWorkflow` и две его активности:
 
-- `detect_communities_activity` — runs Neo4j **GDS Leiden** over the
-  `__Entity__` sub-graph (Cypher projection → `gds.leiden.stream`),
-  groups members by `communityId`, drops communities below
-  `TEMPORAL_COMMUNITY_MIN_SIZE` (3), and idempotently MERGEs
-  `:Community {id, level, member_count}` nodes linked to their members via
+- `detect_communities_activity` — гоняет Neo4j **GDS Leiden** по
+  подграфу `__Entity__` (Cypher-проекция → `gds.leiden.stream`),
+  группирует членов по `communityId`, отбрасывает сообщества меньше
+  `TEMPORAL_COMMUNITY_MIN_SIZE` (3) и идемпотентно MERGE'ит ноды
+  `:Community {id, level, member_count}`, связанные с их членами через
   `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`.
-- `summarize_community_activity` — for one community, summarises its
-  members (+ inter-member relations) via the **small-tier** LLM
-  (`build_llm("retrieve")`) and persists the result on
-  `:Community.summary` (idempotent MERGE). Batchable; the workflow fans
-  out one call per community with bounded parallelism
+- `summarize_community_activity` — для одного сообщества суммаризирует его
+  членов (+ отношения между членами) через LLM **small-tier**
+  (`build_llm("retrieve")`) и сохраняет результат в
+  `:Community.summary` (идемпотентный MERGE). Батчируемо; workflow
+  разворачивает по одному вызову на сообщество с ограниченным параллелизмом
   (`TEMPORAL_COMMUNITY_SUMMARY_PARALLELISM`, default 4).
 
-**Triggers** (no query path):
-- Admin endpoint `POST /api/v1/admin/communities/rebuild` (primary) —
-  starts the workflow on `kb-graph-build`, returns the workflow id.
-- Optional **Temporal Schedule** — the repo does not yet configure any
-  Temporal Schedule, so this is currently a manual/admin-triggered build.
-  To run it on a cron, create a Schedule (e.g. via `tctl schedule create`
-  or `client.create_schedule`) that starts `CommunityBuildWorkflow` on
-  `kb-graph-build` with a `DetectCommunitiesParams(min_size=…)` input.
+**Триггеры** (нет пути запроса):
+- Admin-эндпоинт `POST /api/v1/admin/communities/rebuild` (основной) —
+  запускает workflow на `kb-graph-build`, возвращает id workflow'а.
+- Опциональный **Temporal Schedule** — репозиторий пока не конфигурирует
+  никакого Temporal Schedule, так что сейчас это ручная/admin-триггерная сборка.
+  Чтобы гонять по cron, создайте Schedule (например, через `tctl schedule create`
+  или `client.create_schedule`), который запускает `CommunityBuildWorkflow` на
+  `kb-graph-build` с входом `DetectCommunitiesParams(min_size=…)`.
 
-**Idempotent / incremental**: re-running refreshes summaries and
-membership on the existing `:Community` nodes (MERGE keyed on
-`(id, level)`) — it never duplicates communities. The query path is
-unchanged; these summaries are written for a future global-search phase.
+**Идемпотентно / инкрементально**: повторный прогон обновляет summary и
+членство на существующих нодах `:Community` (MERGE по ключу
+`(id, level)`) — он никогда не дублирует сообщества. Путь запроса
+не меняется; эти summary пишутся для будущей фазы global-поиска.
 
-**Concurrency**: kept low (`TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY`,
-default 2) so a rebuild's summary burst doesn't flood the small-tier LLM
-proxy. **Operator action on upgrade**: restart the worker so it polls the
-new `kb-graph-build` queue.
+**Конкурентность**: держится низкой (`TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY`,
+default 2), чтобы всплеск summary при пересборке не залил LLM-прокси small-tier.
+**Действие оператора при апгрейде**: перезапустите worker, чтобы он поллил
+новую очередь `kb-graph-build`.
 
-## Model tier ↔ queue mapping
+## Маппинг tier модели ↔ очередь
 
-| Tier | Model | Queue | Why |
+| Tier | Модель | Очередь | Зачем |
 | --- | --- | --- | --- |
-| small | search-role LLM (`build_search_llm`) | `kb-search-small` | planner, sub-query retrieval, coverage check, unified rerank — cheap, parallel-friendly |
-| large | synthesis LLM (`build_synthesis_llm`) | `kb-search-large` | one heavyweight final synthesis per session — capped LOW so it never serves many parallel sessions |
+| small | LLM роли search (`build_search_llm`) | `kb-search-small` | планировщик, ретрив подзапросов, проверка покрытия, унифицированный rerank — дёшево, дружелюбно к параллелизму |
+| large | LLM синтеза (`build_synthesis_llm`) | `kb-search-large` | один тяжёлый финальный синтез на сессию — лимит держится НИЗКИМ, чтобы он никогда не обслуживал много параллельных сессий |
 
-## Large-tier synthesis queue: `kb-search-large` (Search R5)
+## Очередь синтеза large-tier: `kb-search-large` (Search R5)
 
-`SearchOrchestratorWorkflow` itself still lives on `kb-search-small`, but
-it pins the final `synthesize_answer` to `kb-search-large` via
+Сам `SearchOrchestratorWorkflow` по-прежнему живёт на `kb-search-small`, но
+он прибивает финальный `synthesize_answer` к `kb-search-large` через
 `workflow.execute_activity("synthesize_answer", …, task_queue=settings.temporal.large_task_queue)`.
-The worker process hosts a **separate `Worker` pool** on
-`kb-search-large` (same process, same Temporal client) registering ONLY
-the `synthesize_answer` activity, capped at
-`TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (default 2). This isolates the
-expensive synthesis model on its own low-concurrency pool so concurrent
-search sessions don't dogpile it, while the cheap small-tier work
-(plan / retrieve / coverage / rerank) keeps its own higher concurrency
-on `kb-search-small`.
+Процесс worker'а хостит **отдельный пул `Worker`** на
+`kb-search-large` (тот же процесс, тот же Temporal-клиент), регистрирующий ТОЛЬКО
+активность `synthesize_answer`, с лимитом
+`TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (default 2). Это изолирует
+дорогую модель синтеза на её собственном пуле с низкой конкурентностью, чтобы
+параллельные сессии поиска не сваливались на неё кучей, тогда как дешёвая
+работа small-tier (plan / retrieve / coverage / rerank) держит свою более высокую
+конкурентность на `kb-search-small`.
 
-The pre-synthesis **unified rerank** (`rerank_sources`) runs on
-`kb-search-small` — the bge cross-encoder is cheap relative to the large
-synthesis LLM, so it doesn't warrant the low-concurrency queue.
+Пред-синтезный **унифицированный rerank** (`rerank_sources`) гоняется на
+`kb-search-small` — bge cross-encoder дёшев относительно большого
+LLM синтеза, так что он не оправдывает очередь с низкой конкурентностью.
 
-**Operator action on upgrade**: set `TEMPORAL_LARGE_TASK_QUEUE` /
-`TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` if non-default, and restart the
-worker so it polls the new queue. (The legacy ReAct `SearchWorkflow` that
-once synthesized on the small tier was removed in the R7b cutover; the
-plan-execute orchestrator always synthesizes large-tier on
+**Действие оператора при апгрейде**: задайте `TEMPORAL_LARGE_TASK_QUEUE` /
+`TEMPORAL_LARGE_ACTIVITY_CONCURRENCY`, если они не дефолтные, и перезапустите
+worker, чтобы он поллил новую очередь. (Легаси ReAct-`SearchWorkflow`, который
+когда-то синтезировал на small-tier, был удалён в переходе R7b;
+plan-execute-оркестратор всегда синтезирует на large-tier на
 `kb-search-large`.)
 
-## Search queue rename: `kb-search-llm` → `kb-search-small` (Search R2)
+## Переименование search-очереди: `kb-search-llm` → `kb-search-small` (Search R2)
 
-The search queue default was renamed from `kb-search-llm` to
-`kb-search-small`. The queue now hosts the small-tier plan-execute flow
-(planner + parallel sub-query retrieval) in addition to the legacy ReAct
-workflow, so the name reflects the dominant model **tier** rather than
-"any LLM". The large-tier final synthesis still happens *inside* a
-`synthesize_answer` activity on this same queue (no separate
-`kb-search-large` queue yet — that arrives in a later phase).
+Default search-очереди был переименован с `kb-search-llm` на
+`kb-search-small`. Очередь теперь хостит plan-execute-поток small-tier
+(планировщик + параллельный ретрив подзапросов) в дополнение к легаси-ReAct
+workflow'у, так что имя отражает доминирующий **tier** модели, а не
+«любую LLM». Финальный синтез large-tier по-прежнему происходит *внутри*
+активности `synthesize_answer` на этой же очереди (отдельной очереди
+`kb-search-large` пока нет — она появляется в более поздней фазе).
 
-**Operator action on upgrade**: update `TEMPORAL_SEARCH_TASK_QUEUE` if
-it was pinned to the old value, and restart the worker so it polls the
-new queue name. In-flight workflows on the old queue drain on the old
-worker; new submissions go to `kb-search-small`.
+**Действие оператора при апгрейде**: обновите `TEMPORAL_SEARCH_TASK_QUEUE`, если
+он был прибит к старому значению, и перезапустите worker, чтобы он поллил
+новое имя очереди. Workflow'ы в полёте на старой очереди дренируются на старом
+worker'е; новые сабмиты идут на `kb-search-small`.
 
-### Activities registered on `kb-search-small`
-- Shared (`SEARCH_ACTIVITIES`): `coverage_check`, `synthesize_answer`.
-  (The legacy ReAct activities `agent_reasoning_step`, `tool_execution`,
-  `distill_observation` were removed in the R7b cutover.)
+### Активности, зарегистрированные на `kb-search-small`
+- Общие (`SEARCH_ACTIVITIES`): `coverage_check`, `synthesize_answer`.
+  (Легаси-ReAct-активности `agent_reasoning_step`, `tool_execution`,
+  `distill_observation` были удалены в переходе R7b.)
 - Search-v2 (`SEARCH_V2_ACTIVITIES`): `plan_subquestions`,
   `retrieve_subquestion`, `rerank_sources`, `route_query`,
   `map_communities`, `map_community_partial`, `documents_for_communities`.
 
-The orchestrator reuses `synthesize_answer` for the final answer, so no
-synthesis activity is duplicated.
+Оркестратор переиспользует `synthesize_answer` для финального ответа, так что
+ни одна активность синтеза не дублируется.
 
-## Continuous wiki editor queue: kb-wiki
+## Очередь непрерывного wiki-редактора: kb-wiki
 
-The worker hosts a `kb-wiki` Worker pool running `WikiSweepWorkflow` and its two activities: `select_dirty_entities` (queries Neo4j for entities flagged `wiki_dirty=true`) and `write_entity_article` (generates and writes the per-entity MediaWiki article section). Ingest marks touched entities `wiki_dirty` via a best-effort hook immediately after graph writes; a Temporal Schedule (`scripts/setup_wiki_schedule.py`) or the admin route `POST /admin/wiki/rebuild` starts the sweep, which regenerates each dirty entity's bot-managed MediaWiki article section from the graph (grounded and cited, drift-free) and skips unchanged entities via a subgraph hash. The feature is opt-in via `WIKI_ENABLED`. Unlike every other queue here, the wiki queue's config lives on `WikiSettings` (env prefix `WIKI_`), NOT `TemporalSettings` — the queue name is `WIKI_TASK_QUEUE` (default `kb-wiki`) and concurrency is capped via `WIKI_ACTIVITY_CONCURRENCY` (default 4). Article generation rides the LLMPool synthesis lane so it shares the same hierarchical GPU budget as search synthesis. **Operator action on upgrade**: restart the worker so it polls the new `kb-wiki` queue.
+Worker хостит пул Worker'ов `kb-wiki`, выполняющий `WikiSweepWorkflow` и две его активности: `select_dirty_entities` (запрашивает Neo4j на сущности, помеченные `wiki_dirty=true`) и `write_entity_article` (генерирует и пишет пер-сущностную секцию статьи MediaWiki). Ingest помечает затронутые сущности `wiki_dirty` через best-effort-хук сразу после графовых записей; Temporal Schedule (`scripts/setup_wiki_schedule.py`) или admin-маршрут `POST /admin/wiki/rebuild` запускает sweep, который перегенерирует управляемую ботом секцию статьи MediaWiki для каждой грязной сущности из графа (заземлённую и со ссылками, без дрейфа) и пропускает неизменившиеся сущности через хэш подграфа. Фича включается опционально через `WIKI_ENABLED`. В отличие от любой другой очереди здесь, конфиг wiki-очереди живёт на `WikiSettings` (env-префикс `WIKI_`), а НЕ на `TemporalSettings` — имя очереди задаётся `WIKI_TASK_QUEUE` (default `kb-wiki`), а конкурентность лимитируется через `WIKI_ACTIVITY_CONCURRENCY` (default 4). Генерация статей едет по полосе synthesis LLMPool, так что делит тот же иерархический бюджет GPU, что и синтез поиска. **Действие оператора при апгрейде**: перезапустите worker, чтобы он поллил новую очередь `kb-wiki`.

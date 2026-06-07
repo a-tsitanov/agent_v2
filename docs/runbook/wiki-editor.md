@@ -95,7 +95,7 @@ Neo4j, потом запускает свип. Свип дренирует по 
 Параметры `WIKIBASE_BOT_USER` / `WIKIBASE_BOT_PASSWORD` общие с Wikibase-populator
 — wiki-editor логинится через те же учётные данные.
 
-## 5. Operator gotchas (важно)
+## 5. Подводные камни для оператора (важно)
 
 ### 5.1 `WIKI_SITE_GLOBAL_ID` должен совпадать с реальным site id
 

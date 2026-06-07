@@ -1,20 +1,20 @@
-# Bruno API collection — kb-llamaindex
+# Bruno API-коллекция — kb-llamaindex
 
-[Bruno](https://www.usebruno.com/) collection for the kb-llamaindex
-HTTP API. Stored as plain `.bru` text files so it diffs cleanly in
-git.
+Коллекция [Bruno](https://www.usebruno.com/) для HTTP API
+kb-llamaindex. Хранится как обычные текстовые `.bru`-файлы, чтобы
+чисто диффилось в git.
 
-## Open in Bruno
+## Открыть в Bruno
 
-1. Install Bruno: `brew install bruno` or download from
+1. Установить Bruno: `brew install bruno` или скачать с
    <https://www.usebruno.com/downloads>.
-2. **File → Open Collection** → pick `docs/bruno/`.
-3. Top-right environment selector → choose `local` (default points at
-   `http://localhost:8000`).
-4. Replace the `apiKey` secret in the environment with one of the
-   keys configured via the `API_KEYS` env var on the server.
+2. **File → Open Collection** → выбрать `docs/bruno/`.
+3. Селектор окружения справа сверху → выбрать `local` (по умолчанию
+   указывает на `http://localhost:8000`).
+4. Заменить секрет `apiKey` в окружении на один из ключей,
+   сконфигурированных через env-переменную `API_KEYS` на сервере.
 
-## Layout
+## Структура
 
 ```
 docs/bruno/
@@ -41,81 +41,84 @@ docs/bruno/
 └── README.md
 ```
 
-> The legacy `/api/v1/search`, `/agent`, `/selfrag`, `/legacy/agent`
-> endpoints were removed in the R7b cutover. The sole search surface is
-> now `/api/v1/search/{local,global,drift,auto}` — usage + tuning memo:
-> `docs/runbook/search-usage.md`.
+> Легаси-эндпоинты `/api/v1/search`, `/agent`, `/selfrag`, `/legacy/agent`
+> были удалены в R7b cutover. Единственная поверхность поиска
+> теперь — `/api/v1/search/{local,global,drift,auto}`; памятка по
+> использованию + тюнингу: `docs/runbook/search-usage.md`.
 
-## Environment variables
+## Переменные окружения
 
-| Var      | Default                 | Where set                                       |
+| Переменная | По умолчанию            | Где задаётся                                    |
 |----------|-------------------------|-------------------------------------------------|
-| baseUrl  | `http://localhost:8000` | environment file                                |
-| apiKey   | `sk-litellm-stub`       | environment file (marked secret — git-ignored when committed) |
+| baseUrl  | `http://localhost:8000` | файл окружения                                  |
+| apiKey   | `sk-litellm-stub`       | файл окружения (помечена как секрет — git-ignored при коммите) |
 
-The default `apiKey` matches `ApiSettings.api_key` from `src/config.py`
-for early bring-up. In production, replace it with one of the values
-listed in `API_KEYS`.
+Дефолтный `apiKey` совпадает с `ApiSettings.api_key` из `src/config.py`
+для раннего поднятия. В продакшене замените его на одно из значений,
+перечисленных в `API_KEYS`.
 
-## Auth
+## Аутентификация
 
-Most endpoints require the header
+Большинство эндпоинтов требуют заголовок
 
 ```
 X-API-Key: {{apiKey}}
 ```
 
-Bruno renders this automatically because the requests pull the value
-from `vars` in the active environment.
+Bruno подставляет его автоматически, поскольку запросы берут значение
+из `vars` активного окружения.
 
-Exceptions (no `X-API-Key` in code):
-- `GET /health` — public liveness probe.
-- `POST /admin/wiki/rebuild` — has no `require_api_key` dependency
-  (and is mounted without the `/api/v1` prefix). Treat it as an
-  internal/operator endpoint.
+Исключения (в коде нет `X-API-Key`):
+- `GET /health` — публичная liveness-проба.
+- `POST /admin/wiki/rebuild` — не имеет зависимости `require_api_key`
+  (и подключён без префикса `/api/v1`). Считайте его
+  внутренним/операторским эндпоинтом.
 
-## Typical flow
+## Типичный сценарий
 
-1. **Health** → confirm the API is up.
-2. **Upload Document** → POST a small file, copy `job_id` from the
-   response.
-3. **Get Job Status** → set the `jobId` request var to the value
-   above; poll until status is `completed` (or `vector_only`).
-4. **Search → Local** → query the corpus (default mode). Use **Auto**
-   to let the router pick the mode.
-5. **Documents → Download Source** → set the `docId` request var to a
-   `doc_id` from a search response's `sources[]` / `documents[]` and
-   pull the original file (Bruno: *Response → Save Response*).
-6. *(optional, for Global/Drift)* **Admin → Rebuild Communities** once,
-   then use **Global** / **Drift** for corpus-level questions.
-7. *(optional)* **Admin → Wiki Rebuild** to (re)generate per-entity
-   MediaWiki articles (`?all=true` rebuilds all; needs `WIKI_ENABLED`).
+1. **Health** → убедиться, что API поднят.
+2. **Upload Document** → запостить небольшой файл, скопировать `job_id`
+   из ответа.
+3. **Get Job Status** → выставить request-переменную `jobId` в значение
+   выше; поллить, пока статус не станет `completed` (или `vector_only`).
+4. **Search → Local** → запрос по корпусу (режим по умолчанию).
+   Используйте **Auto**, чтобы режим выбрал роутер.
+5. **Documents → Download Source** → выставить request-переменную `docId`
+   в `doc_id` из `sources[]` / `documents[]` ответа поиска и
+   скачать оригинальный файл (Bruno: *Response → Save Response*).
+6. *(опционально, для Global/Drift)* **Admin → Rebuild Communities** один
+   раз, затем использовать **Global** / **Drift** для вопросов уровня
+   корпуса.
+7. *(опционально)* **Admin → Wiki Rebuild** для (пере)генерации
+   MediaWiki-статей на сущность (`?all=true` пересобирает всё; нужен
+   `WIKI_ENABLED`).
 
-## Notes
+## Заметки
 
-- `Upload Document` uses Bruno's `@file(...)` helper. Drop a sample
-  file at `docs/bruno/samples/sample.txt` (or change the path
-  inline). Anything LlamaIndex's `SimpleDirectoryReader` accepts
-  works — PDF, DOCX, PPTX, TXT, MD, EML.
-- The synthesizer always forces a Russian-language answer (corpus
-  is normalised to Russian); English questions are fine but the
-  reply will be Russian.
-- **Global** and **Drift** map-reduce over community summaries — run
-  **Admin → Rebuild Communities** first (needs Neo4j + GDS; the build is
-  offline and runs for minutes).
-- All four search modes share the `SearchRequest` shape; only `query`,
-  `top_k` and `history` (multi-turn — `[{role, content}]`) are consumed
-  — the mode is chosen by the endpoint, not a body field. Other fields
-  (`mode`, `department`, filters, …) are accepted but ignored.
-- The `SearchResponse` carries `documents[]` (`{doc_id, url}`) alongside
-  `sources[]`; each `url` is the relative `/api/v1/documents/{doc_id}`
-  download link served by **Documents → Download Source**.
+- `Upload Document` использует хелпер Bruno `@file(...)`. Положите
+  пример-файл по пути `docs/bruno/samples/sample.txt` (или поменяйте
+  путь прямо в запросе). Подходит всё, что принимает
+  `SimpleDirectoryReader` из LlamaIndex — PDF, DOCX, PPTX, TXT, MD, EML.
+- Синтезатор всегда форсит ответ на русском (корпус нормализован к
+  русскому); вопросы на английском допустимы, но ответ будет на русском.
+- **Global** и **Drift** делают map-reduce по community-summaries —
+  сначала запустите **Admin → Rebuild Communities** (нужны Neo4j + GDS;
+  сборка офлайн и идёт минуты).
+- Все четыре режима поиска используют общую форму `SearchRequest`;
+  потребляются только `query`, `top_k` и `history` (многоходовость —
+  `[{role, content}]`) — режим выбирается эндпоинтом, а не полем тела.
+  Остальные поля (`mode`, `department`, фильтры, …) принимаются, но
+  игнорируются.
+- `SearchResponse` несёт `documents[]` (`{doc_id, url}`) рядом с
+  `sources[]`; каждый `url` — это относительная ссылка на скачивание
+  `/api/v1/documents/{doc_id}`, которую обслуживает
+  **Documents → Download Source**.
 
-## Updating the collection
+## Обновление коллекции
 
-`.bru` is line-based and git-friendly. When you change an endpoint:
+`.bru` построчный и дружелюбен к git. Когда меняете эндпоинт:
 
-1. Tweak the route in `src/api/routes/...`.
-2. Update the matching `.bru` (request body, docs section).
-3. Run `uv run pytest tests/test_api -v` to verify the contract.
-4. Commit both `src/` and `docs/bruno/` together.
+1. Поправьте маршрут в `src/api/routes/...`.
+2. Обновите соответствующий `.bru` (тело запроса, секция docs).
+3. Прогоните `uv run pytest tests/test_api -v` для проверки контракта.
+4. Закоммитьте `src/` и `docs/bruno/` вместе.

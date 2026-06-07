@@ -1,47 +1,48 @@
-# ADR-0014: Source-document download via a stable API endpoint (not presigned URLs)
+# ADR-0014: Скачивание исходных документов через стабильный API-endpoint (не presigned URL)
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Search responses expose `doc_id`s in `sources[]`/`documents[]`, and the
-continuous wiki editor (ADR-0012) needs to link each article back to the
-original source files (the `== Источники ==` section). Original files live in
-MinIO (the URI is stored in Postgres `documents.path`). Presigned object-store
-URLs would be a natural download mechanism but they expire, leak the storage
-backend, bypass the application's auth, and would change every time they are
-regenerated — unstable to embed in long-lived wiki pages.
+Ответы поиска выставляют `doc_id` в `sources[]`/`documents[]`, и непрерывный
+wiki-редактор (ADR-0012) должен связывать каждую статью обратно с исходными
+файлами-источниками (секция `== Источники ==`). Оригинальные файлы лежат в MinIO
+(URI хранится в Postgres `documents.path`). Presigned URL object-store были бы
+естественным механизмом скачивания, но они истекают, раскрывают backend хранилища,
+обходят авторизацию приложения и менялись бы каждый раз при регенерации —
+нестабильны для встраивания в долгоживущие wiki-страницы.
 
-## Decision
+## Решение
 
-Serve downloads through a **stable, auth-guarded API endpoint**
-`GET /api/v1/documents/{doc_id}`. It looks up `documents.path` in Postgres and
-streams the file from MinIO (`stat_object` + `stream_object`), with an RFC 6266
-sanitized `Content-Disposition`, a 404 for missing docs/objects, and a 503 when
-storage is unreachable; legacy local-path docs stream from disk. The wiki
-editor builds the `== Источники ==` links **deterministically** (not
-LLM-generated) as `{docs_base_url}/documents/{doc_id}` pointing at this
-endpoint.
+Обслуживаем скачивания через **стабильный, защищённый авторизацией
+API-endpoint** `GET /api/v1/documents/{doc_id}`. Он ищет `documents.path` в
+Postgres и стримит файл из MinIO (`stat_object` + `stream_object`), с
+санитизированным по RFC 6266 `Content-Disposition`, 404 для отсутствующих
+документов/объектов и 503, когда хранилище недостижимо; legacy-документы с
+локальным путём стримятся с диска. Wiki-редактор строит ссылки `== Источники ==`
+**детерминированно** (не генерируются LLM) как
+`{docs_base_url}/documents/{doc_id}`, указывающие на этот endpoint.
 
-## Consequences
+## Последствия
 
-- One stable, permanent, auth-checked URL per document that is safe to embed in
-  wiki pages and search results; the storage backend stays hidden behind the API.
-- The API streams every download (no offloading to object-store CDNs / presigned
-  direct fetch); accepted for a controlled internal KB.
-- The source links are deterministic and outside the LLM-owned bot prose, so
-  they cannot be hallucinated or drift.
+- Один стабильный, постоянный, проверяемый авторизацией URL на документ,
+  безопасный для встраивания в wiki-страницы и результаты поиска; backend
+  хранилища остаётся скрытым за API.
+- API стримит каждое скачивание (без отгрузки на CDN object-store / presigned
+  прямую загрузку); принято для контролируемой внутренней KB.
+- Ссылки на источники детерминированны и вне прозы, которой владеет бот-LLM,
+  поэтому они не могут быть галлюцинированы или дрейфовать.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Presigned MinIO URLs** — expire, leak the backend, bypass app auth, and
-  change on regeneration → unstable for wiki embedding.
-- **LLM-generated source links** — risk hallucinated/incorrect URLs; the links
-  are built deterministically instead.
+- **Presigned URL MinIO** — истекают, раскрывают backend, обходят авторизацию
+  приложения и меняются при регенерации → нестабильны для встраивания в wiki.
+- **Ссылки на источники, сгенерированные LLM** — риск
+  галлюцинированных/некорректных URL; ссылки строятся детерминированно взамен.
 
-## References
+## Ссылки
 
 - `src/api/routes/documents.py`, `src/workflow/wiki/article.py` (`_fmt_sources`,
   `render_bot_section`), `src/storage/minio.py`, `src/storage/postgres.py`
-- CONCEPTS.md → "Source download & provenance links"
+- CONCEPTS.md → «Source download & provenance links»

@@ -1,44 +1,45 @@
-# ADR-0006: Milvus HNSW as the default chunk index
+# ADR-0006: Milvus HNSW как индекс чанков по умолчанию
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-llama-index's `MilvusVectorStore` defaults the chunk collection to
-`index_type="FLAT"` — exhaustive, exact brute-force search. FLAT is fine up to
-a few hundred thousand vectors but hits a latency cliff as the corpus grows
-toward 1M+, and the system targets 250k-scale knowledge bases.
+`MilvusVectorStore` из llama-index по умолчанию задаёт коллекции чанков
+`index_type="FLAT"` — исчерпывающий, точный полный перебор. FLAT нормален вплоть
+до нескольких сотен тысяч векторов, но упирается в обрыв латентности по мере
+роста корпуса к 1M+, а система нацелена на базы знаний масштаба 250k.
 
-## Decision
+## Решение
 
-Default the chunk collection's vector index to **HNSW** approximate-NN
+Задаём по умолчанию векторному индексу коллекции чанков **HNSW** приближённый-NN
 (`MilvusSettings.index_type="HNSW"`, `M=16`, `efConstruction=200`, `ef=64`).
-`index_type` takes effect only when the collection is (re)created — a fresh
-deploy or `overwrite=True` re-ingest — so an existing FLAT collection keeps FLAT
-until rebuilt. This is an **opt-in-by-rebuild** swap, never a silent in-place
-mutation; `MILVUS_INDEX_TYPE=FLAT` keeps exact search. A benchmark
-(`bench_flat_vs_hnsw`) measures the FLAT→HNSW latency speedup and HNSW recall
-against FLAT (the exact ground truth) at any target vector count.
+`index_type` вступает в силу только при (пере)создании коллекции — свежий деплой
+или повторный ingest с `overwrite=True` — поэтому существующая коллекция FLAT
+сохраняет FLAT до перестроения. Это замена **opt-in через перестроение**, никогда
+не молчаливая мутация на месте; `MILVUS_INDEX_TYPE=FLAT` сохраняет точный поиск.
+Бенчмарк (`bench_flat_vs_hnsw`) измеряет ускорение латентности FLAT→HNSW и recall
+HNSW против FLAT (точной эталонной истины) при любом целевом числе векторов.
 
-## Consequences
+## Последствия
 
-- Approximate search keeps query latency low at 250k+ vectors; tunable
-  recall/latency via `ef` (must be ≥ search `top_k`).
-- Recall is no longer exact — accepted as the cost of scale, and quantified by
-  the benchmark rather than assumed.
-- Existing FLAT collections require a rebuild to gain HNSW; operators can pin
-  FLAT for exactness.
+- Приближённый поиск держит латентность запросов низкой при 250k+ векторах;
+  настраиваемый recall/латентность через `ef` (должен быть ≥ search `top_k`).
+- Recall больше не точен — принято как цена масштаба и квантифицировано
+  бенчмарком, а не предполагается.
+- Существующие коллекции FLAT требуют перестроения, чтобы получить HNSW;
+  операторы могут закрепить FLAT ради точности.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Keep FLAT (the upstream default)** — exact but a latency cliff past ~1M
-  vectors; unworkable at target scale.
-- **IVF-family indexes** — viable, but HNSW gives strong recall/latency without
-  cluster-count tuning; chosen as the default with tunable build/search width.
+- **Оставить FLAT (значение по умолчанию вышестоящей библиотеки)** — точно, но
+  обрыв латентности после ~1M векторов; неработоспособно на целевом масштабе.
+- **Индексы семейства IVF** — жизнеспособны, но HNSW даёт сильный recall/латентность
+  без подбора числа кластеров; выбран как значение по умолчанию с настраиваемой
+  шириной построения/поиска.
 
-## References
+## Ссылки
 
 - `src/config.py` (`MilvusSettings`), `tests/eval/scale/bench_milvus.py`,
   `src/retrieval/vector_index.py`
-- `docs/SEARCH.md`; CONCEPTS.md → "Vector index at scale: FLAT vs HNSW"
+- `docs/SEARCH.md`; CONCEPTS.md → «Vector index at scale: FLAT vs HNSW»

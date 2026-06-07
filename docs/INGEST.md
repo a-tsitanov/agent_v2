@@ -1,15 +1,15 @@
-# Ingest pipeline
+# Конвейер инжеста
 
-How a document becomes searchable: the Temporal-orchestrated ingest flow, the blocks that run, the queues they run on, and how heavy state is passed between them.
+Как документ становится доступным для поиска: оркестрируемый Temporal поток инжеста, выполняемые блоки, очереди, на которых они работают, и способ передачи тяжёлого состояния между ними.
 
-> Diagrams: Mermaid (below, edit-as-text) + a rendered D2 overview at [`diagrams/ingest_flow.svg`](diagrams/ingest_flow.svg) (source [`diagrams/ingest_flow.d2`](diagrams/ingest_flow.d2)).
-> Queues reference: [`QUEUES.md`](QUEUES.md). Top-level architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+> Диаграммы: Mermaid (ниже, редактируется как текст) + отрендеренный обзор D2 в [`diagrams/ingest_flow.svg`](diagrams/ingest_flow.svg) (исходник [`diagrams/ingest_flow.d2`](diagrams/ingest_flow.d2)).
+> Справочник по очередям: [`QUEUES.md`](QUEUES.md). Архитектура верхнего уровня: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## TL;DR
+## Кратко
 
-`POST /ingest` uploads the file to **MinIO**, records a pending row in **Postgres**, snapshots the per-role model names, and starts the durable **`DocumentIngestWorkflow`** on the `kb-ingest` queue. The workflow runs a fixed sequence of activities, passing heavy state (parsed nodes, KG nodes, merged entities) between them as **MinIO blobs by URI** (claim-check) — only small contracts travel in Temporal payloads. The **vector half** (parse → embed → Milvus) and the **graph half** (extract KG → merge/ER → Neo4j) are separated so a slow/failed graph build degrades to `graph_status="vector_only"` instead of losing the whole ingest.
+`POST /ingest` загружает файл в **MinIO**, записывает строку в статусе pending в **Postgres**, делает снимок имён моделей по ролям и запускает долговечный воркфлоу **`DocumentIngestWorkflow`** на очереди `kb-ingest`. Воркфлоу выполняет фиксированную последовательность активностей, передавая тяжёлое состояние (распарсенные ноды, KG-ноды, объединённые сущности) между ними как **MinIO-блобы по URI** (claim-check) — в полезной нагрузке Temporal путешествуют только небольшие контракты. **Векторная половина** (parse → embed → Milvus) и **графовая половина** (extract KG → merge/ER → Neo4j) разделены, так что медленная или упавшая сборка графа деградирует до `graph_status="vector_only"` вместо потери всего инжеста.
 
-## Flow (high level)
+## Поток (верхний уровень)
 
 ```mermaid
 flowchart TD
@@ -40,7 +40,7 @@ flowchart TD
     S3 --> S9
 ```
 
-## Sequence (stores touched)
+## Последовательность (задействованные хранилища)
 
 ```mermaid
 sequenceDiagram
@@ -76,57 +76,57 @@ sequenceDiagram
     T->>MinIO: delete staging prefix
 ```
 
-## Stages
+## Стадии
 
-| # | Activity | Queue | What it does | In → Out | File |
+| # | Активность | Очередь | Что делает | Вход → Выход | Файл |
 |---|---|---|---|---|---|
-| 1 | `fetch_source` | kb-ingest | Idempotent download from MinIO (caches locally); Postgres → `processing` | `IngestParams` → `Ctx` | `activities/fetch_source.py` |
-| 2 | `parse_and_chunk` | kb-ingest | Read → split (`chunk_size`/`overlap`) → **identifier canonicalization** (phones→E.164, INN/OGRN…) → optional translation; scrub translation metadata; pickle nodes | `Ctx` → `Parsed` (`nodes_uri`) | `activities/parse_and_chunk.py` |
-| 3 | `index_vector` | kb-ingest | Strip Milvus-oversize metadata → embed → insert into **Milvus**; restore metadata on in-memory nodes | `Parsed` → `Indexed` | `activities/index_vector.py` |
-| 4 | `inject_canonical` | kb-ingest | Upsert one `:__Entity__` per `(type, canonical)` identifier into **Neo4j** BEFORE LLM extraction (so the LLM's verbatim mentions still dedup) | `Parsed` → `Injected` | `activities/inject_canonical.py` |
-| 5 | `extract_kg` | **kb-ingest-llm** | **LightRAG extractor**: one LLM call per chunk → entities + relations on chunk metadata; summarise stats | `Parsed` → `KGExtracted` (`kg.pkl`) | `activities/extract_kg.py` |
-| 6a | `merge_and_resolve` | **kb-ingest-merge** | Cross-chunk **LightRAG merge** → **phone consolidation** → **ER** (`resolve_entities`: LLM judge + verdict cache + native-vector kNN/window) | `KGExtracted` → `Merged` (`merged.pkl`) | `activities/merge_and_resolve.py` |
-| 6b | `build_property_graph` | kb-ingest-merge | Strip Neo4j-unsafe metadata → build PG index (Chunk + `MENTIONS` + entities/relations) → upsert to **Neo4j** → ensure indexes | `Merged` → `GraphBuilt` | `activities/build_property_graph.py` |
-| 7 | `mark_entities_dirty` | kb-ingest | Best-effort: flag merged entity names for the continuous wiki editor (Project A) | `MarkDirtyIn` → count | `activities/mark_dirty.py` |
-| 8 | `push_wikibase` | kb-ingest | Best-effort (only if graph `completed`): project entities/relations into the local Wikibase anchor | `Merged` → `WikibasePushed` | `activities/push_wikibase.py` |
-| 9 | `finalize` | kb-ingest | Postgres final status; delete staging prefix + local dir; write per-activity `ingest_metrics` (durations + per-role model tags) | `FinalizeIn` → `IngestResult` | `activities/finalize.py` |
-| — | `mark_failed` | kb-ingest | On vector-half failure: status `failed`, clean up, re-raise | `MarkFailedIn` | `activities/finalize.py` |
+| 1 | `fetch_source` | kb-ingest | Идемпотентная загрузка из MinIO (кэширует локально); Postgres → `processing` | `IngestParams` → `Ctx` | `activities/fetch_source.py` |
+| 2 | `parse_and_chunk` | kb-ingest | Чтение → разбиение (`chunk_size`/`overlap`) → **канонизация идентификаторов** (телефоны→E.164, ИНН/ОГРН…) → опциональный перевод; вычистка метаданных перевода; pickle нод | `Ctx` → `Parsed` (`nodes_uri`) | `activities/parse_and_chunk.py` |
+| 3 | `index_vector` | kb-ingest | Срезает метаданные сверх лимита Milvus → embed → вставка в **Milvus**; восстанавливает метаданные на нодах в памяти | `Parsed` → `Indexed` | `activities/index_vector.py` |
+| 4 | `inject_canonical` | kb-ingest | Upsert одной `:__Entity__` на каждый `(type, canonical)` идентификатор в **Neo4j** ДО LLM-экстракции (чтобы дословные упоминания от LLM всё равно дедуплицировались) | `Parsed` → `Injected` | `activities/inject_canonical.py` |
+| 5 | `extract_kg` | **kb-ingest-llm** | **Экстрактор LightRAG**: один LLM-вызов на чанк → сущности + связи в метаданных чанка; сводит статистику | `Parsed` → `KGExtracted` (`kg.pkl`) | `activities/extract_kg.py` |
+| 6a | `merge_and_resolve` | **kb-ingest-merge** | Кросс-чанковое **слияние LightRAG** → **консолидация телефонов** → **ER** (`resolve_entities`: LLM-судья + кэш вердиктов + native-vector kNN/окно) | `KGExtracted` → `Merged` (`merged.pkl`) | `activities/merge_and_resolve.py` |
+| 6b | `build_property_graph` | kb-ingest-merge | Срезает небезопасные для Neo4j метаданные → строит PG-индекс (Chunk + `MENTIONS` + сущности/связи) → upsert в **Neo4j** → гарантирует индексы | `Merged` → `GraphBuilt` | `activities/build_property_graph.py` |
+| 7 | `mark_entities_dirty` | kb-ingest | Best-effort: помечает имена объединённых сущностей для непрерывного wiki-редактора (Project A) | `MarkDirtyIn` → count | `activities/mark_dirty.py` |
+| 8 | `push_wikibase` | kb-ingest | Best-effort (только если граф `completed`): проецирует сущности/связи в локальный якорь Wikibase | `Merged` → `WikibasePushed` | `activities/push_wikibase.py` |
+| 9 | `finalize` | kb-ingest | Финальный статус в Postgres; удаление staging-префикса + локальной директории; запись `ingest_metrics` по каждой активности (длительности + теги моделей по ролям) | `FinalizeIn` → `IngestResult` | `activities/finalize.py` |
+| — | `mark_failed` | kb-ingest | При падении векторной половины: статус `failed`, очистка, повторный проброс | `MarkFailedIn` | `activities/finalize.py` |
 
-`6a`/`6b` run inside the **`GraphBuildWorkflow` child** (`graph_build.py`) so the slow LLM graph work has its own retry/timeout and metrics, and can be cancelled without restarting the vector half.
+`6a`/`6b` выполняются внутри **дочернего воркфлоу `GraphBuildWorkflow`** (`graph_build.py`), так что медленная LLM-работа по графу имеет свои собственные retry/timeout и метрики и может быть отменена без перезапуска векторной половины.
 
-## Two halves + degradation
+## Две половины + деградация
 
-- **Vector half** (1–3): fetch → parse/chunk → embed → Milvus. If it fails/times out → `mark_failed`, ingest fails.
-- **Graph half** (5–6): extract KG → merge/ER → Neo4j, inside the child workflow. If it raises (`ActivityError`/`ChildWorkflowError`) → caught → **`graph_status = "vector_only"`**: the document is still vector-searchable, the graph is just skipped. `push_wikibase` is then skipped (gated on `completed`).
+- **Векторная половина** (1–3): fetch → parse/chunk → embed → Milvus. Если падает/таймаутится → `mark_failed`, инжест проваливается.
+- **Графовая половина** (5–6): extract KG → merge/ER → Neo4j, внутри дочернего воркфлоу. Если поднимается исключение (`ActivityError`/`ChildWorkflowError`) → перехватывается → **`graph_status = "vector_only"`**: документ по-прежнему доступен для векторного поиска, граф просто пропускается. `push_wikibase` тогда тоже пропускается (он завязан на `completed`).
 
 ## Claim-check staging (MinIO)
 
-Heavy state never travels in Temporal payloads (2 MB limit) — it's pickled to MinIO and passed by URI:
+Тяжёлое состояние никогда не путешествует в полезной нагрузке Temporal (лимит 2 МБ) — оно сериализуется в MinIO и передаётся по URI:
 
-| Blob | Produced by | Consumed by |
+| Блоб | Производит | Потребляет |
 |---|---|---|
 | `{run_id}/parsed.pkl` (list[BaseNode]) | parse_and_chunk | index_vector, inject_canonical, extract_kg |
 | `{run_id}/kg.pkl` (nodes + KG metadata) | extract_kg | merge_and_resolve |
 | `{run_id}/merged.pkl` (entities, relations, nodes) | merge_and_resolve | build_property_graph, push_wikibase |
 
-`finalize` (or `mark_failed`) deletes the `{run_id}/` prefix; `cleanup_orphans()` sweeps blobs from crashed runs >24h old. (`workflow/staging.py`)
+`finalize` (или `mark_failed`) удаляет префикс `{run_id}/`; `cleanup_orphans()` подметает блобы упавших прогонов старше 24 ч. (`workflow/staging.py`)
 
-## Queues, workers, LLM concurrency
+## Очереди, воркеры, конкурентность LLM
 
-Separate queues keep an LLM burst from starving the Neo4j-write/merge work (head-of-line blocking):
+Раздельные очереди не дают всплеску LLM заморить голодом работу по записи в Neo4j/слиянию (блокировка головы очереди):
 
-| Queue | Activity concurrency | Runs |
+| Очередь | Конкурентность активностей | Что выполняет |
 |---|---|---|
-| `kb-ingest` | 4 | workflow + IO activities (fetch, parse, index_vector, inject, mark_dirty, push_wikibase, finalize) |
-| `kb-ingest-llm` | 18 | `extract_kg` only |
+| `kb-ingest` | 4 | воркфлоу + IO-активности (fetch, parse, index_vector, inject, mark_dirty, push_wikibase, finalize) |
+| `kb-ingest-llm` | 18 | только `extract_kg` |
 | `kb-ingest-merge` | 14 | `GraphBuildWorkflow` + merge_and_resolve + build_property_graph |
 
-On top of Temporal's per-queue caps, a **per-process `LLMPool`** (`retrieval/llm_pool.py`) governs actual LLM concurrency with hierarchical gates: a **tier** ceiling (small=GPU capacity, large=API budget) and **per-role lanes** (extraction/judge/…), acquired lane-first then tier-global. So Temporal may schedule 18 `extract_kg`, but the pool admits only as many concurrent LLM calls as the GPU can serve. See [`QUEUES.md`](QUEUES.md) + [`runbook/multimodel.md`](runbook/multimodel.md).
+Поверх покраздельных лимитов Temporal **пер-процессный `LLMPool`** (`retrieval/llm_pool.py`) управляет фактической конкурентностью LLM иерархическими гейтами: потолок **уровня** (small=ёмкость GPU, large=бюджет API) и **полосы по ролям** (extraction/judge/…), захватываемые сначала по полосе, затем глобально по уровню. Так что Temporal может запланировать 18 `extract_kg`, но пул допускает лишь столько одновременных LLM-вызовов, сколько способен обслужить GPU. См. [`QUEUES.md`](QUEUES.md) + [`runbook/multimodel.md`](runbook/multimodel.md).
 
-## Identifier canonicalization (deterministic, pre-LLM)
+## Канонизация идентификаторов (детерминированная, до LLM)
 
-24 identifier types (phones→E.164, INN/OGRN with checksums, email, URLs, postal addresses via libpostal, dates, amounts, …) are extracted **deterministically** in `parse_and_chunk` (no LLM), stored on chunk metadata, AND appended to the chunk text so the LLM sees canonical forms in-band. `inject_canonical` then upserts them as `:__Entity__` nodes **before** `extract_kg`, so even if the LLM extracts a verbatim phone string, it dedups onto the canonical node. (`ingestion/identifiers.py`, `ingestion/identifier_transform.py`)
+24 типа идентификаторов (телефоны→E.164, ИНН/ОГРН с контрольными суммами, email, URL, почтовые адреса через libpostal, даты, суммы, …) извлекаются **детерминированно** в `parse_and_chunk` (без LLM), хранятся в метаданных чанка И дописываются в текст чанка, чтобы LLM видела канонические формы в потоке. Затем `inject_canonical` делает upsert их как нод `:__Entity__` **перед** `extract_kg`, так что даже если LLM извлечёт дословную строку телефона, она дедуплицируется на каноническую ноду. (`ingestion/identifiers.py`, `ingestion/identifier_transform.py`)
 
-## Multimodel snapshots
+## Снимки мультимодели
 
-The per-role model names (`extraction`/`judge`/`search`) are snapshotted at `POST /ingest` time and threaded `IngestParams → FinalizeIn`, so `ingest_metrics` records the exact model that ran each activity even if models are swapped between submissions — no rebuild needed. (`api/routes/ingest.py`, `activities/finalize.py`; runbook [`runbook/multimodel.md`](runbook/multimodel.md))
+Имена моделей по ролям (`extraction`/`judge`/`search`) снимаются в момент `POST /ingest` и протягиваются `IngestParams → FinalizeIn`, так что `ingest_metrics` записывает точную модель, выполнявшую каждую активность, даже если модели меняются между сабмитами — пересборка не нужна. (`api/routes/ingest.py`, `activities/finalize.py`; runbook [`runbook/multimodel.md`](runbook/multimodel.md))

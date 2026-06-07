@@ -1,50 +1,53 @@
-# ADR-0005: Deterministic identifier canonicalization before LLM extraction
+# ADR-0005: Детерминированная канонизация идентификаторов до извлечения LLM
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Structured identifiers (phones, emails, INN/OGRN/BIC/SNILS, IBAN, VIN, IMEI,
-URLs, social handles, etc.) appear in many surface forms — the same phone as
-`+7 (495) 123-45-67` and `8 495 1234567`. If the LLM extracts each verbatim,
-Neo4j gets two separate nodes and graph dedup breaks. The graph keys entities
-by name, so identical real-world identifiers must collapse to one canonical
-name regardless of source formatting.
+Структурированные идентификаторы (телефоны, email, ИНН/ОГРН/БИК/СНИЛС, IBAN, VIN,
+IMEI, URL, social handles и т. д.) встречаются во множестве поверхностных форм —
+один и тот же телефон как `+7 (495) 123-45-67` и `8 495 1234567`. Если LLM
+извлекает каждый дословно, Neo4j получает два отдельных узла, и графовый dedup
+ломается. Граф ключует сущности по имени, поэтому идентичные реальные
+идентификаторы должны схлопываться в одно каноническое имя независимо от
+форматирования источника.
 
-## Decision
+## Решение
 
-Run a **deterministic, pre-LLM canonicalization stage**: regex/lib-based
-detectors (`phonenumbers`, `dateparser`, optional libpostal, plus checksum
-validators for INN/OGRN/SNILS/IBAN/IMEI/VIN/credit-card) extract ~24 identifier
-types, each normalized to a canonical form (E.164, lowercased email, etc.).
-Overlapping matches are resolved by a priority table (specialised > generic).
-The transform then (1) upserts one canonical `EntityNode` per
-`(entity_type, canonical)` into Neo4j **before** extraction
-(`inject_canonical` activity), and (2) appends a
-`Канонические идентификаторы:` block to the chunk text so the LLM is taught to
-use the canonical form in `entity_name`. These types are excluded from Entity
-Resolution (ADR-0007).
+Запускаем **детерминированный этап канонизации до LLM**: детекторы на
+regex/библиотеках (`phonenumbers`, `dateparser`, опционально libpostal, плюс
+валидаторы контрольных сумм для ИНН/ОГРН/СНИЛС/IBAN/IMEI/VIN/кредитных карт)
+извлекают ~24 типа идентификаторов, каждый нормализуется в каноническую форму
+(E.164, email в нижнем регистре и т. д.). Перекрывающиеся совпадения разрешаются
+таблицей приоритетов (специализированный > общий). Затем трансформ (1) делает
+upsert одного канонического `EntityNode` на `(entity_type, canonical)` в Neo4j
+**до** извлечения (activity `inject_canonical`), и (2) дописывает блок
+`Канонические идентификаторы:` в текст чанка, чтобы LLM научился использовать
+каноническую форму в `entity_name`. Эти типы исключаются из Entity Resolution
+(ADR-0007).
 
-## Consequences
+## Последствия
 
-- Identical identifiers collapse to one node deterministically, cheaply, and
-  without an LLM call; checksums reject false positives (random digit runs).
-- The canonical node is guaranteed to exist before LLM relationship extraction.
-- Commits us to maintaining per-type detectors/validators and the priority
-  table; libpostal is optional with a rule-based fallback.
+- Идентичные идентификаторы схлопываются в один узел детерминированно, дёшево и
+  без вызова LLM; контрольные суммы отсеивают ложные срабатывания (случайные
+  последовательности цифр).
+- Канонический узел гарантированно существует до извлечения отношений LLM.
+- Обязывает нас поддерживать детекторы/валидаторы по типам и таблицу приоритетов;
+  libpostal опционален с резервным механизмом на правилах.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Let the LLM extract identifiers verbatim** — produces duplicate nodes,
-  non-deterministic forms, and costs tokens for work a regex+checksum does
-  exactly.
-- **Post-hoc dedup of identifiers in ER** — risks merging two genuinely
-  different identifiers that embed close; deterministic canon is safer.
+- **Позволить LLM извлекать идентификаторы дословно** — порождает дублирующиеся
+  узлы, недетерминированные формы и тратит токены на работу, которую
+  regex+контрольная сумма делают точно.
+- **Post-hoc dedup идентификаторов в ER** — рискует слить два действительно
+  разных идентификатора, которые близко эмбедятся; детерминированный каноник
+  безопаснее.
 
-## References
+## Ссылки
 
 - `src/ingestion/identifiers.py`, `src/ingestion/identifier_transform.py`,
-  `src/workflow/activities/inject_canonical.py`; `_DETERMINISTIC_LABELS` in
+  `src/workflow/activities/inject_canonical.py`; `_DETERMINISTIC_LABELS` в
   `src/graph/entity_resolution.py`
-- `docs/INGEST.md`; CONCEPTS.md → "Identifier canonicalization"
+- `docs/INGEST.md`; CONCEPTS.md → «Identifier canonicalization»

@@ -1,839 +1,854 @@
-# CONCEPTS — every technique used in kb-llamaindex, from scratch
+# CONCEPTS — все техники, используемые в kb-llamaindex, с нуля
 
-This is the educational reference for the service: **what** each technique is
-(assuming no prior knowledge), **how** the algorithm works, **why** we chose it,
-and **where** it lives in our code. It is the companion to the decision log in
-[`adr/`](adr/README.md) (the *why* in record form) and the operational docs
-([`ARCHITECTURE.md`](ARCHITECTURE.md), [`INGEST.md`](INGEST.md),
-[`SEARCH.md`](SEARCH.md), [`QUEUES.md`](QUEUES.md), [`MODELS.md`](MODELS.md)).
+Это образовательный справочник по сервису: **что** представляет собой каждая техника (не предполагая никаких предварительных знаний), **как** работает алгоритм, **почему** мы её выбрали и **где** она живёт в нашем коде. Это спутник журнала решений в [`adr/`](adr/README.md) (*почему* в форме записей) и операционных документов ([`ARCHITECTURE.md`](ARCHITECTURE.md), [`INGEST.md`](INGEST.md), [`SEARCH.md`](SEARCH.md), [`QUEUES.md`](QUEUES.md), [`MODELS.md`](MODELS.md)).
 
-> If you only read one doc to understand the moving parts of this service —
-> from "what is the Leiden algorithm" to "why entity resolution uses an LLM
-> judge" — read this one.
+> Если вы прочитаете только один документ, чтобы понять движущиеся части этого сервиса —
+> от «что такое алгоритм Leiden» до «почему entity resolution использует LLM-судью» —
+> прочитайте этот.
 
-> Verification note: there is no live Neo4j/GDS in CI, so GDS/Leiden Cypher is
-> documented from source + tests, not from execution (flagged inline where it
-> matters).
+> Замечание о верификации: в CI нет живого Neo4j/GDS, поэтому GDS/Leiden Cypher
+> документирован по исходному коду + тестам, а не по выполнению (отмечено по месту там,
+> где это важно).
 
 ---
 
-## Table of contents
+## Содержание
 
-**Part 1 — Foundations & Ingestion**
+**Часть 1 — Основы и инжест**
 
-- [1. Durable execution & Temporal](#1-durable-execution--temporal)
-- [2. The claim-check pattern](#2-the-claim-check-pattern)
-- [3. Task-queue isolation & head-of-line blocking](#3-task-queue-isolation--head-of-line-blocking)
-- [4. LLM concurrency pooling (LLMPool)](#4-llm-concurrency-pooling-llmpool)
-- [5. Document parsing & chunking](#5-document-parsing--chunking)
-- [6. Deterministic identifier canonicalization (pre-LLM)](#6-deterministic-identifier-canonicalization-pre-llm)
-- [7. Knowledge-graph extraction (LightRAG-style)](#7-knowledge-graph-extraction-lightrag-style)
-- [8. Text embeddings](#8-text-embeddings)
+- [1. Надёжное исполнение и Temporal](#1-надёжное-исполнение-и-temporal)
+- [2. Паттерн claim-check](#2-паттерн-claim-check)
+- [3. Изоляция очередей задач и блокировка головы очереди](#3-изоляция-очередей-задач-и-блокировка-головы-очереди)
+- [4. Пулинг LLM-конкурентности (LLMPool)](#4-пулинг-llm-конкурентности-llmpool)
+- [5. Парсинг и разбиение документов на чанки](#5-парсинг-и-разбиение-документов-на-чанки)
+- [6. Детерминированная канонизация идентификаторов (до LLM)](#6-детерминированная-канонизация-идентификаторов-до-llm)
+- [7. Извлечение графа знаний (в стиле LightRAG)](#7-извлечение-графа-знаний-в-стиле-lightrag)
+- [8. Текстовые эмбеддинги](#8-текстовые-эмбеддинги)
 
-**Part 2 — Vectors, Graph & Entity Resolution**
+**Часть 2 — Векторы, граф и Entity Resolution**
 
-- [Vector search & approximate nearest neighbour (ANN)](#vector-search--approximate-nearest-neighbour-ann)
-- [FLAT vs HNSW (Milvus)](#flat-vs-hnsw-milvus)
-- [Neo4j as a property graph + its indexes](#neo4j-as-a-property-graph--its-indexes)
+- [Векторный поиск и приближённый поиск ближайших соседей (ANN)](#векторный-поиск-и-приближённый-поиск-ближайших-соседей-ann)
+- [FLAT против HNSW (Milvus)](#flat-против-hnsw-milvus)
+- [Neo4j как property-граф и его индексы](#neo4j-как-property-граф-и-его-индексы)
 - [Entity Resolution (ER)](#entity-resolution-er)
-- [Community detection & the Leiden algorithm](#community-detection--the-leiden-algorithm)
-- [Community reports (map-reduce summarization)](#community-reports-map-reduce-summarization)
+- [Обнаружение сообществ и алгоритм Leiden](#обнаружение-сообществ-и-алгоритм-leiden)
+- [Отчёты по сообществам (суммаризация map-reduce)](#отчёты-по-сообществам-суммаризация-map-reduce)
 
-**Part 3 — Search & Retrieval**
+**Часть 3 — Поиск и извлечение**
 
-- [RAG (Retrieval-Augmented Generation) fundamentals](#rag-retrieval-augmented-generation-fundamentals)
-- [Local search — vector retrieval + graph expansion](#local-search--vector-retrieval--graph-expansion)
-- [Global search — community map-reduce](#global-search--community-map-reduce)
-- [DRIFT search — combine local + global](#drift-search--combine-local--global)
-- [Auto mode & query routing](#auto-mode--query-routing)
-- [Plan-execute decomposition & the orchestrator](#plan-execute-decomposition--the-orchestrator)
-- [Coverage check — bounded refinement loop](#coverage-check--bounded-refinement-loop)
-- [Conversation-history contextualization](#conversation-history-contextualization)
-- [Reranking](#reranking)
+- [Основы RAG (Retrieval-Augmented Generation)](#основы-rag-retrieval-augmented-generation)
+- [Локальный поиск — векторное извлечение + расширение по графу](#локальный-поиск--векторное-извлечение--расширение-по-графу)
+- [Глобальный поиск — map-reduce по сообществам](#глобальный-поиск--map-reduce-по-сообществам)
+- [DRIFT-поиск — комбинация локального и глобального](#drift-поиск--комбинация-локального-и-глобального)
+- [Авторежим и маршрутизация запросов](#авторежим-и-маршрутизация-запросов)
+- [Декомпозиция plan-execute и оркестратор](#декомпозиция-plan-execute-и-оркестратор)
+- [Проверка покрытия — ограниченный цикл доработки](#проверка-покрытия--ограниченный-цикл-доработки)
+- [Контекстуализация истории диалога](#контекстуализация-истории-диалога)
+- [Реранкинг](#реранкинг)
 
-**Part 4 — Knowledge Anchor, Outputs, Models & Ops**
+**Часть 4 — Якорь знаний, выходы, модели и эксплуатация**
 
-- [The Wikibase knowledge anchor](#the-wikibase-knowledge-anchor)
-- [The continuous wiki editor](#the-continuous-wiki-editor)
-- [SPARQL & WDQS (briefly)](#sparql--wdqs-briefly)
-- [Multi-model / role-based model selection](#multi-model--role-based-model-selection)
-- [LiteLLM gateway](#litellm-gateway)
-- [Observability](#observability)
-- [MCP (Model Context Protocol) surface](#mcp-model-context-protocol-surface)
-
----
-
-# Part 1 — Foundations & Ingestion
-
-A from-scratch reference for the techniques that turn a raw uploaded document into searchable vectors and a knowledge graph, and for the durable-execution machinery that runs that pipeline reliably. Every claim below is grounded in the actual code paths cited under **In our code**.
+- [Якорь знаний Wikibase](#якорь-знаний-wikibase)
+- [Непрерывный wiki-редактор](#непрерывный-wiki-редактор)
+- [SPARQL и WDQS (вкратце)](#sparql-и-wdqs-вкратце)
+- [Мультимодельный / ролевой выбор модели](#мультимодельный--ролевой-выбор-модели)
+- [Шлюз LiteLLM](#шлюз-litellm)
+- [Наблюдаемость](#наблюдаемость)
+- [Поверхность MCP (Model Context Protocol)](#поверхность-mcp-model-context-protocol)
 
 ---
 
-## 1. Durable execution & Temporal
+# Часть 1 — Основы и инжест
 
-**What it is.** A normal program lives only in process memory: if the machine crashes mid-way through a long job (download → parse → embed → call an LLM → write a graph), everything done so far is lost and you start over. *Durable execution* is a different model. You write your business logic as an ordinary function, but a server (here, **Temporal**) records every step it takes to a database. If the worker process dies, Temporal re-runs the function on another worker and *replays* the recorded history, so the function resumes exactly where it left off — already-completed steps are not re-executed, their recorded results are handed back instantly. The job survives crashes, deploys, and network blips without you writing any checkpointing code.
-
-**How it works.** Temporal splits your code into two kinds of building blocks:
-
-- A **Workflow** is the orchestration function. It decides *what* happens and *in what order*. It must be **deterministic**: given the same recorded history, re-running it must make the same decisions in the same order. That is the price of replay — Temporal re-executes the workflow body to rebuild in-memory state, and if the code branched on something that changed between runs (the wall clock, a random number, an env var that was edited), the replay would diverge from history and Temporal aborts with a non-determinism error.
-- An **Activity** is a single unit of *real* side-effecting work (download a file, call the LLM, write to Neo4j). Activities are allowed to be non-deterministic and to fail; Temporal records only their *inputs and final result*, not their internals. The workflow calls an activity, Temporal schedules it, runs it on a worker, and persists the result to history.
-
-Workers poll a named **task queue** for work. Each activity call carries timeouts and a **retry policy**. Two timeouts matter most:
-- `start_to_close_timeout` — the wall-clock budget for *one attempt*.
-- `schedule_to_close_timeout` — the *total* budget across all attempts plus the waits between them. This is the hard stop.
-
-A tiny example, straight from our ingest workflow: `fetch_source` is called with `start_to_close_timeout=5min`, `schedule_to_close_timeout=1h`, and the `_FAST_FOREVER` retry policy (`initial_interval=1s`, `backoff_coefficient=2.0`, `maximum_interval=60s`, `maximum_attempts=0`). `maximum_attempts=0` means *retry forever* — 1s, 2s, 4s, … capped at 60s between tries — until the 1h `schedule_to_close` ceiling fires and Temporal finally fails the activity. For LLM-heavy work we use `_HEAVY_FOREVER` (start at 2min, cap at 30min). Permanent input problems (corrupt file, schema violation) are meant to be raised as `ApplicationError(non_retryable=True)` from inside the activity so they bypass the retry loop instead of burning the whole budget.
-
-**Determinism / replay-safety in practice.** The cardinal rule is: *never read mutable settings or the environment inside a workflow body.* Instead, resolve them once when the workflow is *submitted* and pass them in as input. Our ingest route does exactly this: at submit time it snapshots the current model config — `model = cfg.effective_base`, `extraction_model = cfg.model_for("extraction")`, etc. — and packs them into `IngestParams`. The workflow then carries those frozen strings end-to-end (into `FinalizeIn`, into the analytics rows) rather than re-reading `settings` mid-run. If it re-read env on replay after an operator changed a model name, history and replay would disagree. The same pattern appears on the search side: `OrchestratorParams` resolves `coverage_check_enabled`, `max_coverage_rounds`, and `contextualize_enabled` from `AgentSettings` at submit time precisely so "the workflow never reads env at runtime (replay-safe)".
-
-Note one subtlety: the workflow *may* read `settings` for values that are stable for the worker's lifetime — our `DocumentIngestWorkflow` references `settings.temporal.llm_task_queue` and `settings.wiki.enabled` to pick a queue / gate a branch. These are constants baked into the deployed image and the same on every replay, so they don't break determinism. The dangerous case is anything that can *change between the original run and a later replay*.
-
-**Child workflows.** A workflow can start another workflow as a **child** and await it. We split the heavy graph half of ingest into a child, `GraphBuildWorkflow`, started by `DocumentIngestWorkflow` via `execute_child_workflow(GraphBuildWorkflow.run, kg, id=f"graph-{doc_id}", task_queue=merge_task_queue, parent_close_policy=REQUEST_CANCEL)`. The wins (documented in the child's module docstring): independent retry/`schedule_to_close` ceilings (a stuck merge can be cancelled without restarting the whole document), independent visibility in the Temporal UI (the parent `ingest-{doc_id}` finishes in seconds for the vector half while the child `graph-{doc_id}` does the slow LLM work), and per-stage metrics in the child's own history. The parent awaits the child; a failure inside the child surfaces as `ChildWorkflowError`, which the parent catches alongside `ActivityError` to downgrade `graph_status` to `"vector_only"` instead of failing the whole document.
-
-**Why we use it / alternatives.** The alternative is a hand-rolled job system: a task table in Postgres, a cron/worker loop, manual status columns, and bespoke retry/backoff logic for every step — all of which you must keep crash-consistent yourself. Temporal gives crash-consistency, retries, timeouts, backoff, and a visibility UI for free, at the cost of the determinism discipline above and a Temporal server to operate. For a pipeline with an expensive, multi-minute LLM stage that we must never silently re-run or lose, that trade is strongly worth it.
-
-**In our code.**
-- `src/workflow/document_ingest.py` — the parent workflow, retry profiles (`_FAST_FOREVER`, `_HEAVY_FOREVER`), per-activity timeouts, and the inner/outer `try/except` that maps failures to `vector_only` / `mark_failed`.
-- `src/workflow/graph_build.py` — the `GraphBuildWorkflow` child (merge + property-graph build).
-- `src/workflow/worker.py` — the worker process hosting all the Worker pools.
-- `src/workflow/client.py` — the process-wide Temporal client singleton (note: it mandates the `pydantic_data_converter`, since our payloads are Pydantic v2 models).
-- `src/api/routes/ingest.py` (≈lines 127–159) — resolve-at-submit-time of model snapshots into `IngestParams`.
+Справочник с нуля по техникам, которые превращают сырой загруженный документ в поисковые векторы и граф знаний, а также по машинерии надёжного исполнения, которая запускает этот конвейер надёжно. Каждое утверждение ниже обосновано фактическими путями в коде, процитированными в разделе **В нашем коде**.
 
 ---
 
-## 2. The claim-check pattern
+## 1. Надёжное исполнение и Temporal
 
-**What it is.** Temporal records every workflow input and activity result into its event-history database, and each such payload is capped at **2 MB**. But our pipeline passes around big objects — a list of parsed LlamaIndex `BaseNode` chunks, KG entity/relation lists, merged entity sets — that blow past 2 MB. The *claim-check pattern* (a classic messaging pattern) solves this: instead of putting the heavy payload on the wire, you write it to a side store, get back a small *ticket* (a URI), and pass only the ticket. The next stage redeems the ticket to fetch the real data. The "check" is like a coat-check tag: small, but it points at the heavy thing.
+**Что это.** Обычная программа живёт только в памяти процесса: если машина падает посреди длинной задачи (скачать → распарсить → эмбеддинг → вызвать LLM → записать граф), всё сделанное до этого теряется, и вы начинаете заново. *Надёжное исполнение* (durable execution) — это другая модель. Вы пишете бизнес-логику как обычную функцию, но сервер (здесь — **Temporal**) записывает каждый сделанный ею шаг в базу данных. Если процесс воркера умирает, Temporal заново запускает функцию на другом воркере и *воспроизводит* записанную историю, так что функция продолжается ровно с того места, где остановилась — уже завершённые шаги не выполняются повторно, их записанные результаты возвращаются мгновенно. Задача переживает падения, деплои и сетевые сбои без того, чтобы вы писали какой-либо код чекпойнтинга.
 
-**How it works.** Our side store is **MinIO** (S3-compatible object storage). The `StagingStore` wrapper does the two operations:
-- `write_pickle(run_id, stage, obj)` — `pickle.dumps` the object and `put_object` it to MinIO under the key `{workflow_run_id}/{stage}.pkl`, returning the URI `s3://{bucket}/{run_id}/{stage}.pkl`.
-- `read_pickle(uri)` — the reverse: parse the URI, `get_object`, `pickle.loads`.
+**Как это работает.** Temporal делит ваш код на два вида строительных блоков:
 
-So a stage activity reads its input blob, does work, writes its output blob, and returns a *contract* carrying only the new URI plus small counters. Concretely: `parse_and_chunk` pickles the node list to `{run_id}/parsed.pkl` and returns `Parsed(nodes_uri=..., chunk_count=...)`; `extract_kg` reads that blob, runs extraction, writes `{run_id}/kg.pkl`, and returns `KGExtracted(nodes_with_kg_uri=...)`. The `*_uri` fields on the contracts in `contracts.py` (`Parsed.nodes_uri`, `KGExtracted.nodes_with_kg_uri`, `Merged.merged_entities_uri`) are exactly these claim-check tickets — the file header states it outright: "Heavy state (list[BaseNode], EntityNode lists) NEVER travels in payloads — it is pickled to MinIO and referenced by URI."
+- **Workflow** — это оркестрирующая функция. Она решает, *что* происходит и *в каком порядке*. Она должна быть **детерминированной**: при одной и той же записанной истории повторный запуск должен принимать те же решения в том же порядке. Это цена воспроизведения — Temporal заново выполняет тело workflow, чтобы восстановить состояние в памяти, и если код ветвился по чему-то, что изменилось между запусками (настенные часы, случайное число, переменная окружения, которую отредактировали), воспроизведение разойдётся с историей, и Temporal прервётся с ошибкой недетерминизма.
+- **Activity** — это единица *реальной* работы с побочными эффектами (скачать файл, вызвать LLM, записать в Neo4j). Activity разрешено быть недетерминированными и падать; Temporal записывает только их *входы и финальный результат*, а не внутренности. Workflow вызывает activity, Temporal планирует её, запускает на воркере и сохраняет результат в историю.
 
-Cleanup is keyed on the run prefix: at end of workflow, `finalize` (and the failure path's `mark_failed`) call `delete_prefix(run_id)` to wipe the whole `{run_id}/` folder. A janitor (`cleanup_orphans`) sweeps prefixes whose newest blob is older than a threshold — those belong to workflows that died before `finalize`/`mark_failed` could run (worker OOM, cancelled run).
+Воркеры опрашивают именованную **очередь задач** (task queue) на наличие работы. Каждый вызов activity несёт таймауты и **политику ретраев**. Два таймаута важнее всего:
+- `start_to_close_timeout` — бюджет настенного времени на *одну попытку*.
+- `schedule_to_close_timeout` — *суммарный* бюджет по всем попыткам плюс ожидания между ними. Это жёсткий стоп.
 
-Pickle is acceptable here for the three reasons the module spells out: producer and consumer share the same Python image, blobs live only for the duration of one workflow run, and the on-disk format is never read by anything outside this package.
+Крошечный пример прямо из нашего workflow инжеста: `fetch_source` вызывается с `start_to_close_timeout=5min`, `schedule_to_close_timeout=1h` и политикой ретраев `_FAST_FOREVER` (`initial_interval=1s`, `backoff_coefficient=2.0`, `maximum_interval=60s`, `maximum_attempts=0`). `maximum_attempts=0` означает *ретраить вечно* — 1с, 2с, 4с, …, с потолком 60с между попытками — пока не сработает потолок `schedule_to_close` в 1ч и Temporal наконец не провалит activity. Для работы, тяжёлой по LLM, мы используем `_HEAVY_FOREVER` (старт с 2мин, потолок 30мин). Постоянные проблемы со входом (битый файл, нарушение схемы) предполагается выбрасывать как `ApplicationError(non_retryable=True)` изнутри activity, чтобы они обходили цикл ретраев, а не сжигали весь бюджет.
 
-Note the contrast on the search side: those payloads (`SerializedNode`, the messages) are deliberately tiny projections that *do* fit in the 2 MB limit, so search passes them inline rather than claim-checking them. Claim-check is used only where the data is genuinely large.
+**Детерминизм / безопасность воспроизведения на практике.** Кардинальное правило: *никогда не читай изменяемые настройки или окружение внутри тела workflow.* Вместо этого разрешай их один раз при *отправке* workflow и передавай как вход. Наш маршрут инжеста делает ровно это: в момент отправки он снимает снапшот текущей конфигурации модели — `model = cfg.effective_base`, `extraction_model = cfg.model_for("extraction")` и т.д. — и упаковывает их в `IngestParams`. Затем workflow несёт эти замороженные строки сквозным образом (в `FinalizeIn`, в строки аналитики), а не перечитывает `settings` посреди выполнения. Если бы он перечитывал окружение при воспроизведении после того, как оператор изменил имя модели, история и воспроизведение разошлись бы. Тот же паттерн появляется на стороне поиска: `OrchestratorParams` разрешает `coverage_check_enabled`, `max_coverage_rounds` и `contextualize_enabled` из `AgentSettings` в момент отправки именно для того, чтобы «workflow никогда не читал окружение во время выполнения (replay-safe)».
 
-**Why we use it / alternatives.** Alternatives: (a) shrink everything to fit 2 MB — impossible for full node lists; (b) raise Temporal's payload limit — fights the platform and bloats the history DB; (c) re-derive state from scratch in each activity — wasteful (re-parse, re-extract). Claim-check keeps Temporal history small and fast while still letting stages hand off arbitrarily large intermediate state, at the cost of a MinIO dependency and a cleanup story (which we have).
+Обратите внимание на одну тонкость: workflow *может* читать `settings` для значений, которые стабильны на протяжении жизни воркера — наш `DocumentIngestWorkflow` ссылается на `settings.temporal.llm_task_queue` и `settings.wiki.enabled`, чтобы выбрать очередь / заблокировать ветку. Это константы, запечённые в развёрнутый образ, и одинаковые при каждом воспроизведении, поэтому они не нарушают детерминизм. Опасен случай чего угодно, что может *измениться между исходным запуском и более поздним воспроизведением*.
 
-**In our code.**
-- `src/workflow/staging.py` — `StagingStore.write_pickle` / `read_pickle` / `delete_prefix` / `cleanup_orphans`, and `build_staging_store()` (bucket = `settings.temporal.staging_bucket`, default `kb-staging`).
-- `src/workflow/contracts.py` — the `*_uri` fields: `Parsed.nodes_uri`, `KGExtracted.nodes_with_kg_uri`, `Merged.merged_entities_uri`.
+**Дочерние workflow.** Workflow может запустить другой workflow как **дочерний** (child) и дождаться его. Мы вынесли тяжёлую графовую половину инжеста в дочерний workflow, `GraphBuildWorkflow`, запускаемый `DocumentIngestWorkflow` через `execute_child_workflow(GraphBuildWorkflow.run, kg, id=f"graph-{doc_id}", task_queue=merge_task_queue, parent_close_policy=REQUEST_CANCEL)`. Выигрыши (задокументированные в docstring модуля дочернего workflow): независимые потолки ретраев / `schedule_to_close` (застрявший merge можно отменить без перезапуска всего документа), независимая видимость в Temporal UI (родитель `ingest-{doc_id}` завершается за секунды для векторной половины, пока дочерний `graph-{doc_id}` делает медленную LLM-работу), и метрики по стадиям в собственной истории дочернего workflow. Родитель ждёт дочерний; сбой внутри дочернего всплывает как `ChildWorkflowError`, который родитель ловит наряду с `ActivityError`, чтобы понизить `graph_status` до `"vector_only"` вместо провала всего документа.
 
----
+**Почему мы это используем / альтернативы.** Альтернатива — самописная система задач: таблица задач в Postgres, цикл cron/воркера, ручные столбцы статуса и кастомная логика ретраев/бэкоффа для каждого шага — всё это вы должны сами держать crash-consistent. Temporal даёт crash-consistency, ретраи, таймауты, бэкофф и UI видимости бесплатно, ценой дисциплины детерминизма выше и Temporal-сервера, который нужно эксплуатировать. Для конвейера с дорогой, многоминутной LLM-стадией, которую мы никогда не должны молча перезапускать или терять, этот компромисс однозначно того стоит.
 
-## 3. Task-queue isolation & head-of-line blocking
-
-**What it is.** A task queue is FIFO: workers pull tasks in roughly the order they were enqueued. **Head-of-line blocking** is the failure mode where a slow or bulky item at the front of one queue stalls everything behind it — even unrelated, fast work — because they're all waiting in the same line. *Queue isolation* is the fix: give different workloads *separate* queues (and separate worker pools with their own concurrency caps), so a burst in one lane can't monopolize the capacity another lane needs.
-
-**How it works.** A single worker process (`python -m src.workflow.worker`) hosts several independent `Worker` pools against the same Temporal client, each polling its own task queue with its own `max_concurrent_activities` cap. For ingest, the three relevant lanes are:
-
-- `kb-ingest` (`task_queue`, cap `TEMPORAL_ACTIVITY_CONCURRENCY` = 4) — the `DocumentIngestWorkflow` plus all the IO / embedding activities (`fetch_source`, `parse_and_chunk`, `index_vector`, `inject_canonical`, `finalize`, `mark_failed`, and `build_property_graph` for single-pool deployments).
-- `kb-ingest-llm` (`llm_task_queue`, cap `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` = 18) — hosts **only** `extract_kg`. The workflow pins this activity to the queue via `task_queue=settings.temporal.llm_task_queue` on its `execute_activity` call.
-- `kb-ingest-merge` (`merge_task_queue`, cap `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` = 14) — hosts `GraphBuildWorkflow` plus `merge_and_resolve` + `build_property_graph`. The parent starts the child on this queue, and the child's activities carry *no* `task_queue` override, so they inherit the child's queue and ride the merge lane automatically.
-
-The concrete bug this prevents (from `docs/QUEUES.md`): `extract_kg` and the merge stage used to share one `kb-ingest-llm` queue at concurrency 1. When many documents ingest at once, a burst of `extract_kg` tasks fills that FIFO, and a given document's merge — enqueued *behind* all the pending extracts — starves. The vector half completes fast but the graph half waits out the whole extract backlog. Splitting merge onto its own queue + pool lets extract and merge poll independent queues and interleave instead of serialising through one line.
-
-(The same process also hosts isolated search lanes — `kb-search-small`, `kb-search-large`, `kb-graph-build`, `kb-wiki` — for the same reason: keep concurrent search sessions and offline graph builds from fighting ingest for capacity. Those are covered in `docs/QUEUES.md`.)
-
-**Why we use it / alternatives.** Alternative: one big queue with a high concurrency cap. That maximizes raw throughput but offers zero isolation — any flood drowns the rest, and you can't size GPU vs IO pressure independently. Per-lane queues cost a few extra Worker pools and config knobs but buy predictable isolation: each workload's burst is bounded by its own cap and can't head-of-line-block a sibling.
-
-**In our code.**
-- `src/workflow/worker.py` — the `main_worker` / `llm_worker` / `merge_worker` pools and their `max_concurrent_activities` settings.
-- `docs/QUEUES.md` — the authoritative queue table and the merge-queue rationale (this section aligns with it).
-- Knobs: `TEMPORAL_TASK_QUEUE`/`TEMPORAL_ACTIVITY_CONCURRENCY`, `TEMPORAL_LLM_TASK_QUEUE`/`TEMPORAL_LLM_ACTIVITY_CONCURRENCY`, `TEMPORAL_MERGE_TASK_QUEUE`/`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (config defaults in `src/config.py` `TemporalSettings`).
+**В нашем коде.**
+- `src/workflow/document_ingest.py` — родительский workflow, профили ретраев (`_FAST_FOREVER`, `_HEAVY_FOREVER`), таймауты по каждой activity и внутренний/внешний `try/except`, который мапит сбои в `vector_only` / `mark_failed`.
+- `src/workflow/graph_build.py` — дочерний `GraphBuildWorkflow` (merge + сборка property-графа).
+- `src/workflow/worker.py` — процесс воркера, хостящий все пулы Worker.
+- `src/workflow/client.py` — синглтон Temporal-клиента на весь процесс (заметьте: он предписывает `pydantic_data_converter`, так как наши payload'ы — это Pydantic v2 модели).
+- `src/api/routes/ingest.py` (≈строки 127–159) — разрешение-в-момент-отправки снапшотов модели в `IngestParams`.
 
 ---
 
-## 4. LLM concurrency pooling (LLMPool)
+## 2. Паттерн claim-check
 
-**What it is.** Temporal queue caps limit how many *activities of a given queue* run at once, per worker. But several different activities all hammer the *same* scarce backend — the local GPU (small-tier model) or a paid API (large-tier model) — and they live on different queues, so no single Temporal cap can bound the *total* load on that backend. The `LLMPool` is a second, finer limiter that sits *on top of* the Temporal caps: a per-process gate that bounds total concurrent LLM calls by *tier* and by *role*, regardless of which queue they came from.
+**Что это.** Temporal записывает каждый вход workflow и результат activity в свою базу данных истории событий, и каждый такой payload ограничен **2 МБ**. Но наш конвейер передаёт между собой большие объекты — список распарсенных LlamaIndex-чанков `BaseNode`, списки сущностей/отношений KG, объединённые наборы сущностей — которые выходят за 2 МБ. *Паттерн claim-check* (классический паттерн обмена сообщениями) решает это: вместо того чтобы класть тяжёлый payload на провод, вы записываете его в боковое хранилище, получаете обратно маленький *талон* (URI) и передаёте только талон. Следующая стадия предъявляет талон, чтобы получить реальные данные. «Check» — это как номерок из гардероба: маленький, но указывает на тяжёлую вещь.
 
-**How it works.** It is a **two-level gate**, acquired in a fixed order to avoid deadlock:
+**Как это работает.** Наше боковое хранилище — **MinIO** (S3-совместимое объектное хранилище). Обёртка `StagingStore` выполняет две операции:
+- `write_pickle(run_id, stage, obj)` — `pickle.dumps` объекта и `put_object` в MinIO под ключом `{workflow_run_id}/{stage}.pkl`, возвращая URI `s3://{bucket}/{run_id}/{stage}.pkl`.
+- `read_pickle(uri)` — обратное: разобрать URI, `get_object`, `pickle.loads`.
 
-1. **Per-role lane.** Each logical role — `extraction`, `judge`, `search`, `route`, `plan`, `retrieve`, `synthesis` — gets a `Lane` (a named `asyncio.Semaphore` with capacity = that role's ceiling). Default ceilings (`LLM_POOL_LANE_CAPS`): extraction 18, judge 14, search 14, plan 4, route 2, retrieve 4, synthesis 8.
-2. **Per-tier global ceiling.** Every role maps to a *tier* — `small` (the local/GPU model) or `large` (the API model). The small tier has one global `Lane` of capacity `LLM_POOL_TIER_SMALL_TOTAL` (default 25); the large tier `LLM_POOL_TIER_LARGE_TOTAL` (default 8).
+Так что стадийная activity читает свой входной блоб, делает работу, записывает свой выходной блоб и возвращает *контракт*, несущий только новый URI плюс маленькие счётчики. Конкретно: `parse_and_chunk` пиклит список нод в `{run_id}/parsed.pkl` и возвращает `Parsed(nodes_uri=..., chunk_count=...)`; `extract_kg` читает этот блоб, запускает извлечение, записывает `{run_id}/kg.pkl` и возвращает `KGExtracted(nodes_with_kg_uri=...)`. Поля `*_uri` на контрактах в `contracts.py` (`Parsed.nodes_uri`, `KGExtracted.nodes_with_kg_uri`, `Merged.merged_entities_uri`) — это и есть claim-check талоны; заголовок файла прямо это утверждает: «Heavy state (list[BaseNode], EntityNode lists) NEVER travels in payloads — it is pickled to MinIO and referenced by URI.»
 
-When a call wants an LLM for a role, `LLMPool.get(role)` returns a `BoundedLLM` wrapped with **two gates in order `[lane, tier]`** — it acquires the *lane permit first, then the tier-global*. The lane-first order keeps the scarce global occupied only around the actual call, and the consistent ordering across all roles guarantees no deadlock. So an `extraction` call must hold both an extraction-lane permit (≤18) *and* a small-tier permit (≤25) simultaneously.
+Очистка завязана на префикс запуска: в конце workflow `finalize` (и на пути сбоя `mark_failed`) вызывают `delete_prefix(run_id)`, чтобы стереть всю папку `{run_id}/`. Дворник (`cleanup_orphans`) подметает префиксы, чей самый свежий блоб старше порога — они принадлежат workflow, которые умерли до того, как успели отработать `finalize`/`mark_failed` (OOM воркера, отменённый запуск).
 
-The clever bit is **deliberate over-subscription**: the small-tier lane ceilings sum to far more than 25 (18+14+14+4+2+4 = 56). That's intentional — "so one workload can fill the GPU while no role can monopolize it beyond its ceiling." If only extraction is busy, it can take up to 18 small-tier slots; if judge work shows up, the tier-global (25) is the real arbiter of who gets the GPU next. The `judge_floor` (default 7) plus the sizing rule `extraction_ceiling ≤ tier_small_total − judge_floor` (18 ≤ 25 − 7) guarantees that even under a full extraction flood, ≥7 small-tier slots remain for merge/judge so it never starves.
+Pickle здесь приемлем по трём причинам, которые модуль прописывает явно: продьюсер и консьюмер делят один и тот же Python-образ, блобы живут только на время одного запуска workflow, и формат на диске никогда не читается ничем за пределами этого пакета.
 
-A tiny example: 30 `extract_kg` activities become runnable at once. Temporal's `kb-ingest-llm` cap (18) lets 18 start. Each calls `pool.get("extraction")`; the extraction lane (18) admits all 18, but the small tier global (25) is also shared with any in-flight merge/judge calls — so if 8 judge calls are already running, only 17 extractions can hold a small-tier permit and the 18th waits on the tier semaphore. The pool, not Temporal, decides the true GPU occupancy.
+Заметьте контраст на стороне поиска: те payload'ы (`SerializedNode`, сообщения) — намеренно крошечные проекции, которые *укладываются* в лимит 2 МБ, поэтому поиск передаёт их инлайн, а не через claim-check. Claim-check используется только там, где данные действительно велики.
 
-**Why this sits on top of Temporal caps.** The docs are explicit: the Temporal per-queue caps must be **≥** the matching pool lane ceiling so the *pool binds first*. That is exactly why `kb-ingest-llm` was raised to 18 and `kb-ingest-merge` to 14 — matching the extraction/judge lane ceilings. If Temporal's cap were lower, Temporal would throttle before the pool ever got a chance to arbitrate, and the dynamic tier-sharing would be defeated. Temporal caps = coarse per-lane *isolation*; LLMPool = the real GPU/API *concurrency arbiter* shared across ingest and search in one process.
+**Почему мы это используем / альтернативы.** Альтернативы: (а) ужать всё под 2 МБ — невозможно для полных списков нод; (б) поднять лимит payload'а Temporal — борется с платформой и раздувает БД истории; (в) пере-выводить состояние с нуля в каждой activity — расточительно (пере-парсинг, пере-извлечение). Claim-check держит историю Temporal маленькой и быстрой, всё ещё позволяя стадиям передавать произвольно большое промежуточное состояние, ценой зависимости от MinIO и истории очистки (которая у нас есть).
 
-**Why we use it / alternatives.** Alternative: rely on Temporal caps alone. That can't express "total small-tier load ≤ 25 across all queues" — caps are per-queue, and you'd have to under-cap every lane and lose the ability to let one workload fill an idle GPU. Another alternative: a single global semaphore with no roles — but then a flood of one role starves the others (no `judge_floor` guarantee). The two-level lane+tier design gives both a hard total ceiling and per-role fairness. The caveat the module states: this is *per-process*, not distributed — the true cross-process GPU ceiling belongs at the LiteLLM proxy, which is out of scope for the pool.
-
-**In our code.**
-- `src/retrieval/llm_pool.py` — `Lane`, `LLMPool.get` (lane-first-then-tier ordering), the process-singleton `get_llm_pool()`. Call-sites: `parse_and_chunk` and `extract_kg` both do `get_llm_pool().get("extraction")`.
-- `src/config.py` `LLMPoolSettings` — `LLM_POOL_TIER_SMALL_TOTAL` (25), `LLM_POOL_TIER_LARGE_TOTAL` (8), `LLM_POOL_JUDGE_FLOOR` (7), `LLM_POOL_LANE_CAPS` (the role→ceiling map).
-- `src/config.py` `LiteLLMSettings` — `LITELLM_ROLE_TIERS` (role→tier map, defaults in `_DEFAULT_ROLE_TIERS`; only `synthesis` is `large`), `tier_for(role)` used by the pool to pick a tier.
+**В нашем коде.**
+- `src/workflow/staging.py` — `StagingStore.write_pickle` / `read_pickle` / `delete_prefix` / `cleanup_orphans` и `build_staging_store()` (bucket = `settings.temporal.staging_bucket`, по умолчанию `kb-staging`).
+- `src/workflow/contracts.py` — поля `*_uri`: `Parsed.nodes_uri`, `KGExtracted.nodes_with_kg_uri`, `Merged.merged_entities_uri`.
 
 ---
 
-## 5. Document parsing & chunking
+## 3. Изоляция очередей задач и блокировка головы очереди
 
-**What it is.** An LLM and a vector index can't consume a whole 50-page PDF at once — context windows are finite and retrieval works best on focused passages. *Parsing* turns a raw file (PDF, DOCX, PPTX, TXT, MD, EML) into plain text; *chunking* (a.k.a. splitting) cuts that text into bite-sized overlapping pieces called **nodes** (or chunks). Each chunk is the unit that later gets embedded, indexed, and fed to the KG extractor.
+**Что это.** Очередь задач — это FIFO: воркеры забирают задачи примерно в том порядке, в котором они были поставлены. **Блокировка головы очереди** (head-of-line blocking) — это режим сбоя, когда медленный или громоздкий элемент в начале одной очереди тормозит всё за собой — даже несвязанную, быструю работу — потому что все они ждут в одной линии. *Изоляция очередей* — это исправление: дать разным нагрузкам *отдельные* очереди (и отдельные пулы воркеров со своими потолками конкурентности), чтобы всплеск в одной полосе не мог монополизировать ёмкость, которая нужна другой полосе.
 
-**How it works.** Our `parse_and_chunk` activity runs a LlamaIndex `IngestionPipeline`:
-1. **Read** — `SimpleDirectoryReader` loads the file into `Document` objects (default supported types: PDF, DOCX, PPTX, TXT, MD, EML).
-2. **Split** — by default a `SentenceSplitter` with `chunk_size=512` and `chunk_overlap=50` (the `INGESTION_CHUNK_SIZE` / `INGESTION_CHUNK_OVERLAP` knobs). `chunk_size` is the target chunk length (in the splitter's tokens); `chunk_overlap` repeats the last ~50 units of one chunk at the start of the next. **Why overlap?** A fact that straddles a chunk boundary ("…the contract was signed by | Acme LLC on 5 March 2024…") would otherwise be cut in half and lost to both chunks; the overlap window keeps boundary-spanning context intact in at least one chunk. The splitter tries to break on sentence boundaries so chunks stay coherent. There's an opt-in `SemanticSplitterNodeParser` (`INGESTION_SEMANTIC_CHUNKING`) that places breakpoints where the embedding similarity between adjacent sentences drops below `breakpoint_percentile` (95th) — semantically-aware splitting at the cost of running the embedder during chunking.
-3. **Canonical identifiers** — the `IdentifierCanonicalizationTransform` runs on each chunk (see §6).
-4. **Translation** (optional, default on, `INGESTION_TRANSLATE_TO_RUSSIAN`) — fills a Russian rendering used downstream by the KG extractor without mutating the stored original-language chunk.
+**Как это работает.** Один процесс воркера (`python -m src.workflow.worker`) хостит несколько независимых пулов `Worker` против одного и того же Temporal-клиента, каждый опрашивает свою очередь задач со своим потолком `max_concurrent_activities`. Для инжеста три релевантные полосы:
 
-The output node list is pickled to staging (`{run_id}/parsed.pkl`, the claim-check of §2) and the activity returns `Parsed(nodes_uri=..., chunk_count=...)`.
+- `kb-ingest` (`task_queue`, потолок `TEMPORAL_ACTIVITY_CONCURRENCY` = 4) — `DocumentIngestWorkflow` плюс все IO/эмбеддинг activity (`fetch_source`, `parse_and_chunk`, `index_vector`, `inject_canonical`, `finalize`, `mark_failed` и `build_property_graph` для развёртываний с одним пулом).
+- `kb-ingest-llm` (`llm_task_queue`, потолок `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` = 18) — хостит **только** `extract_kg`. Workflow закрепляет эту activity за очередью через `task_queue=settings.temporal.llm_task_queue` в её вызове `execute_activity`.
+- `kb-ingest-merge` (`merge_task_queue`, потолок `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` = 14) — хостит `GraphBuildWorkflow` плюс `merge_and_resolve` + `build_property_graph`. Родитель запускает дочерний на этой очереди, а activity дочернего *не* несут переопределения `task_queue`, поэтому наследуют очередь дочернего и автоматически едут по merge-полосе.
 
-A tiny example: a 512-token-target splitter on a 1,300-token document yields roughly three chunks; with 50-token overlap, chunk 2 begins by repeating chunk 1's final 50 tokens, and chunk 3 repeats chunk 2's — so ~3×512 − 2×50 ≈ 1,436 token-units of (overlapping) coverage over the 1,300.
+Конкретный баг, который это предотвращает (из `docs/QUEUES.md`): `extract_kg` и стадия merge раньше делили одну очередь `kb-ingest-llm` при конкурентности 1. Когда множество документов инжестятся одновременно, всплеск задач `extract_kg` заполняет этот FIFO, и merge данного документа — поставленный *за* всеми ожидающими извлечениями — голодает. Векторная половина завершается быстро, но графовая половина дожидается всего бэклога извлечений. Вынесение merge на свою очередь + пул позволяет extract и merge опрашивать независимые очереди и перемежаться, а не сериализоваться через одну линию.
 
-Note: embedding generation is deliberately *not* part of this pipeline — it happens later at the vector-index insertion step (§8), because the same embedding model is also needed at retrieval time and tests mock it independently.
+(Тот же процесс также хостит изолированные поисковые полосы — `kb-search-small`, `kb-search-large`, `kb-graph-build`, `kb-wiki` — по той же причине: не давать конкурентным поисковым сессиям и офлайновым сборкам графа драться с инжестом за ёмкость. Они покрыты в `docs/QUEUES.md`.)
 
-**Why we use it / alternatives.** Fixed-size sentence splitting is cheap, deterministic, and predictable — the default. Alternatives: no chunking (won't fit context / dilutes retrieval); pure fixed-character splitting (cuts mid-sentence); semantic splitting (better boundaries but spends embedder calls during ingest). We default to `SentenceSplitter` and keep semantic splitting opt-in.
+**Почему мы это используем / альтернативы.** Альтернатива: одна большая очередь с высоким потолком конкурентности. Это максимизирует сырую пропускную способность, но не предлагает никакой изоляции — любой наплыв топит остальное, и нельзя независимо сайзить GPU- против IO-нагрузки. Очереди по полосам стоят нескольких лишних пулов Worker и ручек конфига, но покупают предсказуемую изоляцию: всплеск каждой нагрузки ограничен своим потолком и не может заблокировать голову очереди у соседа.
 
-**In our code.**
-- `src/workflow/activities/parse_and_chunk.py` — the activity: read → pipeline → scrub translation scaffolding → stage.
-- `src/ingestion/pipeline.py` — `build_ingestion_pipeline` (splitter choice, transform order) and `read_documents` (`SimpleDirectoryReader`).
+**В нашем коде.**
+- `src/workflow/worker.py` — пулы `main_worker` / `llm_worker` / `merge_worker` и их настройки `max_concurrent_activities`.
+- `docs/QUEUES.md` — авторитетная таблица очередей и обоснование merge-очереди (этот раздел с ним согласован).
+- Ручки: `TEMPORAL_TASK_QUEUE`/`TEMPORAL_ACTIVITY_CONCURRENCY`, `TEMPORAL_LLM_TASK_QUEUE`/`TEMPORAL_LLM_ACTIVITY_CONCURRENCY`, `TEMPORAL_MERGE_TASK_QUEUE`/`TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (значения по умолчанию в `src/config.py` `TemporalSettings`).
+
+---
+
+## 4. Пулинг LLM-конкурентности (LLMPool)
+
+**Что это.** Потолки очередей Temporal ограничивают, сколько *activity данной очереди* выполняется одновременно, на воркер. Но несколько разных activity все долбят *один и тот же* дефицитный бэкенд — локальный GPU (модель малого яруса) или платный API (модель большого яруса) — и они живут в разных очередях, поэтому ни один отдельный потолок Temporal не может ограничить *суммарную* нагрузку на этот бэкенд. `LLMPool` — это второй, более тонкий ограничитель, сидящий *поверх* потолков Temporal: пер-процессный шлюз, который ограничивает суммарное число конкурентных LLM-вызовов по *ярусу* (tier) и по *роли*, независимо от того, из какой очереди они пришли.
+
+**Как это работает.** Это **двухуровневый шлюз**, захватываемый в фиксированном порядке, чтобы избежать дедлока:
+
+1. **Полоса по роли.** Каждая логическая роль — `extraction`, `judge`, `search`, `route`, `plan`, `retrieve`, `synthesis` — получает `Lane` (именованный `asyncio.Semaphore` с ёмкостью = потолку этой роли). Потолки по умолчанию (`LLM_POOL_LANE_CAPS`): extraction 18, judge 14, search 14, plan 4, route 2, retrieve 4, synthesis 8.
+2. **Глобальный потолок по ярусу.** Каждая роль мапится на *ярус* — `small` (локальная/GPU модель) или `large` (API-модель). У малого яруса один глобальный `Lane` ёмкостью `LLM_POOL_TIER_SMALL_TOTAL` (по умолчанию 25); у большого яруса — `LLM_POOL_TIER_LARGE_TOTAL` (по умолчанию 8).
+
+Когда вызов хочет LLM для роли, `LLMPool.get(role)` возвращает `BoundedLLM`, обёрнутый **двумя шлюзами в порядке `[lane, tier]`** — он захватывает *сначала разрешение полосы, затем глобальное по ярусу*. Порядок lane-first держит дефицитный глобальный занятым только вокруг фактического вызова, а консистентный порядок по всем ролям гарантирует отсутствие дедлока. Так что вызов `extraction` должен одновременно держать и разрешение extraction-полосы (≤18), *и* разрешение малого яруса (≤25).
+
+Хитрая часть — **намеренная переподписка** (over-subscription): потолки полос малого яруса суммируются в куда большее, чем 25 (18+14+14+4+2+4 = 56). Это намеренно — «чтобы одна нагрузка могла заполнить GPU, в то время как ни одна роль не может монополизировать его сверх своего потолка». Если занята только extraction, она может занять до 18 слотов малого яруса; если появляется judge-работа, глобальный по ярусу (25) — реальный арбитр того, кто получит GPU следующим. `judge_floor` (по умолчанию 7) плюс правило сайзинга `extraction_ceiling ≤ tier_small_total − judge_floor` (18 ≤ 25 − 7) гарантирует, что даже при полном наплыве extraction ≥7 слотов малого яруса остаются для merge/judge, так что он никогда не голодает.
+
+Крошечный пример: 30 activity `extract_kg` становятся выполнимыми одновременно. Потолок Temporal `kb-ingest-llm` (18) позволяет стартовать 18. Каждая вызывает `pool.get("extraction")`; полоса extraction (18) допускает все 18, но глобальный малого яруса (25) также делится с любыми в-полёте вызовами merge/judge — так что если 8 judge-вызовов уже выполняются, только 17 извлечений могут держать разрешение малого яруса, а 18-е ждёт на семафоре яруса. Пул, а не Temporal, решает истинную занятость GPU.
+
+**Почему это сидит поверх потолков Temporal.** Документы явны: потолки Temporal по очереди должны быть **≥** соответствующего потолка полосы пула, чтобы *пул связывал первым*. Именно поэтому `kb-ingest-llm` был поднят до 18, а `kb-ingest-merge` до 14 — под потолки полос extraction/judge. Если бы потолок Temporal был ниже, Temporal бы тротлил раньше, чем пул вообще получил шанс арбитрировать, и динамическое разделение яруса было бы побеждено. Потолки Temporal = грубая *изоляция* по полосам; LLMPool = реальный *арбитр конкурентности* GPU/API, разделяемый между инжестом и поиском в одном процессе.
+
+**Почему мы это используем / альтернативы.** Альтернатива: полагаться только на потолки Temporal. Это не может выразить «суммарная нагрузка малого яруса ≤ 25 по всем очередям» — потолки по очереди, и пришлось бы под-капать каждую полосу и потерять способность дать одной нагрузке заполнить простаивающий GPU. Другая альтернатива: один глобальный семафор без ролей — но тогда наплыв одной роли голодит остальных (нет гарантии `judge_floor`). Двухуровневый дизайн lane+tier даёт и жёсткий суммарный потолок, и пер-ролевую честность. Оговорка, которую заявляет модуль: это *пер-процессно*, не распределённо — истинный кросс-процессный потолок GPU принадлежит прокси LiteLLM, что вне области ответственности пула.
+
+**В нашем коде.**
+- `src/retrieval/llm_pool.py` — `Lane`, `LLMPool.get` (порядок lane-first-then-tier), процесс-синглтон `get_llm_pool()`. Точки вызова: `parse_and_chunk` и `extract_kg` обе делают `get_llm_pool().get("extraction")`.
+- `src/config.py` `LLMPoolSettings` — `LLM_POOL_TIER_SMALL_TOTAL` (25), `LLM_POOL_TIER_LARGE_TOTAL` (8), `LLM_POOL_JUDGE_FLOOR` (7), `LLM_POOL_LANE_CAPS` (карта роль→потолок).
+- `src/config.py` `LiteLLMSettings` — `LITELLM_ROLE_TIERS` (карта роль→ярус, значения по умолчанию в `_DEFAULT_ROLE_TIERS`; только `synthesis` это `large`), `tier_for(role)`, используемый пулом для выбора яруса.
+
+---
+
+## 5. Парсинг и разбиение документов на чанки
+
+**Что это.** LLM и векторный индекс не могут проглотить целый 50-страничный PDF за раз — контекстные окна конечны, а извлечение работает лучше всего на сфокусированных пассажах. *Парсинг* превращает сырой файл (PDF, DOCX, PPTX, TXT, MD, EML) в простой текст; *разбиение на чанки* (a.k.a. сплиттинг) режет этот текст на небольшие перекрывающиеся куски, называемые **нодами** (или чанками). Каждый чанк — это единица, которая затем эмбеддится, индексируется и подаётся в экстрактор KG.
+
+**Как это работает.** Наша activity `parse_and_chunk` запускает LlamaIndex `IngestionPipeline`:
+1. **Чтение** — `SimpleDirectoryReader` загружает файл в объекты `Document` (поддерживаемые по умолчанию типы: PDF, DOCX, PPTX, TXT, MD, EML).
+2. **Сплиттинг** — по умолчанию `SentenceSplitter` с `chunk_size=512` и `chunk_overlap=50` (ручки `INGESTION_CHUNK_SIZE` / `INGESTION_CHUNK_OVERLAP`). `chunk_size` — целевая длина чанка (в токенах сплиттера); `chunk_overlap` повторяет последние ~50 единиц одного чанка в начале следующего. **Зачем перекрытие?** Факт, седлающий границу чанка («…контракт был подписан | Acme LLC 5 марта 2024…»), иначе был бы разрезан пополам и потерян для обоих чанков; окно перекрытия сохраняет контекст, охватывающий границу, нетронутым хотя бы в одном чанке. Сплиттер старается резать по границам предложений, чтобы чанки оставались связными. Есть опт-ин `SemanticSplitterNodeParser` (`INGESTION_SEMANTIC_CHUNKING`), который ставит точки разрыва там, где сходство эмбеддингов между соседними предложениями падает ниже `breakpoint_percentile` (95-й) — семантически-осведомлённый сплиттинг ценой запуска эмбеддера во время разбиения.
+3. **Канонические идентификаторы** — `IdentifierCanonicalizationTransform` прогоняется на каждом чанке (см. §6).
+4. **Перевод** (опционально, по умолчанию включён, `INGESTION_TRANSLATE_TO_RUSSIAN`) — заполняет русское представление, используемое ниже по течению экстрактором KG, не мутируя хранимый чанк на исходном языке.
+
+Выходной список нод пиклится в стейджинг (`{run_id}/parsed.pkl`, claim-check из §2), и activity возвращает `Parsed(nodes_uri=..., chunk_count=...)`.
+
+Крошечный пример: сплиттер с целью 512 токенов на документе в 1300 токенов даёт примерно три чанка; с перекрытием 50 токенов чанк 2 начинается с повторения последних 50 токенов чанка 1, а чанк 3 повторяет токены чанка 2 — так что ~3×512 − 2×50 ≈ 1436 токен-единиц (перекрывающегося) покрытия на 1300.
+
+Заметьте: генерация эмбеддингов намеренно *не* является частью этого конвейера — она происходит позже, на шаге вставки в векторный индекс (§8), потому что та же эмбеддинг-модель нужна также во время извлечения, и тесты мокают её независимо.
+
+**Почему мы это используем / альтернативы.** Фиксированный сплиттинг по предложениям дёшев, детерминирован и предсказуем — это значение по умолчанию. Альтернативы: без разбиения (не влезет в контекст / разбавляет извлечение); чистый фиксированный посимвольный сплиттинг (режет посреди предложения); семантический сплиттинг (лучше границы, но тратит вызовы эмбеддера во время инжеста). Мы по умолчанию используем `SentenceSplitter` и держим семантический сплиттинг опт-ином.
+
+**В нашем коде.**
+- `src/workflow/activities/parse_and_chunk.py` — activity: чтение → конвейер → очистка лесов перевода → стейджинг.
+- `src/ingestion/pipeline.py` — `build_ingestion_pipeline` (выбор сплиттера, порядок трансформаций) и `read_documents` (`SimpleDirectoryReader`).
 - `src/config.py` `IngestionSettings` — `INGESTION_CHUNK_SIZE` (512), `INGESTION_CHUNK_OVERLAP` (50), `INGESTION_SEMANTIC_CHUNKING`, `INGESTION_BREAKPOINT_PERCENTILE` (95), `INGESTION_TRANSLATE_TO_RUSSIAN`.
 
 ---
 
-## 6. Deterministic identifier canonicalization (pre-LLM)
+## 6. Детерминированная канонизация идентификаторов (до LLM)
 
-**What it is.** Documents write the same real-world identifier in many surface forms: a phone as `+7 (495) 123-45-67` or `8 495 1234567`; a date as `05.03.2024` or `5 марта 2024`. If we let the LLM extract each verbatim, the knowledge graph ends up with multiple nodes for one entity and dedup breaks. *Canonicalization* is the act of mapping every surface form of an identifier to one **canonical** string, computed by deterministic (non-LLM) code *before* the LLM ever sees the chunk, so all variants collapse onto a single node.
+**Что это.** Документы записывают один и тот же реальный идентификатор во множестве поверхностных форм: телефон как `+7 (495) 123-45-67` или `8 495 1234567`; дату как `05.03.2024` или `5 марта 2024`. Если позволить LLM извлекать каждый дословно, граф знаний кончается несколькими нодами для одной сущности, и дедуп ломается. *Канонизация* — это акт отображения каждой поверхностной формы идентификатора в одну **каноническую** строку, вычисляемую детерминированным (не-LLM) кодом *до* того, как LLM вообще увидит чанк, так что все варианты схлопываются на одну ноду.
 
-**How it works.** `extract_identifiers(text)` runs a battery of detectors over the raw chunk text (24+ types across three groups: business/financial, digital identity, device/hardware). Each match yields a `NormalizedIdentifier(entity_type, canonical, original, span)`. The interesting mechanics:
+**Как это работает.** `extract_identifiers(text)` прогоняет батарею детекторов по сырому тексту чанка (24+ типа в трёх группах: бизнес/финансы, цифровая идентичность, устройства/железо). Каждое совпадение даёт `NormalizedIdentifier(entity_type, canonical, original, span)`. Интересная механика:
 
-- **E.164 phone normalization.** E.164 is the international standard form `+<country><national number>` with no spaces/punctuation. We use Google's `libphonenumber` port (`phonenumbers.PhoneNumberMatcher(text, "RU")`, RU as default region) and format each match as `PhoneNumberFormat.E164`. So both `+7 (495) 123-45-67` and `8 495 1234567` canonicalize to the *same* `+74951234567`.
-- **Checksum-validated business IDs.** Russian **INN** (taxpayer ID, 10 or 12 digits) and **OGRN** (registration number, 13 or 15 digits) carry check digits. We don't just regex the shape — we *validate the checksum* (`_check_inn_10`/`_check_inn_12`: weighted-sum mod 11 mod 10; `_check_ogrn_13`/`_check_ogrn_15`: the 13-digit body mod 11 mod 10 must equal the last digit). A random 10-digit run that fails the checksum is rejected, which keeps order numbers and IDs out of the graph. Other types validate similarly: SNILS (mod-101), IMEI/CreditCard (Luhn), IBAN (mod-97), VIN (mod-11), bank account (RU control key against a BIC in the same text).
-- **libpostal address parsing.** Postal addresses have no checksum, so we anchor on a 6-digit postcode, window ~200 chars forward to capture the street/city tokens, and normalize via **libpostal** (`parse_address` → structured `postcode/city/road/house_number/unit` → joined canonical). libpostal is heavy and optional: when the C library isn't installed, we fall back to a rule-based abbreviation-expansion normalizer (`ул.`→`ул `, drop `г.`, etc.).
+- **Нормализация телефонов в E.164.** E.164 — это международная стандартная форма `+<страна><национальный номер>` без пробелов/пунктуации. Мы используем порт `libphonenumber` от Google (`phonenumbers.PhoneNumberMatcher(text, "RU")`, RU как регион по умолчанию) и форматируем каждое совпадение как `PhoneNumberFormat.E164`. Так и `+7 (495) 123-45-67`, и `8 495 1234567` канонизируются в *одно и то же* `+74951234567`.
+- **Бизнес-ID с проверкой контрольной суммы.** Российские **ИНН** (10 или 12 цифр) и **ОГРН** (13 или 15 цифр) несут контрольные цифры. Мы не просто матчим форму по regex — мы *валидируем контрольную сумму* (`_check_inn_10`/`_check_inn_12`: взвешенная сумма mod 11 mod 10; `_check_ogrn_13`/`_check_ogrn_15`: тело из 13 цифр mod 11 mod 10 должно равняться последней цифре). Случайный 10-значный набор, проваливающий контрольную сумму, отвергается, что держит номера заказов и ID вне графа. Другие типы валидируются аналогично: СНИЛС (mod-101), IMEI/CreditCard (Luhn), IBAN (mod-97), VIN (mod-11), банковский счёт (контрольный ключ РФ против БИК в том же тексте).
+- **Парсинг адресов libpostal.** У почтовых адресов нет контрольной суммы, поэтому мы якоримся на 6-значном индексе, делаем окно ~200 символов вперёд, чтобы захватить токены улицы/города, и нормализуем через **libpostal** (`parse_address` → структурированные `postcode/city/road/house_number/unit` → склеенный канонический). libpostal тяжёл и опционален: когда C-библиотека не установлена, мы откатываемся на нормализатор расширения сокращений на правилах (`ул.`→`ул `, удалить `г.` и т.д.).
 
-When two detectors match overlapping spans (e.g. `URL` and `VKProfile` both on `https://vk.com/user`), `_resolve_overlaps` keeps the higher-priority specialised type and drops the generic one.
+Когда два детектора матчат перекрывающиеся спаны (например `URL` и `VKProfile` оба на `https://vk.com/user`), `_resolve_overlaps` оставляет более приоритетный специализированный тип и отбрасывает общий.
 
-**Why it runs deterministically BEFORE the LLM, and how the dedup actually happens.** Two coordinated steps, both *upstream* of extraction:
-1. The `IdentifierCanonicalizationTransform` (inserted into the pipeline *before* the KG extractor) appends a literal block to each chunk's text: `"Канонические идентификаторы (используй ИМЕННО ТАКУЮ форму в entity_name): - PhoneNumber: +74951234567 (в тексте: «8 495 1234567»)"`. This *instructs the LLM in-band* to use the canonical form when it names entities — so verbatim mentions in the LLM's output already match the canonical string.
-2. The `inject_canonical` activity calls `inject_canonical_entities`, which upserts one `EntityNode(name=<canonical>, label=<type>)` per `(type, canonical)` pair into Neo4j *before* `extract_kg` runs. `upsert_nodes` merges by name, so the canonical node is guaranteed to exist. When the LLM later emits an entity named with that same canonical string (because the augment block told it to), it dedups onto the pre-injected node instead of creating a duplicate.
+**Почему это работает детерминированно ДО LLM, и как именно происходит дедуп.** Два скоординированных шага, оба *выше по течению* от извлечения:
+1. `IdentifierCanonicalizationTransform` (вставленный в конвейер *перед* экстрактором KG) добавляет к тексту каждого чанка литеральный блок: `"Канонические идентификаторы (используй ИМЕННО ТАКУЮ форму в entity_name): - PhoneNumber: +74951234567 (в тексте: «8 495 1234567»)"`. Это *инструктирует LLM в потоке* использовать каноническую форму, когда он именует сущности — так что дословные упоминания в выводе LLM уже совпадают с канонической строкой.
+2. Activity `inject_canonical` вызывает `inject_canonical_entities`, которая upsert'ит одну `EntityNode(name=<canonical>, label=<type>)` на пару `(type, canonical)` в Neo4j *до* запуска `extract_kg`. `upsert_nodes` объединяет по имени, так что каноническая нода гарантированно существует. Когда LLM позже эмитит сущность, названную той же канонической строкой (потому что блок аугментации сказал ему так), она дедупится на предварительно внедрённую ноду, а не создаёт дубликат.
 
-So the determinism is load-bearing: the canonical string is computed by code (reproducible, checksum-gated), seeded into the graph, *and* fed to the LLM as the required spelling — three forces all pushing every variant onto one node. Doing this with the LLM alone would be non-deterministic and would re-split entities across documents.
+Так что детерминизм несёт нагрузку: каноническая строка вычисляется кодом (воспроизводимо, через контрольную сумму), засевается в граф, *и* подаётся в LLM как требуемое написание — три силы, толкающие каждый вариант на одну ноду. Делать это одним LLM было бы недетерминированно и пере-расщепляло бы сущности между документами.
 
-**Why we use it / alternatives.** Alternative: let the LLM extract and normalize identifiers itself. It's non-deterministic (same input, different spelling on different runs), can't validate checksums, and produces graph fragmentation. Alternative: post-hoc dedup after extraction — possible but lossy and expensive, and it can't influence the LLM's own naming. Pre-LLM deterministic canonicalization is cheaper, auditable, and prevents the duplicates from ever being created. Cost: a regex/parser battery to maintain per identifier type.
+**Почему мы это используем / альтернативы.** Альтернатива: позволить LLM извлекать и нормализовать идентификаторы самому. Это недетерминированно (тот же вход, разное написание на разных запусках), не может валидировать контрольные суммы и порождает фрагментацию графа. Альтернатива: пост-фактум дедуп после извлечения — возможно, но lossy и дорого, и не может повлиять на собственное именование LLM. Детерминированная канонизация до LLM дешевле, аудируема и предотвращает создание дубликатов вообще. Цена: батарея regex/парсеров для поддержки на каждый тип идентификатора.
 
-**In our code.**
-- `src/ingestion/identifiers.py` — every detector, the E.164 phone path (`_extract_phones`), INN/OGRN checksums (`_check_inn_10/12`, `_check_ogrn_13/15`), libpostal address path (`_normalize_address` with rule-based fallback), `_resolve_overlaps`, and the `build_augment_block` that produces the in-band canonical block.
-- `src/ingestion/identifier_transform.py` — `IdentifierCanonicalizationTransform` (appends the augment block to chunk text, stores `metadata["canonical_identifiers"]`) and `inject_canonical_entities` (upserts canonical `EntityNode`s into the graph).
-- `src/workflow/activities/inject_canonical.py` — the `inject_canonical` activity that runs the injection before `extract_kg`.
-
----
-
-## 7. Knowledge-graph extraction (LightRAG-style)
-
-**What it is.** A vector index finds passages by similarity; a **knowledge graph** instead stores explicit facts as **triples** — `(source entity) —[relation]→ (target entity)`, e.g. `(Acme LLC) —[signed]→ (Contract №42)`. Building that graph means reading text and pulling out the entities and the relations between them. *KG extraction* is the stage that does this, here with one LLM call per chunk.
-
-**How it works.** The `extract_kg` activity reads the parsed nodes from staging, gets the small-tier extraction LLM from the pool (`get_llm_pool().get("extraction")`), and builds a **LightRAG**-style extractor via `build_kg_extractor(llm, mode="lightrag")` → `LightRAGExtractor`. Per the factory docstring, the `lightrag` mode makes "one LLM call per chunk [that] produces entities (name + type + description) + relations (src + tgt + keywords + description) in a single structured response" — the algorithm is ported from HKUDS/LightRAG (prompts in `src/graph/lightrag_prompts.py`). Crucially, descriptions are populated *inline* in that one call — there's no separate description-enrichment pass.
-
-The extractor's output is attached to each node as `KG_NODES_KEY` / `KG_RELATIONS_KEY` metadata. `extract_kg` then summarises what was produced (entity/relation totals, top-10 labels, 20 sample entities/relations) for the Temporal UI, pickles the enriched nodes to `{run_id}/kg.pkl` (note: a *separate* blob from `parsed.pkl`, so a retry of the downstream merge can re-read it without re-running the expensive extractor), and returns `KGExtracted`. Cross-chunk consolidation — collapsing the same entity mentioned in many chunks into one node, the dedup that §6 set up — happens later in the merge stage (`src/graph/merge.py:merge_kg_extraction`, run by `GraphBuildWorkflow`).
-
-A tiny example: a chunk "Acme LLC signed Contract №42 with Beta Inc on 5 March 2024" yields entities like `Acme LLC` (Organization), `Beta Inc` (Organization), `CONTRACT-№42` (ContractNumber, already canonical from §6), `2024-03-05` (DocumentDate) and relations such as `(Acme LLC) —signed→ (CONTRACT-№42)` and `(Acme LLC) —counterparty→ (Beta Inc)` — all in one structured LLM response.
-
-Other modes exist for experimentation: `simple` (plain prompt + regex parsing, kept as the regression baseline, entity types collapse to `entity`), `schema` (typed `SchemaLLMPathExtractor`, needs a function-calling model, flaky on local models), and `gliner` variants. We default to `lightrag`.
-
-**Why we use it / alternatives.** Alternatives: `SchemaLLMPathExtractor` (rigid typed schema, but unreliable on our local small-tier model and requires function-calling); a `simple` triplet extractor (no descriptions, untyped entities); or running a separate enrichment LLM pass to add descriptions (doubles LLM cost). LightRAG's single structured call gives typed entities *with* descriptions and relations *with* keywords in one shot — fewer LLM calls, richer nodes, and it runs acceptably on the local model. Cost: it's the heaviest ingest stage (hence its own GPU-serialised lane in §3 and the `_HEAVY_FOREVER` retry profile).
-
-**In our code.**
-- `src/workflow/activities/extract_kg.py` — the activity, the `_summarise_kg` UI surfacing, and the separate `kg.pkl` staging write.
-- `src/graph/index.py` `build_kg_extractor` — the mode dispatch; `mode="lightrag"` → `LightRAGExtractor` (in `src/graph/lightrag_extract.py`, prompts in `src/graph/lightrag_prompts.py`).
-- Cross-chunk consolidation: `src/graph/merge.py:merge_kg_extraction` (run by `GraphBuildWorkflow`).
+**В нашем коде.**
+- `src/ingestion/identifiers.py` — каждый детектор, путь телефона E.164 (`_extract_phones`), контрольные суммы ИНН/ОГРН (`_check_inn_10/12`, `_check_ogrn_13/15`), путь адресов libpostal (`_normalize_address` с откатом на правила), `_resolve_overlaps` и `build_augment_block`, который производит in-band канонический блок.
+- `src/ingestion/identifier_transform.py` — `IdentifierCanonicalizationTransform` (добавляет блок аугментации к тексту чанка, хранит `metadata["canonical_identifiers"]`) и `inject_canonical_entities` (upsert'ит канонические `EntityNode` в граф).
+- `src/workflow/activities/inject_canonical.py` — activity `inject_canonical`, запускающая внедрение до `extract_kg`.
 
 ---
 
-## 8. Text embeddings
+## 7. Извлечение графа знаний (в стиле LightRAG)
 
-**What it is.** An **embedding** is a fixed-length vector of floats (here 768 dimensions) that a model produces from a piece of text, positioning it in a high-dimensional space so that *texts with similar meaning land near each other*. "Cancel my subscription" and "how do I end my plan" end up as nearby vectors even though they share almost no words. Embeddings are what let retrieval find passages by *meaning* rather than by exact keyword match.
+**Что это.** Векторный индекс находит пассажи по сходству; **граф знаний** вместо этого хранит явные факты как **триплеты** — `(сущность-источник) —[отношение]→ (сущность-цель)`, например `(Acme LLC) —[signed]→ (Contract №42)`. Построение этого графа означает чтение текста и вытаскивание сущностей и отношений между ними. *Извлечение KG* — это стадия, которая это делает, здесь с одним LLM-вызовом на чанк.
 
-**How it works.** Two vectors' similarity is measured by **cosine similarity** — the cosine of the angle between them, ranging from −1 (opposite) through 0 (unrelated/orthogonal) to 1 (same direction/meaning). Intuition: ignore how *long* the vectors are, look only at which *direction* they point; texts pointing the same way are semantically close. The mechanics in our pipeline:
+**Как это работает.** Activity `extract_kg` читает распарсенные ноды из стейджинга, получает экстракционную LLM малого яруса из пула (`get_llm_pool().get("extraction")`) и строит экстрактор в стиле **LightRAG** через `build_kg_extractor(llm, mode="lightrag")` → `LightRAGExtractor`. Согласно docstring фабрики, режим `lightrag` делает «один LLM-вызов на чанк, [который] производит сущности (name + type + description) + отношения (src + tgt + keywords + description) в одном структурированном ответе» — алгоритм портирован из HKUDS/LightRAG (промпты в `src/graph/lightrag_prompts.py`). Критично: описания заполняются *инлайн* в этом одном вызове — нет отдельного прохода обогащения описаний.
 
-1. **Build the model.** `build_embedding_model()` returns a LlamaIndex `OpenAILikeEmbedding` pointed at our LiteLLM proxy: `model_name=settings.litellm.embedding_model`, `api_base=settings.litellm.base_url`, with `embed_batch_size=10`. Same OpenAI-compatible wire protocol as the chat models, just for the embeddings endpoint.
-2. **Index at insertion time.** The `index_vector` activity loads the parsed nodes from staging, builds the embedding model + a Milvus vector store + index, and calls `index_nodes(index, nodes)`. *This* is where embeddings are computed — each chunk's text is sent to the embedding model and the resulting vector is stored in **Milvus** (the vector database) alongside the chunk id. (It snapshot-strips Milvus-oversized metadata like `canonical_identifiers` around the insert, then restores it so the in-memory pickle is unaffected.) Embedding is intentionally separate from the chunking pipeline (§5) because the same model is reused at query time.
-3. **Retrieve.** At search time the *query* is embedded with the *same* model, and Milvus returns the chunks whose stored vectors have the highest cosine similarity to the query vector — the nearest neighbours in meaning-space. (Both halves must use the same model and dimension, or the vectors aren't comparable — hence `embedding_dim=768` is configured centrally.)
+Вывод экстрактора прикрепляется к каждой ноде как метаданные `KG_NODES_KEY` / `KG_RELATIONS_KEY`. Затем `extract_kg` суммирует то, что было произведено (итоги по сущностям/отношениям, топ-10 меток, 20 примеров сущностей/отношений) для Temporal UI, пиклит обогащённые ноды в `{run_id}/kg.pkl` (заметьте: *отдельный* блоб от `parsed.pkl`, чтобы ретрай нижестоящего merge мог перечитать его без перезапуска дорогого экстрактора) и возвращает `KGExtracted`. Кросс-чанк консолидация — схлопывание одной сущности, упомянутой во многих чанках, в одну ноду, дедуп, который настроил §6 — происходит позже на стадии merge (`src/graph/merge.py:merge_kg_extraction`, запускаемой `GraphBuildWorkflow`).
 
-A tiny example: with the query "refund policy", the embedder maps it to a vector; Milvus ranks all chunk vectors by cosine similarity to it and returns the top-k, surfacing a chunk that says "we reimburse purchases within 30 days" even though it never uses the word "refund".
+Крошечный пример: чанк «Acme LLC signed Contract №42 with Beta Inc on 5 March 2024» даёт сущности вроде `Acme LLC` (Organization), `Beta Inc` (Organization), `CONTRACT-№42` (ContractNumber, уже канонический из §6), `2024-03-05` (DocumentDate) и отношения вроде `(Acme LLC) —signed→ (CONTRACT-№42)` и `(Acme LLC) —counterparty→ (Beta Inc)` — всё в одном структурированном ответе LLM.
 
-**Why we use it / alternatives.** The alternative is lexical search (BM25/keyword): fast and exact, but blind to synonyms and paraphrase — it misses "reimburse" when you searched "refund". Dense embeddings capture semantic similarity at the cost of an embedding model and a vector DB. (In practice our retrieval is hybrid — vector plus graph — but the embedding vector is the semantic-similarity backbone.) The OpenAI-compatible `OpenAILikeEmbedding` lets us swap the underlying embedding model purely via LiteLLM config, no code change.
+Существуют другие режимы для экспериментов: `simple` (простой промпт + regex-парсинг, оставлен как регрессионный базлайн, типы сущностей схлопываются в `entity`), `schema` (типизированный `SchemaLLMPathExtractor`, нужна модель с function-calling, флакает на локальных моделях) и варианты `gliner`. По умолчанию у нас `lightrag`.
 
-**In our code.**
-- `src/ingestion/embeddings.py` — `build_embedding_model()` (the `OpenAILikeEmbedding` factory).
-- `src/workflow/activities/index_vector.py` — the `index_vector` activity: where chunks are embedded and inserted into Milvus (`index_nodes`).
-- `src/config.py` `LiteLLMSettings` — `LITELLM_EMBEDDING_MODEL` (default `nomic-embed-text`), `LITELLM_EMBEDDING_DIM` (768), `LITELLM_BASE_URL`, `LITELLM_TIMEOUT_S`, `LITELLM_MAX_RETRIES`.
+**Почему мы это используем / альтернативы.** Альтернативы: `SchemaLLMPathExtractor` (жёсткая типизированная схема, но ненадёжна на нашей локальной модели малого яруса и требует function-calling); `simple` экстрактор триплетов (без описаний, нетипизированные сущности); или запуск отдельного LLM-прохода обогащения для добавления описаний (удваивает LLM-стоимость). Один структурированный вызов LightRAG даёт типизированные сущности *с* описаниями и отношения *с* ключевыми словами за один раз — меньше LLM-вызовов, более богатые ноды, и он приемлемо работает на локальной модели. Цена: это самая тяжёлая стадия инжеста (отсюда её собственная GPU-сериализованная полоса в §3 и профиль ретраев `_HEAVY_FOREVER`).
 
----
-
-# Part 2 — Vectors, Graph & Entity Resolution
-
-A from-scratch reference for the retrieval substrate of `kb-llamaindex`: how we find similar text by vector, how the knowledge graph is stored and indexed in Neo4j, and how we collapse the many surface forms of one real-world entity into a single canonical node — then summarise the graph into community reports.
-
-> **Sandbox note on verification.** There is no live Neo4j / GDS in the sandbox where this was written. Every Cypher / GDS claim below is grounded by *reading* the code and tests, not by executing it against a database. Where the code itself flags an API as unverified-against-live-GDS, this doc repeats that caveat.
+**В нашем коде.**
+- `src/workflow/activities/extract_kg.py` — activity, UI-поверхность `_summarise_kg` и отдельная запись стейджинга `kg.pkl`.
+- `src/graph/index.py` `build_kg_extractor` — диспетч режимов; `mode="lightrag"` → `LightRAGExtractor` (в `src/graph/lightrag_extract.py`, промпты в `src/graph/lightrag_prompts.py`).
+- Кросс-чанк консолидация: `src/graph/merge.py:merge_kg_extraction` (запускается `GraphBuildWorkflow`).
 
 ---
 
-## Vector search & approximate nearest neighbour (ANN)
+## 8. Текстовые эмбеддинги
 
-**What it is.** An embedding model turns a piece of text into a fixed-length list of floats — a *vector* (here 768 dimensions, `MilvusSettings.dim = 768`). Texts with similar meaning map to vectors that point in similar directions. "Search" then means: given a query vector, find the stored vectors closest to it. Closeness is a distance/similarity metric; we use **cosine similarity** (the angle between two vectors, ignoring their length).
+**Что это.** **Эмбеддинг** — это вектор float'ов фиксированной длины (здесь 768 измерений), который модель производит из куска текста, размещая его в высокоразмерном пространстве так, что *тексты со схожим смыслом оказываются рядом друг с другом*. «Отмени мою подписку» и «как мне завершить мой план» оказываются близкими векторами, хотя у них почти нет общих слов. Эмбеддинги — это то, что позволяет извлечению находить пассажи по *смыслу*, а не по точному совпадению ключевых слов.
 
-**How it works.** The naive ("exact" / brute-force) approach compares the query against *every* stored vector, computes the similarity, and keeps the top-`k`. With `N` stored vectors of dimension `d` that is `O(N·d)` work per query — every query touches the whole collection. Concretely, at 1M chunks × 768 dims that is ~768M multiply-adds *per query*: correct, but a latency cliff.
+**Как это работает.** Сходство двух векторов измеряется **косинусным сходством** (cosine similarity) — косинусом угла между ними, в диапазоне от −1 (противоположны) через 0 (несвязаны/ортогональны) до 1 (то же направление/смысл). Интуиция: игнорируйте, насколько *длинны* векторы, смотрите только, в какую *сторону* они указывают; тексты, указывающие в одну сторону, семантически близки. Механика в нашем конвейере:
 
-ANN (approximate nearest neighbour) trades a little **recall** for a lot of **speed**. Instead of scanning everything, it builds an *index* — a data structure that lets a query visit only a small, cleverly-chosen subset of the stored vectors and still land on (almost) the true top-`k`. The cost: it may occasionally miss a true neighbour. We measure that loss as **recall@k** = (fraction of the true top-`k` that the approximate search actually returned). ANN is the standard answer once `N` grows past a few hundred thousand.
+1. **Построить модель.** `build_embedding_model()` возвращает LlamaIndex `OpenAILikeEmbedding`, нацеленный на наш прокси LiteLLM: `model_name=settings.litellm.embedding_model`, `api_base=settings.litellm.base_url`, с `embed_batch_size=10`. Тот же OpenAI-совместимый протокол провода, что и у чат-моделей, только для эндпоинта эмбеддингов.
+2. **Индексировать в момент вставки.** Activity `index_vector` загружает распарсенные ноды из стейджинга, строит эмбеддинг-модель + Milvus-векторное хранилище + индекс и вызывает `index_nodes(index, nodes)`. *Здесь* вычисляются эмбеддинги — текст каждого чанка отправляется в эмбеддинг-модель, и результирующий вектор сохраняется в **Milvus** (векторной базе) рядом с id чанка. (Он снапшот-стрипит Milvus-переразмерные метаданные вроде `canonical_identifiers` вокруг вставки, затем восстанавливает их, чтобы пикл в памяти не пострадал.) Эмбеддинг намеренно отделён от конвейера разбиения (§5), потому что та же модель переиспользуется во время запроса.
+3. **Извлечение.** Во время поиска *запрос* эмбеддится той *же* моделью, и Milvus возвращает чанки, чьи хранимые векторы имеют наибольшее косинусное сходство с вектором запроса — ближайшие соседи в пространстве смыслов. (Обе половины должны использовать одну модель и размерность, иначе векторы несравнимы — отсюда `embedding_dim=768` сконфигурирован централизованно.)
 
-**Why we use it / alternatives.** Exact (FLAT) search is the correctness ground truth and is fine for small collections; ANN (HNSW, below) is what keeps query latency flat as the corpus grows. Other ANN families exist (IVF/inverted-file clustering, product-quantization/PQ for memory compression, DiskANN for on-disk graphs); HNSW is the default we picked for in-memory recall/latency.
+Крошечный пример: с запросом «политика возврата» эмбеддер мапит его в вектор; Milvus ранжирует все векторы чанков по косинусному сходству к нему и возвращает топ-k, всплывая чанк, говорящий «мы возмещаем покупки в течение 30 дней», хотя он никогда не использует слово «возврат».
 
-**In our code.** Chunk vectors live in **Milvus**. The store is built in `src/retrieval/vector_index.py` (`build_vector_store` → `MilvusVectorStore(..., similarity_metric="COSINE", index_config=..., search_config=...)`). Vectors are written during ingest by the Temporal activity `src/workflow/activities/index_vector.py` (`index_vector` → `index_nodes(index, nodes)`). The recall-vs-latency trade is benchmarked in `tests/eval/scale/bench_milvus.py` (`bench_flat_vs_hnsw`, `_recall_at_k`).
+**Почему мы это используем / альтернативы.** Альтернатива — лексический поиск (BM25/по ключевым словам): быстро и точно, но слеп к синонимам и парафразу — он пропускает «возмещаем», когда вы искали «возврат». Плотные эмбеддинги схватывают семантическое сходство ценой эмбеддинг-модели и векторной БД. (На практике наше извлечение гибридно — вектор плюс граф — но эмбеддинг-вектор это бэкбон семантического сходства.) OpenAI-совместимый `OpenAILikeEmbedding` позволяет менять нижележащую эмбеддинг-модель чисто через конфиг LiteLLM, без изменений кода.
 
----
-
-## FLAT vs HNSW (Milvus)
-
-**What it is.** Two index *types* for the same Milvus collection.
-
-- **FLAT** is brute-force: it stores the raw vectors and, per query, scans all of them. Exact (recall@k = 1.0 by definition), no build cost beyond loading, but `O(N)` per query.
-- **HNSW** (*Hierarchical Navigable Small World*) is a graph-based ANN index. It builds a navigable proximity graph once, then answers each query by walking that graph — touching only a tiny fraction of the vectors.
-
-**How it works (HNSW from scratch).** Imagine the stored vectors as points. HNSW connects each point to a handful of its nearest neighbours, forming a "small-world" graph where you can greedily hop from any point toward any target in a few steps. The *hierarchical* twist: it stacks several such graphs in layers, like a skip-list.
-
-- The **top layer** holds very few points with long-range links (a coarse map of the space).
-- Each **lower layer** holds more points with shorter-range links.
-- The **bottom layer** holds *every* point.
-
-A query enters at the top, greedily walks to the closest point it can reach, then *descends* a layer and repeats — long hops first to get to the right region fast, then short hops to refine. That layered greedy descent is what turns an `O(N)` scan into roughly `O(log N)` hops.
-
-Two build-time knobs and one query-time knob govern the recall/latency/memory trade:
-
-- **`M`** — the graph degree (neighbours per node). Higher `M` → richer graph → better recall, but more memory and a slower build. (`hnsw_m = 16`.)
-- **`efConstruction`** — how wide a candidate list the *builder* keeps while wiring each node's neighbours. Higher → better-quality graph (better recall) → slower build. (`hnsw_ef_construction = 200`.)
-- **`ef`** (a.k.a. efSearch) — how wide a candidate list the *query* keeps while walking. Higher → explores more of the graph → better recall, slower query. It must be ≥ the search `top_k` or you cannot even return `k` results. (`hnsw_ef_search = 64`.)
-
-Tiny intuition: with `ef = top_k` you do the minimum walk (fastest, lowest recall); raising `ef` is the per-query dial that buys recall back without rebuilding the index.
-
-**Why we use it / alternatives.** FLAT is the llama-index default and is exactly what this project shipped a fix for: fine up to a few hundred k vectors, a latency cliff beyond ~1M (`MilvusSettings` comments). For the 250k-and-up target we default to **HNSW** so production collections get approximate-NN search out of the box. FLAT remains available (`MILVUS_INDEX_TYPE=FLAT`) for exact search / as the recall ground truth.
-
-**In our code.**
-- Config: `src/config.py` → `MilvusSettings`: `index_type: str = "HNSW"` (default), `hnsw_m = 16`, `hnsw_ef_construction = 200`, `hnsw_ef_search = 64`.
-- Wiring: `src/retrieval/vector_index.py` → `_index_config()` emits `{"index_type": ..., "M": hnsw_m, "efConstruction": hnsw_ef_construction}` (HNSW params only when `index_type == "HNSW"`); `_search_config()` emits `{"ef": hnsw_ef_search}` for HNSW, `{}` otherwise. These feed `MilvusVectorStore(index_config=..., search_config=...)`.
-- **Important caveat (in the config comment):** `index_type` only takes effect when the collection is *(re)created* — a fresh deploy or `overwrite=True` re-ingest. An existing FLAT collection keeps FLAT until rebuilt. So the HNSW default is an opt-in-by-rebuild swap, never a silent in-place mutation.
-- Benchmark: `tests/eval/scale/bench_milvus.py` builds the same synthetic corpus under FLAT and HNSW, treats FLAT results as truth, and reports `hnsw_recall_at_k`, `flat_query_p50_ms`, `hnsw_query_p50_ms`, `speedup`, and both build times. It skips cleanly when no local Milvus is reachable.
+**В нашем коде.**
+- `src/ingestion/embeddings.py` — `build_embedding_model()` (фабрика `OpenAILikeEmbedding`).
+- `src/workflow/activities/index_vector.py` — activity `index_vector`: где чанки эмбеддятся и вставляются в Milvus (`index_nodes`).
+- `src/config.py` `LiteLLMSettings` — `LITELLM_EMBEDDING_MODEL` (по умолчанию `nomic-embed-text`), `LITELLM_EMBEDDING_DIM` (768), `LITELLM_BASE_URL`, `LITELLM_TIMEOUT_S`, `LITELLM_MAX_RETRIES`.
 
 ---
 
-## Neo4j as a property graph + its indexes
+# Часть 2 — Векторы, граф и Entity Resolution
 
-**What it is.** A **property graph** is a data model made of three things:
+Справочник с нуля по субстрату извлечения `kb-llamaindex`: как мы находим похожий текст по вектору, как граф знаний хранится и индексируется в Neo4j, и как мы схлопываем множество поверхностных форм одной реальной сущности в одну каноническую ноду — а затем суммируем граф в отчёты по сообществам.
 
-- **Nodes** — the entities. Each node can carry one or more **labels** (its types, e.g. `__Entity__`, `Person`, `Community`).
-- **Relationships** — directed, typed edges between nodes (e.g. `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`). The relationship *type* is part of its identity.
-- **Properties** — key/value pairs on either nodes or relationships (e.g. an entity's `name`, `description`, `mention_count`, `er_embedding`).
+> **Замечание о верификации в песочнице.** В песочнице, где это писалось, нет живого
+> Neo4j / GDS. Каждое утверждение Cypher / GDS ниже обосновано *чтением* кода и тестов, а
+> не выполнением против базы данных. Там, где сам код помечает API как непроверенный против
+> живого GDS, этот документ повторяет эту оговорку.
 
-Neo4j is a database built natively on this model; you query it with **Cypher** (the `MATCH (n)-[r]->(m) ...` pattern language). In this project the knowledge graph extracted from documents lives here: each entity is an `__Entity__` node (plus a type label like `Person`/`Org`), relations are typed edges, and the per-entity `description` property is the LightRAG-style semantic payload.
+---
 
-**How it works (indexes).** A bare `MATCH (e:__Entity__ {name: $name})` without an index is a full label scan — `O(N)` over every `__Entity__`. Neo4j offers several index kinds we lean on:
+## Векторный поиск и приближённый поиск ближайших соседей (ANN)
 
-- **Range index** — a sorted index on a property, for equality and ordering. We add `entity_name` (`ON (e.name)`) and `entity_mention_count` (`ON (e.mention_count)`). The llama-index Neo4j store only creates a UNIQUE constraint on the node `.id`; our own Cypher matches by the *separate* `.name` property and orders by `.mention_count`, so these standalone indexes are what keep those lookups off a full scan at 250k+ nodes.
-- **Full-text index** — a tokenised/analyzed text index for partial / fuzzy name lookup (powered by Lucene under the hood). `entity_name_fulltext` (`FOR (e:__Entity__) ON EACH [e.name]`) backs partial-name entity lookup in the retriever.
-- **Native vector index** — Neo4j can store a `list<float>` property and index it for ANN, queried with the built-in procedure `db.index.vector.queryNodes(indexName, k, queryVector)`. We use two: `er_embedding_vec` over `__Entity__.er_vec` (entity-resolution kNN, see below) and `community_report_vec` over `Community.report_vec` (community-report retrieval). Both are created `cosine`, dimensioned by `$dim` (= `settings.milvus.dim`). This means we have vectors in *two* engines: Milvus for chunk text, Neo4j-native for the graph-side (entity and community) vectors.
-- **GDS (Graph Data Science)** — a separate Neo4j plugin library of graph *algorithms* (community detection, centrality, path-finding, …). It works by *projecting* part of the graph into an in-memory representation, running an algorithm over it, and streaming/writing results back. We use it for Leiden community detection (next sections).
+**Что это.** Эмбеддинг-модель превращает кусок текста в список float'ов фиксированной длины — *вектор* (здесь 768 измерений, `MilvusSettings.dim = 768`). Тексты со схожим смыслом мапятся в векторы, указывающие в схожих направлениях. «Поиск» тогда означает: дан вектор запроса, найти ближайшие к нему хранимые векторы. Близость — это метрика расстояния/сходства; мы используем **косинусное сходство** (угол между двумя векторами, игнорируя их длину).
 
-**Why we use it / alternatives.** A property graph (vs. a plain relational schema) makes the multi-hop, arbitrarily-typed relationships the KG extractor emits first-class and cheap to traverse. The indexes are the difference between sub-millisecond lookups and `O(N)` label scans at scale. Neo4j's *native* vector index lets graph-side similarity (entity dedup, community retrieval) live next to the graph itself instead of round-tripping to Milvus.
+**Как это работает.** Наивный («точный» / brute-force) подход сравнивает запрос с *каждым* хранимым вектором, вычисляет сходство и оставляет топ-`k`. С `N` хранимыми векторами размерности `d` это `O(N·d)` работы на запрос — каждый запрос трогает всю коллекцию. Конкретно, при 1М чанков × 768 измерений это ~768М умножений-сложений *на запрос*: верно, но обрыв по латентности.
 
-**In our code.**
-- All index DDL is idempotent (`IF NOT EXISTS`) and **fail-open** (errors are logged and swallowed so a store/version without a given index just keeps the old behaviour). See `src/graph/index.py`: `ensure_entity_fulltext_index`, `ensure_entity_lookup_indexes` (range indexes on `name` + `mention_count`), `ensure_er_vector_index`, `ensure_community_report_vector_index`, `ensure_community_indexes`.
-- Store factory: `src/graph/store.py` → `build_neo4j_graph_store()` returns a `Neo4jPropertyGraphStore`; tests use the in-memory `SimplePropertyGraphStore`. The generic Cypher entry point used throughout is `store.structured_query(cypher, param_map=...)`.
+ANN (приближённый поиск ближайших соседей) меняет немного **полноты** (recall) на много **скорости**. Вместо сканирования всего он строит *индекс* — структуру данных, которая позволяет запросу посетить лишь маленькое, хитро выбранное подмножество хранимых векторов и всё равно приземлиться на (почти) истинный топ-`k`. Цена: он может изредка пропустить истинного соседа. Мы измеряем эту потерю как **recall@k** = (доля истинного топ-`k`, которую приближённый поиск действительно вернул). ANN — стандартный ответ, как только `N` вырастает за несколько сотен тысяч.
+
+**Почему мы это используем / альтернативы.** Точный (FLAT) поиск — это эталон корректности и нормален для маленьких коллекций; ANN (HNSW, ниже) — это то, что держит латентность запроса плоской по мере роста корпуса. Существуют другие семейства ANN (IVF/кластеризация по инвертированным файлам, product-quantization/PQ для сжатия памяти, DiskANN для графов на диске); HNSW — значение по умолчанию, которое мы выбрали для in-memory recall/латентности.
+
+**В нашем коде.** Векторы чанков живут в **Milvus**. Хранилище строится в `src/retrieval/vector_index.py` (`build_vector_store` → `MilvusVectorStore(..., similarity_metric="COSINE", index_config=..., search_config=...)`). Векторы записываются во время инжеста Temporal-activity `src/workflow/activities/index_vector.py` (`index_vector` → `index_nodes(index, nodes)`). Компромисс recall-против-латентности забенчмаркан в `tests/eval/scale/bench_milvus.py` (`bench_flat_vs_hnsw`, `_recall_at_k`).
+
+---
+
+## FLAT против HNSW (Milvus)
+
+**Что это.** Два *типа* индекса для одной и той же коллекции Milvus.
+
+- **FLAT** — это brute-force: он хранит сырые векторы и, на запрос, сканирует их все. Точен (recall@k = 1.0 по определению), без стоимости построения сверх загрузки, но `O(N)` на запрос.
+- **HNSW** (*Hierarchical Navigable Small World*) — это графовый ANN-индекс. Он один раз строит навигируемый граф близости, затем отвечает на каждый запрос, проходя по этому графу — трогая лишь крошечную долю векторов.
+
+**Как это работает (HNSW с нуля).** Представьте хранимые векторы как точки. HNSW соединяет каждую точку с горсткой её ближайших соседей, формируя граф «малого мира», где можно жадно прыгать от любой точки к любой цели за несколько шагов. *Иерархический* твист: он стопкой укладывает несколько таких графов слоями, как skip-list.
+
+- **Верхний слой** держит очень мало точек с дальними связями (грубая карта пространства).
+- Каждый **нижний слой** держит больше точек с более короткими связями.
+- **Нижний слой** держит *каждую* точку.
+
+Запрос входит наверху, жадно идёт к ближайшей достижимой точке, затем *спускается* на слой и повторяет — сначала длинные прыжки, чтобы быстро добраться до нужного региона, затем короткие прыжки для уточнения. Этот послойный жадный спуск — то, что превращает `O(N)` сканирование примерно в `O(log N)` прыжков.
+
+Две ручки времени построения и одна ручка времени запроса управляют компромиссом recall/латентность/память:
+
+- **`M`** — степень графа (соседей на ноду). Выше `M` → богаче граф → лучше recall, но больше памяти и медленнее построение. (`hnsw_m = 16`.)
+- **`efConstruction`** — насколько широкий список кандидатов держит *строитель*, проводя связи соседей каждой ноды. Выше → граф более высокого качества (лучше recall) → медленнее построение. (`hnsw_ef_construction = 200`.)
+- **`ef`** (a.k.a. efSearch) — насколько широкий список кандидатов держит *запрос*, проходя по графу. Выше → исследует больше графа → лучше recall, медленнее запрос. Он должен быть ≥ поискового `top_k`, иначе вы даже не сможете вернуть `k` результатов. (`hnsw_ef_search = 64`.)
+
+Крошечная интуиция: с `ef = top_k` вы делаете минимальный проход (быстрее всего, ниже всего recall); поднятие `ef` — это пер-запросный циферблат, покупающий recall обратно без перестроения индекса.
+
+**Почему мы это используем / альтернативы.** FLAT — это значение по умолчанию llama-index и ровно то, для чего этот проект выпустил фикс: нормально до нескольких сотен тысяч векторов, обрыв по латентности за ~1М (`MilvusSettings` комментарии). Для цели в 250k-и-выше мы по умолчанию используем **HNSW**, чтобы продакшен-коллекции получали приближённый-NN поиск из коробки. FLAT остаётся доступным (`MILVUS_INDEX_TYPE=FLAT`) для точного поиска / как эталон recall.
+
+**В нашем коде.**
+- Конфиг: `src/config.py` → `MilvusSettings`: `index_type: str = "HNSW"` (по умолчанию), `hnsw_m = 16`, `hnsw_ef_construction = 200`, `hnsw_ef_search = 64`.
+- Проводка: `src/retrieval/vector_index.py` → `_index_config()` эмитит `{"index_type": ..., "M": hnsw_m, "efConstruction": hnsw_ef_construction}` (параметры HNSW только когда `index_type == "HNSW"`); `_search_config()` эмитит `{"ef": hnsw_ef_search}` для HNSW, `{}` иначе. Они питают `MilvusVectorStore(index_config=..., search_config=...)`.
+- **Важная оговорка (в комментарии конфига):** `index_type` вступает в силу только когда коллекция *(пере)создаётся* — свежий деплой или ре-инжест с `overwrite=True`. Существующая FLAT-коллекция остаётся FLAT, пока не перестроена. Так что значение по умолчанию HNSW — это опт-ин-через-перестроение замена, никогда не молчаливая мутация на месте.
+- Бенчмарк: `tests/eval/scale/bench_milvus.py` строит один и тот же синтетический корпус под FLAT и HNSW, трактует результаты FLAT как истину и сообщает `hnsw_recall_at_k`, `flat_query_p50_ms`, `hnsw_query_p50_ms`, `speedup` и оба времени построения. Он чисто пропускается, когда локальный Milvus недостижим.
+
+---
+
+## Neo4j как property-граф и его индексы
+
+**Что это.** **Property-граф** — это модель данных из трёх вещей:
+
+- **Ноды** — сущности. Каждая нода может нести одну или более **меток** (её типы, например `__Entity__`, `Person`, `Community`).
+- **Отношения** — направленные, типизированные рёбра между нодами (например `(:__Entity__)-[:IN_COMMUNITY]->(:Community)`). *Тип* отношения — часть его идентичности.
+- **Свойства** — пары ключ/значение на нодах или отношениях (например `name`, `description`, `mention_count`, `er_embedding` сущности).
+
+Neo4j — это база данных, построенная нативно на этой модели; вы запрашиваете её **Cypher** (языком паттернов `MATCH (n)-[r]->(m) ...`). В этом проекте граф знаний, извлечённый из документов, живёт здесь: каждая сущность — нода `__Entity__` (плюс метка типа вроде `Person`/`Org`), отношения — типизированные рёбра, а пер-сущностное свойство `description` — это семантическая нагрузка в стиле LightRAG.
+
+**Как это работает (индексы).** Голый `MATCH (e:__Entity__ {name: $name})` без индекса — это полное сканирование по метке — `O(N)` по каждой `__Entity__`. Neo4j предлагает несколько видов индексов, на которые мы опираемся:
+
+- **Range-индекс** — отсортированный индекс по свойству, для равенства и упорядочения. Мы добавляем `entity_name` (`ON (e.name)`) и `entity_mention_count` (`ON (e.mention_count)`). Хранилище Neo4j от llama-index создаёт только UNIQUE-ограничение на `.id` ноды; наш собственный Cypher матчит по *отдельному* свойству `.name` и упорядочивает по `.mention_count`, так что эти отдельные индексы — то, что держит эти поиски вне полного сканирования при 250k+ нод.
+- **Полнотекстовый индекс** — токенизированный/анализируемый текстовый индекс для частичного / нечёткого поиска имени (под капотом на Lucene). `entity_name_fulltext` (`FOR (e:__Entity__) ON EACH [e.name]`) поддерживает поиск сущности по частичному имени в ретривере.
+- **Нативный векторный индекс** — Neo4j может хранить свойство `list<float>` и индексировать его для ANN, запрашиваемое встроенной процедурой `db.index.vector.queryNodes(indexName, k, queryVector)`. Мы используем два: `er_embedding_vec` над `__Entity__.er_vec` (kNN для entity-resolution, см. ниже) и `community_report_vec` над `Community.report_vec` (извлечение отчётов по сообществам). Оба создаются `cosine`, размерности `$dim` (= `settings.milvus.dim`). Это означает, что у нас векторы в *двух* движках: Milvus для текста чанков, Neo4j-нативный для графовых (сущности и сообщества) векторов.
+- **GDS (Graph Data Science)** — отдельная библиотека-плагин Neo4j с графовыми *алгоритмами* (обнаружение сообществ, центральность, поиск путей, …). Она работает, *проецируя* часть графа в in-memory представление, прогоняя алгоритм над ним и стримя/записывая результаты обратно. Мы используем её для обнаружения сообществ Leiden (следующие разделы).
+
+**Почему мы это используем / альтернативы.** Property-граф (против простой реляционной схемы) делает многошаговые, произвольно-типизированные отношения, которые эмитит экстрактор KG, первоклассными и дешёвыми для обхода. Индексы — это разница между поисками за суб-миллисекунды и `O(N)` сканированиями по метке на масштабе. *Нативный* векторный индекс Neo4j позволяет графовому сходству (дедуп сущностей, извлечение сообществ) жить рядом с самим графом, а не ходить туда-обратно в Milvus.
+
+**В нашем коде.**
+- Весь DDL индексов идемпотентен (`IF NOT EXISTS`) и **fail-open** (ошибки логируются и проглатываются, так что хранилище/версия без данного индекса просто продолжает старое поведение). См. `src/graph/index.py`: `ensure_entity_fulltext_index`, `ensure_entity_lookup_indexes` (range-индексы по `name` + `mention_count`), `ensure_er_vector_index`, `ensure_community_report_vector_index`, `ensure_community_indexes`.
+- Фабрика хранилища: `src/graph/store.py` → `build_neo4j_graph_store()` возвращает `Neo4jPropertyGraphStore`; тесты используют in-memory `SimplePropertyGraphStore`. Общая точка входа Cypher, используемая повсюду, — `store.structured_query(cypher, param_map=...)`.
 
 ---
 
 ## Entity Resolution (ER)
 
-**What it is.** The same real-world entity shows up under many *surface forms*. After extraction we may have separate nodes for "BCC", "Basal Cell Carcinoma", and "Базальноклеточный рак" — all the same thing. ER is the step that detects these semantically-equivalent duplicates and consolidates them into one **canonical** node, rewriting every reference to point at it. An earlier step (`merge_kg_extraction`) already collapsed entities whose *normalised names* match exactly; ER catches the duplicates that survive orthographic dedup:
+**Что это.** Одна и та же реальная сущность появляется во множестве *поверхностных форм*. После извлечения у нас могут быть отдельные ноды для «BCC», «Basal Cell Carcinoma» и «Базальноклеточный рак» — всё одно и то же. ER (разрешение сущностей) — это шаг, который обнаруживает эти семантически-эквивалентные дубликаты и консолидирует их в одну **каноническую** ноду, переписывая каждую ссылку, чтобы она указывала на неё. Более ранний шаг (`merge_kg_extraction`) уже схлопнул сущности, чьи *нормализованные имена* совпадают точно; ER ловит дубликаты, пережившие орфографический дедуп:
 
-- cross-language ("BCC" ≡ "Базальноклеточный рак"),
-- abbreviations ("DNA" ≡ "deoxyribonucleic acid"),
-- word-order / morphology ("Рак Кожи БК" ≡ "Рак БК Кожи"),
-- initialisms ("Иванов И.И." ≡ "Иван Иванов"),
-- cross-document (a canonical stored from doc 1 vs a new variant from doc 2).
+- кросс-языковые («BCC» ≡ «Базальноклеточный рак»),
+- сокращения («DNA» ≡ «deoxyribonucleic acid»),
+- порядок слов / морфология («Рак Кожи БК» ≡ «Рак БК Кожи»),
+- инициализмы («Иванов И.И.» ≡ «Иван Иванов»),
+- кросс-документные (канонический, сохранённый из документа 1, против нового варианта из документа 2).
 
-The whole module is **conservative**: every LLM-side decision defaults to *DIFFERENT* on timeout/failure, because a false-positive merge permanently pollutes the graph (you can't easily un-merge two entities that were never the same).
+Весь модуль **консервативен**: каждое решение на стороне LLM по умолчанию *DIFFERENT* при таймауте/сбое, потому что ложноположительное слияние навсегда загрязняет граф (нельзя легко раз-слить две сущности, которые никогда не были одной и той же).
 
-The pipeline is *embedding-blocked, LLM-confirmed*. Below, each stage from scratch.
+Конвейер *блокирован эмбеддингами, подтверждён LLM*. Ниже — каждая стадия с нуля.
 
-### (a) Candidate generation via cosine similarity (vectorized)
+### (a) Генерация кандидатов через косинусное сходство (векторизованная)
 
-**What it is.** We can't ask the LLM about every possible pair — that's `O(N²)` LLM calls. So first we cheaply *block*: for each entity, find a short list of plausibly-equivalent neighbours by embedding similarity, and only those reach the expensive judge.
+**Что это.** Мы не можем спрашивать LLM о каждой возможной паре — это `O(N²)` LLM-вызовов. Поэтому сначала мы дёшево *блокируем*: для каждой сущности находим короткий список правдоподобно-эквивалентных соседей по сходству эмбеддингов, и только они доходят до дорогого судьи.
 
-**How it works.** Each entity is embedded from `name + ": " + description` (or just `name` when it has no description). Candidates are computed **per label** (only same-typed entities can match) and the cosine of every within-label pair is taken. A pair is kept if its cosine clears a floor (`low = 0.55`, raised to `empty_description_floor = 0.70` when either side lacks a description), then trimmed to the top-`knn_k = 10` neighbours per entity. Each surviving pair is classified:
+**Как это работает.** Каждая сущность эмбеддится из `name + ": " + description` (или просто `name`, когда у неё нет описания). Кандидаты вычисляются **по метке** (только одно-типные сущности могут совпасть), и берётся косинус каждой пары внутри метки. Пара оставляется, если её косинус преодолевает порог (`low = 0.55`, поднятый до `empty_description_floor = 0.70`, когда у одной из сторон нет описания), затем урезается до топ-`knn_k = 10` соседей на сущность. Каждая выжившая пара классифицируется:
 
-- cosine ≥ `high = 0.85` **and** same script (both ASCII or both Cyrillic) → **auto-merge** (no LLM),
-- otherwise (cosine in `[low, high)`, *or* ≥ `high` but cross-script) → **borderline** → goes to the LLM judge.
+- косинус ≥ `high = 0.85` **и** тот же скрипт (обе ASCII или обе кириллица) → **авто-слияние** (без LLM),
+- иначе (косинус в `[low, high)`, *или* ≥ `high`, но кросс-скрипт) → **пограничная** → идёт к LLM-судье.
 
-The naive way to get all pairwise cosines is an `O(N²)` pure-Python double loop calling `_cosine` — the candidate-gen cost cliff at scale. We speed it up with a **vectorized matrix-vector product**: `_normalized_matrix` builds a row-normalised float64 matrix of the group's embeddings (numpy), then per row `cos_row = mat @ mat[i]` yields *every* cosine from entity `i` to the group in one BLAS call. When numpy is unavailable or the embeddings are ragged it falls back to the identical pure-Python `_cosine` path, so behaviour never silently changes (zero vectors keep cosine 0 either way). There are also name-token guards: a high Jaccard overlap of content tokens can *bypass* the cosine floor (catches the same entity described very differently across docs), and `name_token_min_overlap` can *reject* zero-overlap pairs (description-context contamination), with a cross-script exception so "Romashka" ≡ "Ромашка" still passes.
+Наивный способ получить все попарные косинусы — это `O(N²)` чисто-питоновский двойной цикл, вызывающий `_cosine` — обрыв стоимости генерации кандидатов на масштабе. Мы ускоряем его **векторизованным произведением матрица-вектор**: `_normalized_matrix` строит построчно-нормализованную float64 матрицу эмбеддингов группы (numpy), затем на строку `cos_row = mat @ mat[i]` даёт *каждый* косинус от сущности `i` до группы за один BLAS-вызов. Когда numpy недоступен или эмбеддинги рваные, он откатывается на идентичный чисто-питоновский путь `_cosine`, так что поведение никогда молча не меняется (нулевые векторы держат косинус 0 в любом случае). Есть также защиты по токенам имени: высокое Jaccard-перекрытие содержательных токенов может *обойти* порог косинуса (ловит ту же сущность, описанную очень по-разному в разных документах), а `name_token_min_overlap` может *отвергнуть* пары с нулевым перекрытием (загрязнение контекстом описания), с исключением для кросс-скрипта, чтобы «Romashka» ≡ «Ромашка» всё равно проходило.
 
-**Why we use it / alternatives.** Embedding-blocking is the standard ER trick: turn `O(N²)` LLM cost into `O(N·k)` candidate pairs. Same-label + cosine-floor + top-k is a cheap, high-recall filter; the alternative (full pairwise LLM, or no blocking) is intractable.
+**Почему мы это используем / альтернативы.** Блокировка эмбеддингами — стандартный ER-трюк: превратить `O(N²)` LLM-стоимость в `O(N·k)` пар-кандидатов. Та же метка + порог косинуса + топ-k — это дешёвый фильтр с высоким recall; альтернатива (полный попарный LLM или вообще без блокировки) нерешаема.
 
-**In our code.** `src/graph/entity_resolution.py`: `_candidate_pairs` (the classifier), `_normalized_matrix` (the vectorized speedup), `_cosine` (fallback), `_name_tokens` / `_name_token_overlap` (guards). Knobs on `ERConfig`: `low`, `high`, `knn_k`, `empty_description_floor`, `name_token_min_overlap`, `name_overlap_floor_bypass`.
+**В нашем коде.** `src/graph/entity_resolution.py`: `_candidate_pairs` (классификатор), `_normalized_matrix` (векторизованное ускорение), `_cosine` (откат), `_name_tokens` / `_name_token_overlap` (защиты). Ручки на `ERConfig`: `low`, `high`, `knn_k`, `empty_description_floor`, `name_token_min_overlap`, `name_overlap_floor_bypass`.
 
-### (b) LLM-as-judge for borderline pairs + the verdict cache (`:ERVerdict`)
+### (b) LLM-как-судья для пограничных пар + кэш вердиктов (`:ERVerdict`)
 
-**What it is.** Borderline pairs (the ones embedding similarity can't decide) are handed to an LLM "adjudicator" that decides SAME / DIFFERENT / UNSURE for each. UNSURE is treated as DIFFERENT (conservative). The judge is prompted with both names, their types, and truncated descriptions, in batches of `judge_batch = 10`, and must return a strict JSON array.
+**Что это.** Пограничные пары (те, что сходство эмбеддингов не может решить) передаются LLM-«арбитру», который решает SAME / DIFFERENT / UNSURE для каждой. UNSURE трактуется как DIFFERENT (консервативно). Судье даются оба имени, их типы и усечённые описания, в батчах по `judge_batch = 10`, и он должен вернуть строгий JSON-массив.
 
-**How it works.** `_llm_judge_pairs` dispatches batches concurrently (real parallelism is capped by the process-wide bounded LLM gate). `_parse_judge_response` extracts the JSON array; any missing/malformed entry → False (DIFFERENT). The system prompt teaches it the easy traps (`"Customer" ≠ "Customer #4521"`, `"Skin Cancer" ≠ "Melanoma"`, different people sharing a surname).
+**Как это работает.** `_llm_judge_pairs` диспетчит батчи конкурентно (реальный параллелизм ограничен пер-процессным bounded LLM-шлюзом). `_parse_judge_response` извлекает JSON-массив; любой отсутствующий/некорректный элемент → False (DIFFERENT). Системный промпт обучает его лёгким ловушкам (`"Customer" ≠ "Customer #4521"`, `"Skin Cancer" ≠ "Melanoma"`, разные люди с одной фамилией).
 
-The **verdict cache** exists because the *same* name-pairs recur constantly — across re-ingests and within hub-heavy documents. Caching a verdict avoids re-paying for an LLM call we've already made. It caches, in Neo4j, a node `:ERVerdict {key, same}` where `key` is an **order-insensitive** identifier of the pair built from `(norm, label)` of both items (JSON-joined so a delimiter inside a name can't collide with a different pair), and `same` is the boolean verdict. Before judging, ER loads cached verdicts for the batch's keys, splits pairs into `(cached, uncached)`, judges only the uncached, then persists the fresh verdicts. The whole thing is **OPTIONAL and FAIL-SAFE**: with no `er_store` (or any Neo4j error) it degrades to pure LLM judging with byte-for-byte identical behaviour.
+**Кэш вердиктов** существует потому, что *одни и те же* пары имён постоянно повторяются — между ре-инжестами и внутри хаб-тяжёлых документов. Кэширование вердикта избегает повторной оплаты LLM-вызова, который мы уже сделали. Он кэширует, в Neo4j, ноду `:ERVerdict {key, same}`, где `key` — это **нечувствительный к порядку** идентификатор пары, построенный из `(norm, label)` обоих элементов (JSON-склеенный, так что разделитель внутри имени не может столкнуться с другой парой), а `same` — булев вердикт. Перед судейством ER загружает кэшированные вердикты для ключей батча, делит пары на `(cached, uncached)`, судит только uncached, затем персистит свежие вердикты. Всё это **ОПЦИОНАЛЬНО и FAIL-SAFE**: без `er_store` (или при любой ошибке Neo4j) оно деградирует до чистого LLM-судейства с байт-в-байт идентичным поведением.
 
-**Why we use it / alternatives.** The LLM is the only thing that reliably resolves cross-language / abbreviation / word-order equivalence; embeddings alone over-merge (related-but-distinct concepts embed close). The cache turns a recurring `O(pairs)` LLM cost into a one-time cost per distinct pair. Alternative (no judge): either over-merge on raw cosine or miss everything cross-script.
+**Почему мы это используем / альтернативы.** LLM — единственное, что надёжно разрешает кросс-языковую / по-сокращениям / по-порядку-слов эквивалентность; одни эмбеддинги пере-сливают (связанные-но-различные концепты эмбеддятся близко). Кэш превращает повторяющуюся `O(pairs)` LLM-стоимость в одноразовую стоимость на каждую различную пару. Альтернатива (без судьи): либо пере-слить по сырому косинусу, либо пропустить всё кросс-скриптовое.
 
-**In our code.** `src/graph/entity_resolution.py`: `_JUDGE_SYSTEM`, `_llm_judge_pairs`, `_parse_judge_response`; cache helpers `_verdict_key`, `_partition_cached`, `_load_verdict_cache` (`MATCH (v:ERVerdict) WHERE v.key IN $keys`), `_store_verdicts` (creates a UNIQUE constraint `er_verdict_key`, then `MERGE`es each verdict). Knobs: `ERConfig.judge_batch`, `ERConfig.verdict_cache_enabled`; config `AGENT_ER_JUDGE_BATCH_SIZE`, `AGENT_ER_VERDICT_CACHE_ENABLED`.
+**В нашем коде.** `src/graph/entity_resolution.py`: `_JUDGE_SYSTEM`, `_llm_judge_pairs`, `_parse_judge_response`; помощники кэша `_verdict_key`, `_partition_cached`, `_load_verdict_cache` (`MATCH (v:ERVerdict) WHERE v.key IN $keys`), `_store_verdicts` (создаёт UNIQUE-ограничение `er_verdict_key`, затем `MERGE`'ит каждый вердикт). Ручки: `ERConfig.judge_batch`, `ERConfig.verdict_cache_enabled`; конфиг `AGENT_ER_JUDGE_BATCH_SIZE`, `AGENT_ER_VERDICT_CACHE_ENABLED`.
 
-### (c) Union-find / connected-components clustering
+### (c) Union-find / кластеризация связных компонент
 
-**What it is.** The judge and the deterministic/auto stages produce a set of *confirmed equal* pairs (A≡B, B≡C, …). We need to turn those pairwise links into **clusters** — maximal groups where everything is transitively linked. That is exactly the connected-components problem on a graph whose edges are the confirmed pairs, and **union-find** (a.k.a. disjoint-set union) is the classic near-linear algorithm for it.
+**Что это.** Судья и детерминированные/авто-стадии производят набор *подтверждённо равных* пар (A≡B, B≡C, …). Нам нужно превратить эти попарные связи в **кластеры** — максимальные группы, где всё транзитивно связано. Это ровно задача связных компонент на графе, чьи рёбра — подтверждённые пары, и **union-find** (a.k.a. disjoint-set union) — это классический почти-линейный алгоритм для неё.
 
-**How it works (from scratch).** Union-find maintains, for each element, a pointer to a "parent". Following parents up leads to a **root**; two elements are in the same cluster iff they share a root.
+**Как это работает (с нуля).** Union-find поддерживает для каждого элемента указатель на «родителя». Следование по родителям вверх ведёт к **корню**; два элемента в одном кластере тогда и только тогда, когда у них общий корень.
 
-- `add(x)` — start `x` as its own root (`parent[x] = x`).
-- `find(x)` — walk parent pointers up to the root. We *path-compress* along the way (re-point nodes nearer the root) so repeated `find`s get flatter and faster.
-- `union(a, b)` — find both roots; if different, point one root at the other. Now `a` and `b`, and everything previously linked to either, share a root.
-- `groups()` — bucket every element by its root → the clusters.
+- `add(x)` — стартует `x` как собственный корень (`parent[x] = x`).
+- `find(x)` — идёт по указателям родителей вверх до корня. Мы *сжимаем путь* по дороге (пере-направляем ноды ближе к корню), так что повторные `find` становятся площе и быстрее.
+- `union(a, b)` — находит оба корня; если разные, указывает один корень на другой. Теперь `a` и `b`, и всё ранее связанное с любым из них, делят корень.
+- `groups()` — раскладывает каждый элемент по его корню → кластеры.
 
-Tiny example: confirm (A,B) then (B,C). `union(A,B)` makes B the root of {A,B}. `union(B,C)` joins that root to C's root → all of A,B,C share one root → cluster `{A,B,C}`. The crucial property: we never asked the LLM "is A the same as C?" — transitivity gave it to us for free (which is also why stage (d)/verify exists, to catch *bad* transitive merges).
+Крошечный пример: подтвердить (A,B), затем (B,C). `union(A,B)` делает B корнем {A,B}. `union(B,C)` присоединяет этот корень к корню C → все A,B,C делят один корень → кластер `{A,B,C}`. Ключевое свойство: мы никогда не спрашивали LLM «A то же, что и C?» — транзитивность дала нам это бесплатно (что также причина, почему существует стадия (d)/верификация, чтобы ловить *плохие* транзитивные слияния).
 
-**Why we use it / alternatives.** Union-find is the standard, effectively `O(N·α(N))` way to do connected components incrementally as edges arrive. The alternative (BFS/DFS flood-fill per component) needs the full edge list materialised first and is clumsier to feed pair-by-pair.
+**Почему мы это используем / альтернативы.** Union-find — стандартный, эффективно `O(N·α(N))` способ делать связные компоненты инкрементально по мере прибытия рёбер. Альтернатива (BFS/DFS заливка по компоненте) требует, чтобы полный список рёбер был материализован первым, и более неуклюжа для подачи пара-за-парой.
 
-**In our code.** `src/graph/entity_resolution.py`: the `_UnionFind` dataclass (`find` with path compression, `union`, `add`, `groups`). In `resolve_entities` every item is `add`ed, every confirmed pair is `union`ed, and `uf.groups()` (keeping only size > 1) yields the candidate clusters.
+**В нашем коде.** `src/graph/entity_resolution.py`: dataclass `_UnionFind` (`find` со сжатием пути, `union`, `add`, `groups`). В `resolve_entities` каждый элемент `add`ится, каждая подтверждённая пара `union`ится, и `uf.groups()` (оставляя только размер > 1) даёт кластеры-кандидаты.
 
-### (d) Hyper-hub clamp
+### (d) Зажим гипер-хабов (hyper-hub clamp)
 
-**What it is.** Occasionally clustering snowballs: a generic or noisy entity links to dozens of others and the connected component balloons. Auto-merging a huge cluster is almost always wrong (one bad edge dragged in unrelated entities). The hyper-hub clamp refuses to auto-merge clusters above a size threshold.
+**Что это.** Изредка кластеризация снежным комом разрастается: общая или зашумлённая сущность связывается с десятками других, и связная компонента раздувается. Авто-слияние огромного кластера почти всегда неверно (одно плохое ребро втянуло несвязанные сущности). Зажим гипер-хабов отказывается авто-сливать кластеры выше порога размера.
 
-**How it works.** Components with `len(cluster) >= hyper_hub_threshold` (default **12**) are split off into `review_clusters` and **not merged**. Their new members keep their original names, but each is flagged `properties["er_review_needed"] = True` for manual review. Smaller clusters proceed normally.
+**Как это работает.** Компоненты с `len(cluster) >= hyper_hub_threshold` (по умолчанию **12**) отделяются в `review_clusters` и **не сливаются**. Их новые члены сохраняют свои исходные имена, но каждый помечается `properties["er_review_needed"] = True` для ручного ревью. Меньшие кластеры идут нормально.
 
-**Why we use it / alternatives.** It's a precision guardrail consistent with the module's "never false-merge" stance: a 12-member "cluster" is far more likely to be a contamination chain than 12 truly-identical surface forms. The alternative — trusting it — risks collapsing many distinct entities into one polluted node.
+**Почему мы это используем / альтернативы.** Это защита точности, согласованная с позицией модуля «никогда не сливать ложно»: 12-членный «кластер» куда вероятнее цепочка загрязнения, чем 12 истинно-идентичных поверхностных форм. Альтернатива — доверять ему — рискует схлопнуть много различных сущностей в одну загрязнённую ноду.
 
-**In our code.** `src/graph/entity_resolution.py`: the `review_clusters` / `final_clusters` split in `resolve_entities`, gated by `ERConfig.hyper_hub_threshold`; review members get `er_review_needed` set. (Separately, clusters of `>= verify_cluster_size = 3` get a single LLM *consolidation* call, `_verify_cluster`, to split bad transitive merges before canonical selection.)
+**В нашем коде.** `src/graph/entity_resolution.py`: разделение `review_clusters` / `final_clusters` в `resolve_entities`, ограниченное `ERConfig.hyper_hub_threshold`; члены ревью получают `er_review_needed`. (Отдельно, кластеры размера `>= verify_cluster_size = 3` получают один LLM-вызов *консолидации*, `_verify_cluster`, чтобы расщеплять плохие транзитивные слияния перед выбором канонического.)
 
-### (e) Canonical selection
+### (e) Выбор канонического
 
-**What it is.** Once a cluster is final, one member must survive as the canonical name; the rest become aliases that redirect to it.
+**Что это.** Когда кластер финален, один член должен выжить как каноническое имя; остальные становятся алиасами, перенаправляющими на него.
 
-**How it works.** `_pick_canonical` ranks members by a tuple key (highest wins), in priority order:
+**Как это работает.** `_pick_canonical` ранжирует членов по кортежному ключу (выигрывает наибольший), в порядке приоритета:
 
-1. **`source == "stored"` always wins** — an entity already in Neo4j from a prior ingest beats a brand-new one. This prevents orphans: if a higher-mention *new* entity were chosen, the canonical upsert would create a fresh node and leave the old stored node dangling.
-2. higher `mention_count`,
-3. longer name (more specific),
-4. Cyrillic surface preferred when `language` is Russian,
-5. alphabetical (deterministic tiebreak).
+1. **`source == "stored"` всегда выигрывает** — сущность, уже в Neo4j от предыдущего инжеста, бьёт совершенно новую. Это предотвращает сирот: если бы выбрали *новую* сущность с большим числом упоминаний, канонический upsert создал бы свежую ноду и оставил старую хранимую ноду висящей.
+2. большее `mention_count`,
+3. длиннее имя (более специфично),
+4. кириллическая поверхность предпочтительна, когда `language` русский,
+5. алфавитно (детерминированный разрыв ничьей).
 
-The chosen canonical's `EntityNode` is rebuilt by `_consolidate_cluster`: it sums mention counts, unions source chunks / file paths, collects the others as `aliases`, picks the majority label, and consolidates descriptions via `_maybe_summarize_descriptions`. It also stamps `er_canonical_name` and `er_embedding` (JSON) so the *next* ingest's incremental ER can match against it; under native-kNN mode it additionally stamps `er_vec` (native list). Then `_apply_name_map` rewrites every chunk-level reference and merged relation to the canonical name, drops self-loops, and re-aggregates colliding relations; `_cleanup_stored_losers` repoints a non-canonical *stored* node's edges onto the canonical (via `apoc.merge.relationship`) and detach-deletes the loser — safe-by-inaction if APOC/the query fails (leaves the duplicate intact rather than dropping edges).
+Выбранная каноническая `EntityNode` пересобирается `_consolidate_cluster`: она суммирует числа упоминаний, объединяет исходные чанки / пути файлов, собирает остальных как `aliases`, выбирает мажоритарную метку и консолидирует описания через `_maybe_summarize_descriptions`. Она также штампует `er_canonical_name` и `er_embedding` (JSON), чтобы инкрементальный ER *следующего* инжеста мог матчить против неё; в режиме нативного kNN она дополнительно штампует `er_vec` (нативный список). Затем `_apply_name_map` переписывает каждую чанк-уровневую ссылку и объединённое отношение на каноническое имя, отбрасывает само-петли и пере-агрегирует сталкивающиеся отношения; `_cleanup_stored_losers` пере-направляет рёбра не-канонической *хранимой* ноды на каноническую (через `apoc.merge.relationship`) и detach-удаляет проигравшего — безопасно-через-бездействие, если APOC/запрос упадёт (оставляет дубликат нетронутым, а не сбрасывает рёбра).
 
-**Why we use it / alternatives.** The stored-wins rule is the key correctness choice — it keeps the graph's node identity stable across ingests. The rest is a deterministic, language-aware "most informative name" heuristic.
+**Почему мы это используем / альтернативы.** Правило «хранимый выигрывает» — ключевой выбор корректности — оно держит идентичность нод графа стабильной между инжестами. Остальное — детерминированная, языко-осведомлённая эвристика «самое информативное имя».
 
-**In our code.** `src/graph/entity_resolution.py`: `_pick_canonical`, `_consolidate_cluster`, `_apply_name_map`, `_cleanup_stored_losers`. Knob: `ERConfig.language`.
+**В нашем коде.** `src/graph/entity_resolution.py`: `_pick_canonical`, `_consolidate_cluster`, `_apply_name_map`, `_cleanup_stored_losers`. Ручка: `ERConfig.language`.
 
-### (f) Candidate source: incremental window vs native-vector kNN
+### (f) Источник кандидатов: инкрементальное окно против нативного-векторного kNN
 
-This is the **scale** story of ER, and the most important knob for a large graph.
+Это **масштабная** история ER и важнейшая ручка для большого графа.
 
-**The window (default).** To match a new entity against entities stored by *previous* ingests, ER loads a bounded slice of stored canonicals into memory and runs the same Python candidate-gen over them. `_load_existing_canonicals` reads `MATCH (n:__Entity__) WHERE n.er_canonical_name IS NOT NULL ... ORDER BY mention_count DESC LIMIT $limit` with `incremental_window = 5000`. The `ORDER BY mention_count DESC` matters: it guarantees the window always contains the *most-mentioned (hub)* canonicals rather than an arbitrary Neo4j slice.
+**Окно (по умолчанию).** Чтобы сматчить новую сущность против сущностей, сохранённых *предыдущими* инжестами, ER загружает ограниченный срез хранимых канонических в память и прогоняет тот же Python-генератор кандидатов над ними. `_load_existing_canonicals` читает `MATCH (n:__Entity__) WHERE n.er_canonical_name IS NOT NULL ... ORDER BY mention_count DESC LIMIT $limit` с `incremental_window = 5000`. `ORDER BY mention_count DESC` важен: он гарантирует, что окно всегда содержит *наиболее-упоминаемые (хабовые)* канонические, а не произвольный срез Neo4j.
 
-**The recall cliff.** Memory and candidate-gen cost both grow with the window, so it's bounded at 5000. But once the graph has *more* than 5000 canonicals, any canonical outside the window is **invisible** to a new mention — it simply cannot match, so the new mention silently fragments into a duplicate. On a synthetic 200k-canonical graph the mention_count window reaches only **~2 %** of the true nearest canonicals (see `tests/eval/scale/bench_er_native.py`, `bench_native_vs_window` → `window_reachable`). Ordering by mention_count makes the *hub* entities reliable, but the long tail beyond 5000 is lost.
+**Обрыв recall.** Память и стоимость генерации кандидатов растут с окном, поэтому оно ограничено 5000. Но как только в графе *больше* 5000 канонических, любой канонический вне окна **невидим** для нового упоминания — он просто не может сматчиться, так что новое упоминание молча фрагментируется в дубликат. На синтетическом графе с 200k канонических окно по mention_count достигает лишь **~2 %** истинных ближайших канонических (см. `tests/eval/scale/bench_er_native.py`, `bench_native_vs_window` → `window_reachable`). Упорядочивание по mention_count делает *хабовые* сущности надёжными, но длинный хвост за 5000 теряется.
 
-**The fix: native-vector kNN (opt-in).** Instead of loading a window and brute-forcing, query Neo4j's native vector index *per new entity* for its `k` nearest stored canonicals across the **whole graph** — no window ceiling. `_load_candidates_native` calls `db.index.vector.queryNodes('er_embedding_vec', $k, $vec)` (the index over `__Entity__.er_vec`) for each new entity and unions the deduplicated stored matches. On the same 200k graph, native kNN recovers **~96 %** of true nearest canonicals at ~6 ms/query. It's best-effort: returns `[]` (→ within-batch ER only) if the store is missing or the index isn't built yet.
+**Фикс: нативный-векторный kNN (опт-ин).** Вместо загрузки окна и brute-force запрашиваем нативный векторный индекс Neo4j *на каждую новую сущность* для её `k` ближайших хранимых канонических по **всему графу** — без потолка окна. `_load_candidates_native` вызывает `db.index.vector.queryNodes('er_embedding_vec', $k, $vec)` (индекс над `__Entity__.er_vec`) для каждой новой сущности и объединяет дедуплицированные хранимые совпадения. На том же 200k-графе нативный kNN восстанавливает **~96 %** истинных ближайших канонических при ~6 мс/запрос. Он best-effort: возвращает `[]` (→ ER только внутри батча), если хранилище отсутствует или индекс ещё не построен.
 
-**Backfill + flag ordering (must do in this order).** The native path can only find canonicals that have `er_vec` populated. Existing entities only have the legacy `er_embedding` JSON string. So:
+**Бэкфилл + порядок флага (надо делать именно в этом порядке).** Нативный путь может найти только канонические, у которых заполнен `er_vec`. У существующих сущностей есть только легаси JSON-строка `er_embedding`. Так что:
 
-1. Run `scripts/backfill_er_vector.py --no-dry-run` first — it parses each existing entity's `er_embedding` JSON into a native `er_vec` list (via `apoc.periodic.iterate` + `apoc.convert.fromJsonList`, idempotent, only touches entities still lacking `er_vec`) and then builds the index (`ensure_er_vector_index`).
-2. *Only then* flip the flag `ER_USE_NATIVE_VECTOR_KNN=true`.
+1. Сначала запустите `scripts/backfill_er_vector.py --no-dry-run` — он парсит JSON `er_embedding` каждой существующей сущности в нативный список `er_vec` (через `apoc.periodic.iterate` + `apoc.convert.fromJsonList`, идемпотентно, трогает только сущности, всё ещё без `er_vec`) и затем строит индекс (`ensure_er_vector_index`).
+2. *Только потом* переключите флаг `ER_USE_NATIVE_VECTOR_KNN=true`.
 
-Flip it before the backfill and the index is empty / missing, so kNN returns nothing and new entities never match stored ones. The default is **off** precisely to force this ordering.
+Переключите его до бэкфилла, и индекс пуст / отсутствует, так что kNN ничего не возвращает, и новые сущности никогда не матчат хранимые. По умолчанию **выключено** именно для того, чтобы форсировать этот порядок.
 
-**Why we use it / alternatives.** The window is simple, dependency-free, and fine for small graphs; native kNN is the only thing that keeps cross-document dedup correct past ~5000 canonicals. (Raising `incremental_window` is the cheap stopgap — memory ≈ window × dim × 4 bytes, so 5k×768 ≈ 15 MB, 25k ≈ 75 MB — but it doesn't remove the ceiling, only raises it.)
+**Почему мы это используем / альтернативы.** Окно простое, без зависимостей и нормально для маленьких графов; нативный kNN — единственное, что держит кросс-документный дедуп корректным за ~5000 канонических. (Поднятие `incremental_window` — дешёвая временная мера — память ≈ окно × dim × 4 байта, так что 5k×768 ≈ 15 МБ, 25k ≈ 75 МБ — но это не убирает потолок, только поднимает его.)
 
-**In our code.**
-- `src/graph/entity_resolution.py`: `_load_existing_canonicals` (window), `_load_candidates_native` (kNN), the branch in `resolve_entities` keyed on `cfg.use_native_vector_knn`. Knobs: `ERConfig.incremental_window`, `use_native_vector_knn`, `vector_knn_k = 20`.
-- `src/graph/index.py`: `ER_VECTOR_INDEX_CYPHER` / `ensure_er_vector_index` (the `er_embedding_vec` index over `er_vec`, cosine, `$dim`).
-- `scripts/backfill_er_vector.py`: the one-shot `er_embedding` → `er_vec` backfill + index build (dry-run by default).
-- Config: `AGENT_ER_ENABLED`, `AGENT_ER_USE_NATIVE_VECTOR_KNN` (default `False`), `AGENT_ER_VECTOR_KNN_K` (default 20), `AGENT_ER_JUDGE_BATCH_SIZE`, `AGENT_ER_VERDICT_CACHE_ENABLED` in `src/config.py` → `AgentSettings`.
-- Bench: `tests/eval/scale/bench_er_native.py` (native recall vs window-reachable vs latency).
-
----
-
-## Community detection & the Leiden algorithm
-
-**What it is.** A graph **community** is a group of nodes more densely connected to each other than to the rest of the graph — a "cluster" in the network sense (a tightly-related set of entities in our KG). Community *detection* automatically finds those groups. We run it offline over the whole `__Entity__` sub-graph.
-
-**How it works (from scratch).**
-
-- **Modularity** is the standard quality score for a partition of a graph into communities. Intuitively it measures: *how many more edges fall inside communities than you'd expect if the same nodes were wired up at random* (preserving each node's degree). High modularity = communities that are genuinely denser-than-chance internally. Detection = find the partition that (greedily) maximises modularity.
-
-- **Louvain** is the classic fast modularity optimiser. It works in two repeating phases: (1) *local move* — start every node in its own community, then repeatedly move each node into the neighbouring community that most increases modularity, until no move helps; (2) *aggregate* — collapse each community into a single super-node and repeat phase 1 on the smaller graph. Iterating builds a hierarchy of ever-coarser communities. It's fast and widely used — but it has a known flaw: **it can produce internally-disconnected communities.** Because a node moves based on modularity gain alone, Louvain can leave a community whose members aren't actually connected to each other through that community — a "community" that's really two unrelated pieces.
-
-- **Leiden** is the fix (Traag et al.). It adds a **refinement phase** between the local-move and aggregate steps: within each community, it re-partitions into well-connected sub-communities before aggregating, and only aggregates those refined pieces. This *guarantees* every community it outputs is **internally connected** (no disconnected blobs), and in practice it's also faster and finds higher-quality partitions than Louvain. That well-connectedness guarantee is the reason we use Leiden, not Louvain.
-
-**Hierarchical communities.** Like Louvain, Leiden produces a *dendrogram* — a multi-level nesting where coarse communities split into finer sub-communities. GDS exposes this with `includeIntermediateCommunities: true`, yielding per node a list of community ids from finest → coarsest (its last element is the final `communityId`). We materialise this as multiple `:Community` levels: **level 0 = coarsest**, finer levels carry higher numbers, and `(:Community {level:k-1})-[:PARENT_OF]->(:Community {level:k})` wires the dendrogram coarse→fine. A structural invariant (Leiden nesting): a level-(k-1) community is the union of its level-k children, so a parent is never smaller than a child — which is why the `min_size` floor can never drop a parent while keeping its child (no orphaned `PARENT_OF`).
-
-**Why we use it / alternatives.** We use **GDS Leiden** specifically for the well-connected-communities guarantee and the built-in hierarchical dendrogram; Louvain is the alternative we deliberately don't use (disconnected-community flaw). The graph is projected *undirected* (`undirectedRelationshipTypes: ['*']`) because Leiden requires it and edge direction is meaningless for community detection on a KG. A fixed `randomSeed: 19` makes runs reproducible.
-
-**In our code.**
-- `src/graph/communities.py`: the GDS Cypher constants (`_project_cypher` — Cypher projection of the `__Entity__` sub-graph, handling arbitrary relationship types; `_leiden_stream_cypher` — `gds.leiden.stream(..., {randomSeed: 19, includeIntermediateCommunities: true})`; `_drop_cypher`). Grouping: `_coarsest_from_rows` (single-level, `detect_communities`) and `_group_by_levels` (full dendrogram → `CommunityRef`s, `detect_hierarchy`). The whole module is **fail-safe**: a `None` store or any GDS/Cypher error logs and returns `[]` so the Temporal activity never raises. Per-call projection names (`_new_graph_name`) isolate concurrent rebuilds; level-scoped (`_PRUNE_LEVEL_CYPHER`) / full (`_PRUNE_ALL_CYPHER`) prunes clear stale `:Community` nodes before a rewrite.
-- Activity wrapper: `src/workflow/search/activities/community.py` → `detect_communities_activity` (picks `detect_hierarchy` when `max_levels > 1`, else `detect_communities`).
-- Config: `AgentSettings.community_max_levels` (`AGENT_COMMUNITY_MAX_LEVELS`, default 1, capped 1–10), `TemporalSettings.community_min_size` (default 3), `community_summary_parallelism`.
-- **Verification caveat:** as the module's own docstring states, the GDS calls are written per the Neo4j GDS 2.x API but are **UNVERIFIED against a live GDS install** — there is no Neo4j/GDS in this sandbox, so the Cypher above is verified by reading code/tests, not execution.
+**В нашем коде.**
+- `src/graph/entity_resolution.py`: `_load_existing_canonicals` (окно), `_load_candidates_native` (kNN), ветка в `resolve_entities`, завязанная на `cfg.use_native_vector_knn`. Ручки: `ERConfig.incremental_window`, `use_native_vector_knn`, `vector_knn_k = 20`.
+- `src/graph/index.py`: `ER_VECTOR_INDEX_CYPHER` / `ensure_er_vector_index` (индекс `er_embedding_vec` над `er_vec`, cosine, `$dim`).
+- `scripts/backfill_er_vector.py`: одноразовый бэкфилл `er_embedding` → `er_vec` + построение индекса (по умолчанию dry-run).
+- Конфиг: `AGENT_ER_ENABLED`, `AGENT_ER_USE_NATIVE_VECTOR_KNN` (по умолчанию `False`), `AGENT_ER_VECTOR_KNN_K` (по умолчанию 20), `AGENT_ER_JUDGE_BATCH_SIZE`, `AGENT_ER_VERDICT_CACHE_ENABLED` в `src/config.py` → `AgentSettings`.
+- Бенч: `tests/eval/scale/bench_er_native.py` (нативный recall против window-reachable против латентности).
 
 ---
 
-## Community reports (map-reduce summarization)
+## Обнаружение сообществ и алгоритм Leiden
 
-**What it is.** A raw community is just a set of entity names — not directly useful to a reader or to a "global" question ("what are the main themes of this corpus?"). A **community report** turns each community into a structured, human-readable summary: `{title, summary, findings:[{statement, importance}]}`. The full set of reports across all levels is the GraphRAG **"global" substrate** — the coarse, queryable map of the whole corpus that global/drift search ranks and reduces over, instead of touching raw chunks.
+**Что это.** Графовое **сообщество** (community) — это группа нод, более плотно соединённых друг с другом, чем с остальным графом — «кластер» в сетевом смысле (тесно-связанный набор сущностей в нашем KG). *Обнаружение* сообществ автоматически находит эти группы. Мы запускаем его офлайн над всем подграфом `__Entity__`.
 
-**How it works (map-reduce, bottom-up).** Summarisation is a **map-reduce** over the community hierarchy:
+**Как это работает (с нуля).**
 
-- **Map** — one LLM call *per community* produces its structured report. To keep cost down, each call uses the small-tier LLM, runs with bounded parallelism, and reads only that community's local context (not the whole graph).
-- **Bottom-up over levels** — the build processes the **finest level first**, coarsest (level 0) last. A level-0 (coarse) community's report is composed from its *child* reports (`_CHILD_REPORTS_CYPHER`, reading `(parent)-[:PARENT_OF]->(child)` where the child already has a report) rather than re-reading every leaf entity — cheaper than re-summarising the whole subtree, and it's why finest-first ordering is required (parents need children's reports to exist). A level-0 community with no children (or before any exist) falls back to member context (`_MEMBER_CONTEXT_CYPHER`: member names, descriptions, and inter-member relation types).
-- **Incremental carry-over by members-hash** — `members_hash` is an order-insensitive content hash of a community's member names. Before a rebuild prunes the old communities, the prior reports are read; any community whose `(level, members_hash)` is unchanged **carries its old report over** (marked `needs_report=False`) instead of being re-summarised — and keeps its original `summarized_at` so staleness logic reflects content freshness, not rebuild time. So a rebuild only pays for communities that actually changed.
-- **`report_vec` embedding** — `title + "\n" + summary` is embedded (same model as ER/ingest) and stored as a native `report_vec` list on the `:Community` node, indexed by `community_report_vec`. This powers *semantic* community selection at query time (`community_dynamic_selection = "semantic"` does kNN over `report_vec`; `"descent"` walks the hierarchy; default `"lexical"` is word-overlap). Embedding is fail-open: on failure the report still persists, just without a vector (search degrades to lexical).
+- **Модулярность** (modularity) — стандартная мера качества для разбиения графа на сообщества. Интуитивно она измеряет: *насколько больше рёбер попадает внутрь сообществ, чем ожидалось бы, если бы те же ноды были проводнены случайно* (сохраняя степень каждой ноды). Высокая модулярность = сообщества, которые действительно плотнее-чем-случайно внутри. Обнаружение = найти разбиение, которое (жадно) максимизирует модулярность.
 
-The report itself is parsed tolerantly (`_parse_report`): strips a ```json fence, grabs the outermost `{...}`, and on any failure falls back to a shape that still carries the raw text as `summary` — so the activity never raises and there's always *something* to persist.
+- **Louvain** — классический быстрый оптимизатор модулярности. Он работает в двух повторяющихся фазах: (1) *локальный сдвиг* — стартуем каждую ноду в её собственном сообществе, затем повторно сдвигаем каждую ноду в соседнее сообщество, которое больше всего увеличивает модулярность, пока ни один сдвиг не помогает; (2) *агрегация* — схлопываем каждое сообщество в одну супер-ноду и повторяем фазу 1 на меньшем графе. Итерирование строит иерархию всё более грубых сообществ. Он быстр и широко используется — но у него есть известный изъян: **он может производить внутренне-несвязные сообщества.** Поскольку нода сдвигается на основе одного только прироста модулярности, Louvain может оставить сообщество, чьи члены на самом деле не соединены друг с другом через это сообщество — «сообщество», которое на самом деле два несвязанных куска.
 
-**Why we use it / alternatives.** This is the GraphRAG idea: pre-compute a hierarchy of community summaries offline so "global" questions can map-reduce over a few hundred compact reports instead of scanning the entire chunk corpus at query time. Bottom-up child-report composition and members-hash carry-over keep the (otherwise expensive) rebuild affordable. The alternative — summarising on the query path, or re-summarising everything every build — is far slower and costlier.
+- **Leiden** — это фикс (Traag et al.). Он добавляет **фазу уточнения** (refinement) между шагами локального сдвига и агрегации: внутри каждого сообщества он пере-разбивает на хорошо-связанные под-сообщества перед агрегацией и агрегирует только эти уточнённые куски. Это *гарантирует*, что каждое сообщество, которое он выдаёт, **внутренне связно** (нет несвязных клякс), и на практике он также быстрее и находит разбиения более высокого качества, чем Louvain. Эта гарантия хорошей-связности — причина, почему мы используем Leiden, а не Louvain.
 
-**In our code.**
-- Activities: `src/workflow/search/activities/community.py` → `summarize_community_activity` (gather context → small-LLM `_REPORT_PROMPT` → `_parse_report` → `_embed_report` → idempotent `_WRITE_REPORT_CYPHER` MERGE of report/title/summary/report_vec). Context builders `_gather_context`, `_build_member_context`, `_build_child_context`.
-- Carry-over: `src/graph/communities.py` → `members_hash`, `_read_old_reports`, and the carry block in `detect_hierarchy` (`needs_report=False` for unchanged communities).
-- Orchestration: `src/workflow/search/community_wf.py` → `CommunityBuildWorkflow` (detect → fan-out summarize). `build_summarize_specs` skips `needs_report=False` communities; `group_specs_by_level` orders **finest-first** so a coarse parent's child reports are persisted before it runs; the fan-out is bounded by `community_summary_parallelism`.
-- Index: `src/graph/index.py` → `community_report_vec` / `ensure_community_report_vector_index` (ensured once in `detect_communities_activity`).
-- Config: `AgentSettings.community_dynamic_selection` (`lexical` | `semantic` | `descent`), `community_max_levels`; `TemporalSettings.community_summary_parallelism`, `community_min_size`.
-- The whole build is **DECOUPLED / OFFLINE** — it runs on the dedicated `kb-graph-build` queue (admin endpoint / schedule), never on the query hot path.
+**Иерархические сообщества.** Как и Louvain, Leiden производит *дендрограмму* — многоуровневое вложение, где грубые сообщества расщепляются на более тонкие под-сообщества. GDS выставляет это с `includeIntermediateCommunities: true`, давая на ноду список id сообществ от самого тонкого → самого грубого (его последний элемент — финальный `communityId`). Мы материализуем это как несколько уровней `:Community`: **уровень 0 = самый грубый**, более тонкие уровни несут большие числа, а `(:Community {level:k-1})-[:PARENT_OF]->(:Community {level:k})` проводит дендрограмму грубо→тонко. Структурный инвариант (вложение Leiden): сообщество уровня (k-1) — это объединение его детей уровня k, так что родитель никогда не меньше ребёнка — поэтому порог `min_size` никогда не может уронить родителя, сохранив его ребёнка (нет осиротевших `PARENT_OF`).
 
----
+**Почему мы это используем / альтернативы.** Мы используем **GDS Leiden** конкретно ради гарантии хорошо-связных сообществ и встроенной иерархической дендрограммы; Louvain — это альтернатива, которую мы намеренно не используем (изъян несвязных сообществ). Граф проецируется *ненаправленным* (`undirectedRelationshipTypes: ['*']`), потому что Leiden этого требует, и направление рёбер бессмысленно для обнаружения сообществ на KG. Фиксированный `randomSeed: 19` делает запуски воспроизводимыми.
 
-# Part 3 — Search & Retrieval
-
-A from-scratch reference for the retrieval techniques that turn a user question into a grounded answer in `kb-llamaindex`. Each concept is explained from zero, then tied to the exact code that implements it. For the end-to-end narrative and diagrams, see [`docs/SEARCH.md`](SEARCH.md) (deep reference) and [`docs/SEARCH-FLOW.md`](SEARCH-FLOW.md) (flow + diagrams) — this section deliberately does **not** duplicate those.
-
-> All config knobs below live on `AgentSettings` in `src/config.py` with the `AGENT_` env prefix (e.g. `graph_walk_enabled` → `AGENT_GRAPH_WALK_ENABLED`). They are resolved at **submit time** in `src/api/routes/search_v2.py` (`_local_params` / `_global_params`) and baked into the workflow input, so a config change can't desync a running (replaying) workflow.
+**В нашем коде.**
+- `src/graph/communities.py`: GDS Cypher-константы (`_project_cypher` — Cypher-проекция подграфа `__Entity__`, обрабатывающая произвольные типы отношений; `_leiden_stream_cypher` — `gds.leiden.stream(..., {randomSeed: 19, includeIntermediateCommunities: true})`; `_drop_cypher`). Группировка: `_coarsest_from_rows` (один уровень, `detect_communities`) и `_group_by_levels` (полная дендрограмма → `CommunityRef`'ы, `detect_hierarchy`). Весь модуль **fail-safe**: `None` хранилище или любая GDS/Cypher ошибка логируется и возвращает `[]`, так что Temporal-activity никогда не падает. Пер-вызовные имена проекций (`_new_graph_name`) изолируют конкурентные перестроения; level-scoped (`_PRUNE_LEVEL_CYPHER`) / полные (`_PRUNE_ALL_CYPHER`) прунинги чистят устаревшие ноды `:Community` перед перезаписью.
+- Обёртка activity: `src/workflow/search/activities/community.py` → `detect_communities_activity` (выбирает `detect_hierarchy`, когда `max_levels > 1`, иначе `detect_communities`).
+- Конфиг: `AgentSettings.community_max_levels` (`AGENT_COMMUNITY_MAX_LEVELS`, по умолчанию 1, ограничен 1–10), `TemporalSettings.community_min_size` (по умолчанию 3), `community_summary_parallelism`.
+- **Оговорка о верификации:** как заявляет собственный docstring модуля, GDS-вызовы написаны по API Neo4j GDS 2.x, но **НЕ ПРОВЕРЕНЫ против живой установки GDS** — в этой песочнице нет Neo4j/GDS, так что Cypher выше проверен чтением кода/тестов, а не выполнением.
 
 ---
 
-## RAG (Retrieval-Augmented Generation) fundamentals
+## Отчёты по сообществам (суммаризация map-reduce)
 
-**What it is.** A bare large language model answers from its frozen training weights alone. It cannot know your private corpus, it cannot cite a source, and when it doesn't know something it tends to *confabulate* a plausible-sounding answer. Retrieval-Augmented Generation (RAG) fixes this by putting a search step **in front of** generation: first fetch the passages most relevant to the question, then ask the model to answer **using only those passages**. The model becomes a reader/summarizer over fresh, attributable evidence rather than an oracle.
+**Что это.** Сырое сообщество — это просто набор имён сущностей — напрямую бесполезно для читателя или для «глобального» вопроса («каковы основные темы этого корпуса?»). **Отчёт по сообществу** (community report) превращает каждое сообщество в структурированную, человекочитаемую сводку: `{title, summary, findings:[{statement, importance}]}`. Полный набор отчётов по всем уровням — это **«глобальный» субстрат** GraphRAG — грубая, запрашиваемая карта всего корпуса, над которой глобальный/drift-поиск ранжирует и редуцирует, вместо того чтобы трогать сырые чанки.
 
-**How it works.** The classic loop has two phases.
+**Как это работает (map-reduce, снизу вверх).** Суммаризация — это **map-reduce** над иерархией сообществ:
 
-- *Offline (ingest):* documents are split into **chunks** (passages small enough to retrieve and to fit a context window), each chunk is turned into an **embedding** (a vector capturing its meaning), and the vectors are stored in a vector index. (See the ingest section of these concepts for how chunking/embedding work here.)
-- *Online (query):* the question is embedded the same way, the index returns the nearest chunks (semantic nearest-neighbour search), and those chunks are concatenated into a prompt that instructs the model to **synthesize** an answer grounded in them — ideally with citations and explicit "I don't know" when the evidence is thin.
+- **Map** — один LLM-вызов *на сообщество* производит его структурированный отчёт. Чтобы держать стоимость низкой, каждый вызов использует LLM малого яруса, работает с ограниченным параллелизмом и читает только локальный контекст этого сообщества (не весь граф).
+- **Снизу вверх по уровням** — построение обрабатывает **самый тонкий уровень первым**, самый грубый (уровень 0) последним. Отчёт сообщества уровня 0 (грубого) составляется из его *дочерних* отчётов (`_CHILD_REPORTS_CYPHER`, читающий `(parent)-[:PARENT_OF]->(child)`, где у ребёнка уже есть отчёт), а не пере-читая каждую листовую сущность — дешевле, чем пере-суммаризировать всё поддерево, и поэтому требуется порядок «тончайший-первым» (родителям нужно, чтобы отчёты детей существовали). Сообщество уровня 0 без детей (или до того, как какие-либо появятся) откатывается на контекст членов (`_MEMBER_CONTEXT_CYPHER`: имена членов, описания и типы отношений между членами).
+- **Инкрементальный перенос по members-hash** — `members_hash` — это нечувствительный к порядку контент-хеш имён членов сообщества. Перед тем как перестроение прунит старые сообщества, читаются прежние отчёты; любое сообщество, чей `(level, members_hash)` не изменился, **переносит свой старый отчёт** (помечен `needs_report=False`) вместо пере-суммаризации — и сохраняет свой исходный `summarized_at`, так что логика устаревания отражает свежесть контента, а не время перестроения. Так что перестроение платит только за сообщества, которые действительно изменились.
+- **Эмбеддинг `report_vec`** — `title + "\n" + summary` эмбеддится (той же моделью, что ER/инжест) и хранится как нативный список `report_vec` на ноде `:Community`, индексированный `community_report_vec`. Это питает *семантический* выбор сообществ во время запроса (`community_dynamic_selection = "semantic"` делает kNN над `report_vec`; `"descent"` идёт по иерархии; по умолчанию `"lexical"` — перекрытие слов). Эмбеддинг fail-open: при сбое отчёт всё равно персистится, просто без вектора (поиск деградирует до лексического).
 
-So the pipeline is **chunk → embed → retrieve → synthesize**. Retrieve-then-generate beats a bare LLM because the answer is grounded in current, inspectable text, hallucination drops, and you can show *where* each claim came from.
+Сам отчёт парсится толерантно (`_parse_report`): стрипит ограждение ```json, хватает самый внешний `{...}`, и при любом сбое откатывается на форму, всё ещё несущую сырой текст как `summary` — так что activity никогда не падает, и всегда есть *что-то* для персиста.
 
-**Why we use it / alternatives.** The alternatives are (a) a bigger/fine-tuned model — expensive, still frozen, still un-citable; or (b) stuffing the whole corpus into the prompt — impossible at our scale and ruinously slow. RAG is the standard way to ground an LLM on a private, changing knowledge base. Our system goes beyond plain vector RAG by adding a **knowledge graph** (entities + relations) and **community summaries** on top of chunks, so it can answer connection questions and corpus-level themes that flat chunk retrieval misses (the next concepts).
+**Почему мы это используем / альтернативы.** Это идея GraphRAG: предвычислить иерархию сводок по сообществам офлайн, чтобы «глобальные» вопросы могли делать map-reduce над несколькими сотнями компактных отчётов вместо сканирования всего корпуса чанков во время запроса. Композиция дочерних отчётов снизу вверх и перенос по members-hash держат (иначе дорогое) перестроение доступным по цене. Альтернатива — суммаризировать на пути запроса или пере-суммаризировать всё каждое построение — куда медленнее и дороже.
 
-**In our code.** The retrieval primitives are the *atomic tools* in `src/retrieval/atomic_tools.py`: `vector_search` (dense chunk retrieval) and the graph tools. The synthesis step is the `synthesize_answer` activity, run once at the end of every mode on the heavyweight ("large") LLM tier. The whole retrieve→synthesize loop is orchestrated by Temporal workflows under `src/workflow/search/`. Nothing here is "LLM picks the next tool in a loop" — the older ReAct/Self-RAG agent was removed; the flow is a fixed plan-execute-synthesize pipeline.
+**В нашем коде.**
+- Activity: `src/workflow/search/activities/community.py` → `summarize_community_activity` (собрать контекст → малая-LLM `_REPORT_PROMPT` → `_parse_report` → `_embed_report` → идемпотентный `_WRITE_REPORT_CYPHER` MERGE отчёта/title/summary/report_vec). Построители контекста `_gather_context`, `_build_member_context`, `_build_child_context`.
+- Перенос: `src/graph/communities.py` → `members_hash`, `_read_old_reports` и блок переноса в `detect_hierarchy` (`needs_report=False` для неизменённых сообществ).
+- Оркестрация: `src/workflow/search/community_wf.py` → `CommunityBuildWorkflow` (detect → fan-out summarize). `build_summarize_specs` пропускает сообщества с `needs_report=False`; `group_specs_by_level` упорядочивает **тончайший-первым**, чтобы дочерние отчёты грубого родителя персистились до того, как он запустится; fan-out ограничен `community_summary_parallelism`.
+- Индекс: `src/graph/index.py` → `community_report_vec` / `ensure_community_report_vector_index` (обеспечивается один раз в `detect_communities_activity`).
+- Конфиг: `AgentSettings.community_dynamic_selection` (`lexical` | `semantic` | `descent`), `community_max_levels`; `TemporalSettings.community_summary_parallelism`, `community_min_size`.
+- Всё построение **РАЗВЯЗАНО / ОФЛАЙН** — оно работает на выделенной очереди `kb-graph-build` (admin-эндпоинт / расписание), никогда на горячем пути запроса.
 
 ---
 
-## Local search — vector retrieval + graph expansion
+# Часть 3 — Поиск и извлечение
 
-**What it is.** "Local" search answers a **specific, factual** question (who is X, where does Y work, what is Z's phone number) by gathering concrete chunk evidence. It blends two retrieval modalities: **dense vector** retrieval over chunks (semantic similarity) and **graph expansion** (pull the entity the question is about, plus its neighbourhood in the knowledge graph). Graph expansion matters because facts about an entity are often scattered across documents; the graph stitches them together by *who/what is connected to whom*.
+Справочник с нуля по техникам извлечения, которые превращают вопрос пользователя в обоснованный ответ в `kb-llamaindex`. Каждый концепт объясняется с нуля, затем привязывается к точному коду, который его реализует. Для сквозного нарратива и диаграмм см. [`docs/SEARCH.md`](SEARCH.md) (глубокий справочник) и [`docs/SEARCH-FLOW.md`](SEARCH-FLOW.md) (поток + диаграммы) — этот раздел намеренно **не** дублирует их.
 
-**How it works.** For one (sub-)question the deterministic pipeline runs three tools in order — `vector_search`, then `graph_search`, then `find_entity_by_name` — and merges all their chunk results, deduped by `chunk_id`.
+> Все ручки конфига ниже живут на `AgentSettings` в `src/config.py` с префиксом окружения
+> `AGENT_` (например `graph_walk_enabled` → `AGENT_GRAPH_WALK_ENABLED`). Они разрешаются в
+> **момент отправки** в `src/api/routes/search_v2.py` (`_local_params` / `_global_params`)
+> и запекаются во вход workflow, так что изменение конфига не может рассинхронизировать
+> работающий (воспроизводящийся) workflow.
 
-- *Entity linking onto ER-canonical entities.* The graph is built on `:__Entity__` nodes that entity-resolution (ER) has already canonicalised — duplicates merged, identifiers normalised (phone in E.164, INN, email, …). `graph_search` does **similarity** matching against those canonical entities and returns them plus their neighbours up to `path_depth` triplet-hops; `find_entity_by_name` does a **full-text name** match (partial-name tolerant: "Иванов" → "Иванов Иван Иванович"). Both resolve the question's surface text onto the *same canonical entity* the rest of the graph hangs off, so expansion lands on real, deduplicated nodes rather than near-duplicate aliases.
-- *Dual walk-seed.* A one-hop `graph_search` neighbourhood is often too shallow for "how is X connected to …" questions, so after the fixed pipeline runs we optionally launch a bounded multi-hop `graph_walk`. The interesting part is **where the walk starts from**. Seeding only from the top `graph_search` hit misses entities that were found by name match but not by similarity. So with `dual_seed` on, the walk is seeded from the **union of BOTH** the top `graph_search` entity **and** the top `find_entity_by_name` entity (deduped, graph_search first). Each seed contributes its own neighbourhood. This is `_walk_seeds` in the retrieve activity. The walk is **fail-open per seed**: a missing/garbled seed or a store error just skips that one walk and returns the vector + graph_search results unchanged — it never sinks the activity.
+---
 
-**Why we use it / alternatives.** Pure vector RAG would find passages that *mention* X but miss the relational structure ("X's manager's company"). Pure graph traversal would miss free-text passages that never became graph entities. Running both and merging gives recall from vectors and connectivity from the graph. The dual seed specifically guards against the failure mode where the entity the user named is only reachable by exact name, not by embedding similarity.
+## Основы RAG (Retrieval-Augmented Generation)
 
-**In our code.** `src/workflow/search/activities/retrieve.py` — `retrieve_subquestion` runs `_PIPELINE = ("vector_search", "graph_search", "find_entity_by_name")`, then `_walk_seeds(...)` builds the `graph_walk` start set. The atomic tools live in `src/retrieval/atomic_tools.py` (`graph_search` maps `depth`→ the retriever's `path_depth`; `graph_walk` is hard-capped on nodes/edges/hops). The graph retriever is built with `similarity_top_k = settings.agent.graph_similarity_top_k` in `src/workflow/_search_deps.py`. Config knobs (all `AGENT_`):
+**Что это.** Голая большая языковая модель отвечает только из своих замороженных тренировочных весов. Она не может знать ваш приватный корпус, не может процитировать источник, и когда она чего-то не знает, она склонна *конфабулировать* правдоподобно звучащий ответ. Retrieval-Augmented Generation (RAG) исправляет это, ставя шаг поиска **перед** генерацией: сначала достать пассажи, наиболее релевантные вопросу, затем попросить модель ответить **используя только эти пассажи**. Модель становится читателем/суммаризатором над свежими, атрибутируемыми свидетельствами, а не оракулом.
 
-| knob | default | effect |
+**Как это работает.** Классический цикл имеет две фазы.
+
+- *Офлайн (инжест):* документы разбиваются на **чанки** (пассажи, достаточно маленькие для извлечения и для влезания в контекстное окно), каждый чанк превращается в **эмбеддинг** (вектор, схватывающий его смысл), и векторы хранятся в векторном индексе. (См. раздел инжеста этих концептов о том, как работают разбиение/эмбеддинг здесь.)
+- *Онлайн (запрос):* вопрос эмбеддится тем же способом, индекс возвращает ближайшие чанки (семантический поиск ближайших соседей), и эти чанки конкатенируются в промпт, который инструктирует модель **синтезировать** ответ, обоснованный в них — в идеале с цитатами и явным «я не знаю», когда свидетельств мало.
+
+Так что конвейер — **чанк → эмбеддинг → извлечение → синтез**. Извлечь-затем-сгенерировать бьёт голую LLM, потому что ответ обоснован в текущем, инспектируемом тексте, галлюцинации падают, и можно показать, *откуда* пришло каждое утверждение.
+
+**Почему мы это используем / альтернативы.** Альтернативы — (а) большая/дообученная модель — дорого, всё ещё заморожена, всё ещё нецитируема; или (б) набивание всего корпуса в промпт — невозможно на нашем масштабе и разорительно медленно. RAG — стандартный способ обосновать LLM на приватной, меняющейся базе знаний. Наша система выходит за пределы простого векторного RAG, добавляя **граф знаний** (сущности + отношения) и **сводки по сообществам** поверх чанков, так что она может отвечать на вопросы о связях и темах уровня корпуса, которые плоское извлечение чанков пропускает (следующие концепты).
+
+**В нашем коде.** Примитивы извлечения — это *атомарные инструменты* в `src/retrieval/atomic_tools.py`: `vector_search` (плотное извлечение чанков) и графовые инструменты. Шаг синтеза — activity `synthesize_answer`, запускаемая один раз в конце каждого режима на тяжеловесном («large») ярусе LLM. Весь цикл извлечь→синтезировать оркестрируется Temporal-workflow под `src/workflow/search/`. Здесь нет ничего вроде «LLM выбирает следующий инструмент в цикле» — старый агент ReAct/Self-RAG был удалён; поток — это фиксированный конвейер plan-execute-synthesize.
+
+---
+
+## Локальный поиск — векторное извлечение + расширение по графу
+
+**Что это.** «Локальный» поиск отвечает на **конкретный, фактический** вопрос (кто такой X, где работает Y, какой телефон у Z), собирая конкретные свидетельства из чанков. Он смешивает две модальности извлечения: **плотное векторное** извлечение над чанками (семантическое сходство) и **расширение по графу** (вытащить сущность, о которой вопрос, плюс её окрестность в графе знаний). Расширение по графу важно, потому что факты о сущности часто рассеяны по документам; граф сшивает их вместе по принципу *кто/что с кем связано*.
+
+**Как это работает.** Для одного (под-)вопроса детерминированный конвейер запускает три инструмента по порядку — `vector_search`, затем `graph_search`, затем `find_entity_by_name` — и объединяет все их результаты-чанки, дедуплицированные по `chunk_id`.
+
+- *Entity linking на ER-канонические сущности.* Граф построен на нодах `:__Entity__`, которые entity-resolution (ER) уже канонизировал — дубликаты слиты, идентификаторы нормализованы (телефон в E.164, ИНН, email, …). `graph_search` делает матчинг по **сходству** против тех канонических сущностей и возвращает их плюс их соседей до `path_depth` триплет-хопов; `find_entity_by_name` делает **полнотекстовый по имени** матч (толерантный к частичному имени: «Иванов» → «Иванов Иван Иванович»). Оба разрешают поверхностный текст вопроса на *одну и ту же каноническую сущность*, на которой держится остальной граф, так что расширение приземляется на реальные, дедуплицированные ноды, а не на почти-дублирующиеся алиасы.
+- *Двойной засев обхода.* Одно-хоповая окрестность `graph_search` часто слишком мелка для вопросов «как X связан с …», поэтому после запуска фиксированного конвейера мы опционально запускаем ограниченный многохоповый `graph_walk`. Интересная часть — **откуда стартует обход**. Засев только от верхнего попадания `graph_search` пропускает сущности, найденные по матчу имени, но не по сходству. Так что с `dual_seed` обход засевается от **объединения ОБОИХ** — верхней сущности `graph_search` **и** верхней сущности `find_entity_by_name` (дедуп, graph_search первым). Каждый засев вносит свою окрестность. Это `_walk_seeds` в activity извлечения. Обход **fail-open на засев**: отсутствующий/битый засев или ошибка хранилища просто пропускает этот один обход и возвращает результаты vector + graph_search неизменными — он никогда не топит activity.
+
+**Почему мы это используем / альтернативы.** Чистый векторный RAG нашёл бы пассажи, которые *упоминают* X, но пропустил бы реляционную структуру («компания менеджера X»). Чистый обход графа пропустил бы свободно-текстовые пассажи, которые никогда не стали графовыми сущностями. Запуск обоих и объединение даёт recall от векторов и связность от графа. Двойной засев конкретно защищает от режима сбоя, когда сущность, которую назвал пользователь, достижима только по точному имени, а не по сходству эмбеддингов.
+
+**В нашем коде.** `src/workflow/search/activities/retrieve.py` — `retrieve_subquestion` запускает `_PIPELINE = ("vector_search", "graph_search", "find_entity_by_name")`, затем `_walk_seeds(...)` строит стартовый набор `graph_walk`. Атомарные инструменты живут в `src/retrieval/atomic_tools.py` (`graph_search` мапит `depth` → `path_depth` ретривера; `graph_walk` жёстко ограничен по нодам/рёбрам/хопам). Графовый ретривер строится с `similarity_top_k = settings.agent.graph_similarity_top_k` в `src/workflow/_search_deps.py`. Ручки конфига (все `AGENT_`):
+
+| ручка | по умолчанию | эффект |
 |---|---|---|
-| `graph_walk_enabled` | `True` | turn the post-pipeline multi-hop walk on/off |
-| `graph_walk_hops` | `2` (1–3) | requested hop count for the walk (clamped to the retriever's `GRAPH_WALK_MAX_HOPS`) |
-| `graph_walk_dual_seed` | `True` | seed the walk from BOTH graph_search and find_entity_by_name (vs graph_search-only) |
-| `graph_search_path_depth` | `1` (1–3) | neighbour expansion depth for `graph_search` |
-| `graph_similarity_top_k` | `20` (1–100) | how many entities the graph retriever's similarity search returns |
+| `graph_walk_enabled` | `True` | включить/выключить пост-конвейерный многохоповый обход |
+| `graph_walk_hops` | `2` (1–3) | запрашиваемое число хопов для обхода (ограничено `GRAPH_WALK_MAX_HOPS` ретривера) |
+| `graph_walk_dual_seed` | `True` | засеять обход от ОБОИХ graph_search и find_entity_by_name (против только graph_search) |
+| `graph_search_path_depth` | `1` (1–3) | глубина расширения соседей для `graph_search` |
+| `graph_similarity_top_k` | `20` (1–100) | сколько сущностей возвращает поиск по сходству графового ретривера |
 
-> **Accuracy note on per-call depth/hops.** The HTTP `SearchRequest` (`src/models/search.py`) carries only `query`, `history`, and `top_k` — it has **no** `depth`/`hops` field, so over HTTP these are governed solely by the `AGENT_*` config above. Per-call depth/hops overrides exist **only on the MCP tools** in `src/mcp/tools_server.py`: `graph_search(depth=…)`, `find_neighbours(hops=…)`, and `graph_walk(hops=…)`. Don't confuse the two surfaces.
+> **Замечание о точности по пер-вызовной глубине/хопам.** HTTP `SearchRequest`
+> (`src/models/search.py`) несёт только `query`, `history` и `top_k` — у него **нет** поля
+> `depth`/`hops`, так что по HTTP они управляются исключительно конфигом `AGENT_*` выше.
+> Пер-вызовные переопределения глубины/хопов существуют **только на MCP-инструментах** в
+> `src/mcp/tools_server.py`: `graph_search(depth=…)`, `find_neighbours(hops=…)` и
+> `graph_walk(hops=…)`. Не путайте две поверхности.
 
 ---
 
-## Global search — community map-reduce
+## Глобальный поиск — map-reduce по сообществам
 
-**What it is.** Some questions aren't about one entity at all — "what are the main themes across the corpus", "summarise the overall trends", "how many … across all documents". Retrieving a handful of chunks can't answer these; you'd need to read *everything*. **Global search** (the GraphRAG pattern) answers them by pre-computing, offline, a summary for each **community** (a densely-connected cluster of entities found by Leiden clustering), and then doing **map-reduce** over those summaries at query time.
+**Что это.** Некоторые вопросы вообще не об одной сущности — «каковы основные темы по всему корпусу», «суммируй общие тренды», «сколько … по всем документам». Извлечение горстки чанков не может ответить на эти; вам нужно было бы прочитать *всё*. **Глобальный поиск** (паттерн GraphRAG) отвечает на них, предвычисляя офлайн сводку для каждого **сообщества** (плотно-связного кластера сущностей, найденного кластеризацией Leiden), и затем делая **map-reduce** над теми сводками во время запроса.
 
-**How it works.** *Map-reduce* here means:
+**Как это работает.** *Map-reduce* здесь означает:
 
-- **Map** — for each selected community, ask a cheap (small-tier) LLM: "given ONLY this community's summary, what does it say about the question?" Off-topic communities self-report `НЕТ` and are dropped (score 0). This fans out one independent LLM call per community, bounded by a concurrency limit.
-- **Reduce** — concatenate the surviving partial answers and run **one** large-tier `synthesize_answer` over them to produce the final answer.
+- **Map** — для каждого выбранного сообщества спросить дешёвую (малого яруса) LLM: «дана ТОЛЬКО сводка этого сообщества, что она говорит о вопросе?» Не-по-теме сообщества само-сообщают `НЕТ` и отбрасываются (счёт 0). Это раскрывается в один независимый LLM-вызов на сообщество, ограниченный лимитом конкурентности.
+- **Reduce** — конкатенировать выжившие частичные ответы и запустить **один** large-ярусный `synthesize_answer` над ними, чтобы произвести финальный ответ.
 
-The corpus can have far more communities than we want to map over, so the workflow first **selects** which communities to map. There are **three dynamic selection strategies**, and all of them **fail open to lexical**:
+Корпус может иметь куда больше сообществ, чем мы хотим маппить, поэтому workflow сначала **выбирает**, какие сообщества маппить. Есть **три динамические стратегии выбора**, и все они **fail-open на лексическую**:
 
-1. **lexical** — read the stored summaries and rank them by plain word-overlap with the query (`rank_summaries`). Cheap, deterministic, LLM-free. This is the default and the fallback.
-2. **semantic** — kNN over each community's stored *report vector* (`community_report_vec` index): embed the query, return the nearest community reports first (`select_communities_semantic`).
-3. **descent** — coarse→fine hierarchy walk (`select_communities_descent`): start at the coarsest level-0 communities, keep the ones whose report vector is most cosine-similar to the query, descend into their `PARENT_OF` children, repeat — spending the budget on the most relevant *leaf* communities.
+1. **lexical** — прочитать хранимые сводки и ранжировать их по простому перекрытию слов с запросом (`rank_summaries`). Дёшево, детерминированно, без LLM. Это значение по умолчанию и откат.
+2. **semantic** — kNN над хранимым *вектором отчёта* каждого сообщества (индекс `community_report_vec`): эмбеддить запрос, вернуть ближайшие отчёты сообществ первыми (`select_communities_semantic`).
+3. **descent** — обход иерархии грубо→тонко (`select_communities_descent`): начать с самых грубых сообществ уровня 0, оставить те, чей вектор отчёта наиболее косинусно-похож на запрос, спуститься в их детей `PARENT_OF`, повторить — тратя бюджет на наиболее релевантные *листовые* сообщества.
 
-Both vector strategies (semantic, descent) return `[]` on **any** error or an empty result, and the activity then falls straight back to the lexical path — so a missing vector index or a flaky embedder degrades gracefully instead of failing the search.
+Обе векторные стратегии (semantic, descent) возвращают `[]` при **любой** ошибке или пустом результате, и тогда activity сразу откатывается на лексический путь — так что отсутствующий векторный индекс или флакающий эмбеддер деградирует изящно, а не проваливает поиск.
 
-**Why we use it / alternatives.** The alternative for a "themes across everything" question is to retrieve top-k chunks and hope they're representative — they won't be, because top-k is biased toward whatever phrasing matches, not toward corpus-wide coverage. Map-reduce over community summaries gives genuine breadth: every relevant community gets a vote. The selection strategies trade cost vs. precision — lexical is free but blunt; semantic is sharper; descent exploits the community hierarchy to avoid mapping irrelevant branches at all.
+**Почему мы это используем / альтернативы.** Альтернатива для вопроса «темы по всему» — это извлечь топ-k чанков и надеяться, что они репрезентативны — они не будут, потому что топ-k смещён к тому, что совпадает по формулировке, а не к покрытию уровня корпуса. Map-reduce над сводками сообществ даёт настоящую широту: каждое релевантное сообщество получает голос. Стратегии выбора меняют стоимость против точности — lexical бесплатна, но груба; semantic острее; descent эксплуатирует иерархию сообществ, чтобы вообще не маппить нерелевантные ветви.
 
-**In our code.** Selection + map activities: `src/workflow/search/activities/global_search.py` (`map_communities` switches on `selection`; `rank_summaries`, `select_communities_semantic`, `select_communities_descent`; `map_community_partial` is the per-community map step). The map-reduce orchestration: `src/workflow/search/global_wf.py` (`GlobalSearchWorkflow` — map fan-out with a semaphore, `partials_to_sources` filtering, then `build_reduce_call` → one large-tier synthesis). Communities themselves are built offline by `src/workflow/search/community_wf.py` (`CommunityBuildWorkflow`: Leiden detect → finest-first summarize), which runs on a dedicated `kb-graph-build` queue, never on the query hot path. Config (all `AGENT_`):
+**В нашем коде.** Activity выбора + map: `src/workflow/search/activities/global_search.py` (`map_communities` переключается на `selection`; `rank_summaries`, `select_communities_semantic`, `select_communities_descent`; `map_community_partial` — пер-сообщественный шаг map). Оркестрация map-reduce: `src/workflow/search/global_wf.py` (`GlobalSearchWorkflow` — map fan-out с семафором, фильтрация `partials_to_sources`, затем `build_reduce_call` → один large-ярусный синтез). Сами сообщества строятся офлайн `src/workflow/search/community_wf.py` (`CommunityBuildWorkflow`: Leiden detect → тончайший-первым summarize), который работает на выделенной очереди `kb-graph-build`, никогда на горячем пути запроса. Конфиг (все `AGENT_`):
 
-| knob | default | effect |
+| ручка | по умолчанию | эффект |
 |---|---|---|
-| `community_dynamic_selection` | `"lexical"` | which selection strategy: `lexical` / `semantic` / `descent` |
-| `global_max_communities` | `20` (1–200) | cap on how many community summaries enter the MAP step |
-| `global_map_parallelism` | `4` (1–32) | bound on concurrent per-community MAP LLM calls |
+| `community_dynamic_selection` | `"lexical"` | какая стратегия выбора: `lexical` / `semantic` / `descent` |
+| `global_max_communities` | `20` (1–200) | потолок на то, сколько сводок сообществ входит в шаг MAP |
+| `global_map_parallelism` | `4` (1–32) | граница на конкурентные пер-сообщественные MAP LLM-вызовы |
 
 ---
 
-## DRIFT search — combine local + global
+## DRIFT-поиск — комбинация локального и глобального
 
-**What it is.** A complex/mixed question may need *both* concrete facts *and* a broad overview ("compare these companies and their role in the wider network"). **DRIFT** runs local search first for concrete chunk evidence, then expands it with corpus-level community context from global search. Local evidence leads; the community partials broaden it; one synthesis at the end fuses them.
+**Что это.** Сложный/смешанный вопрос может нуждаться *и* в конкретных фактах, *и* в широком обзоре («сравни эти компании и их роль в более широкой сети»). **DRIFT** запускает локальный поиск первым для конкретных свидетельств из чанков, затем расширяет его контекстом сообществ уровня корпуса из глобального поиска. Локальные свидетельства ведут; частичные ответы по сообществам расширяют их; один синтез в конце сплавляет их.
 
-**How it works.** It's a **bounded one-shot**, not an open-ended loop: exactly one local pass plus one global pass.
+**Как это работает.** Это **ограниченный one-shot**, а не открытый цикл: ровно один локальный проход плюс один глобальный проход.
 
-1. (Optional) contextualise the follow-up against conversation history **once** here, then pass the rewritten standalone query to both children with history cleared, so neither child re-contextualises.
-2. Run `SearchOrchestratorWorkflow` (the full local plan-execute flow) as a child → concrete sources.
-3. Run `GlobalSearchWorkflow` as a child with `drift_mode=True`, handing it the local sources as the **drift seed**. In drift mode the global workflow merges the local sources **ahead of** the community partials in the reduce context (local evidence first), and labels the outcome `"drift"`.
+1. (Опционально) контекстуализировать follow-up против истории диалога **один раз** здесь, затем передать переписанный самодостаточный запрос обоим детям с очищенной историей, так что ни один ребёнок не пере-контекстуализирует.
+2. Запустить `SearchOrchestratorWorkflow` (полный локальный поток plan-execute) как ребёнка → конкретные источники.
+3. Запустить `GlobalSearchWorkflow` как ребёнка с `drift_mode=True`, передав ему локальные источники как **drift-засев**. В drift-режиме глобальный workflow вмешивает локальные источники **впереди** частичных ответов сообществ в reduce-контекст (локальные свидетельства первыми) и помечает исход `"drift"`.
 
-The key resilience feature is `_drift_local_fallback`: if the **global pass fails** (child-workflow error, timeout, activity failure), drift doesn't error — it returns the already-computed local answer, keeping the `"drift"` mode label so callers/metrics still see the request *was* drift, just degraded.
+Ключевая фича устойчивости — `_drift_local_fallback`: если **глобальный проход падает** (ошибка дочернего workflow, таймаут, сбой activity), drift не ошибается — он возвращает уже вычисленный локальный ответ, сохраняя метку режима `"drift"`, так что вызыватели/метрики всё ещё видят, что запрос *был* drift, просто деградировавшим.
 
-**Why we use it / alternatives.** Without drift, you'd have to pick local *or* global up front and lose half the answer. Drift gets both in a single bounded pass. The one-shot design (vs. an iterative agent that keeps drilling) keeps latency and cost predictable, and the local fallback means the global half is strictly *additive* — it can only improve the answer, never break it.
+**Почему мы это используем / альтернативы.** Без drift вам пришлось бы выбрать локальный *или* глобальный заранее и потерять половину ответа. Drift получает оба в одном ограниченном проходе. One-shot дизайн (против итеративного агента, который продолжает копать) держит латентность и стоимость предсказуемыми, а локальный откат означает, что глобальная половина строго *аддитивна* — она может только улучшить ответ, никогда не сломать.
 
-**In our code.** `src/workflow/search/router_wf.py` — `DriftSearchWorkflow.run` (contextualise-once → local child → global child with `drift_mode`); `_drift_local_fallback` for the degrade path; `merge_doc_ids` unions the local+global document ids. The drift-mode merge ("local ahead of partials") lives in `GlobalSearchWorkflow.run` in `src/workflow/search/global_wf.py`.
-
----
-
-## Auto mode & query routing
-
-**What it is.** Callers don't always know which mode a question needs. **Auto** mode asks a small, cheap LLM to **classify** the question into `local` / `global` / `drift`, then dispatches to the matching flow — so the right strategy is picked per question without the client choosing.
-
-**How it works.** The `route_query` activity sends the question to the small-tier router model with a strict prompt: reply with exactly one word — LOCAL, GLOBAL, or DRIFT. `AutoSearchWorkflow` then maps the label to a child workflow via the pure `dispatch_for_route` helper and runs it.
-
-There is a **double fail-safe to local** (the cheapest, always-grounded mode):
-
-1. In `classify_route` (the pure parser): an empty, garbled, or unrecognised reply → `route="local"`. It also tolerates wrapping prose by recognising the first known label that appears ("Route: GLOBAL." still parses as global).
-2. In `route_query` itself: any LLM error (proxy down, timeout) is caught → `route="local"`.
-
-And `dispatch_for_route` maps any unexpected label to the local workflow as a third belt-and-suspenders. So a flaky router can never break search — it just degrades to local.
-
-**Why we use it / alternatives.** The alternative is forcing the client to choose a mode (brittle — clients guess wrong) or always running the most expensive mode (drift) regardless (wasteful). A cheap small-tier classifier is a good cost/quality trade, and because every failure path collapses to local, the worst case is "we ran the safe cheap mode."
-
-**In our code.** Classifier activity: `src/workflow/search/activities/route.py` (`route_query` + pure `classify_route`). Dispatch workflow: `src/workflow/search/router_wf.py` (`AutoSearchWorkflow.run`, `dispatch_for_route` with the local default). Auto is wired into the HTTP `auto` endpoint in `src/api/routes/search_v2.py`.
+**В нашем коде.** `src/workflow/search/router_wf.py` — `DriftSearchWorkflow.run` (контекстуализировать-один-раз → локальный ребёнок → глобальный ребёнок с `drift_mode`); `_drift_local_fallback` для пути деградации; `merge_doc_ids` объединяет id документов локального+глобального. Drift-режимное вмешивание («локальные впереди частичных») живёт в `GlobalSearchWorkflow.run` в `src/workflow/search/global_wf.py`.
 
 ---
 
-## Plan-execute decomposition & the orchestrator
+## Авторежим и маршрутизация запросов
 
-**What it is.** A complex question ("who are X's co-founders and where are they based now") is hard to answer with a single retrieval. **Plan-execute** decomposition breaks it into atomic **sub-queries** up front, retrieves for each independently, merges the evidence, and synthesizes **once**. There is no "LLM decides the next step" loop — the plan is fixed before any retrieval runs.
+**Что это.** Вызыватели не всегда знают, какой режим нужен вопросу. **Авто** режим просит маленькую, дешёвую LLM **классифицировать** вопрос в `local` / `global` / `drift`, затем диспетчит на соответствующий поток — так что правильная стратегия выбирается на каждый вопрос без того, чтобы клиент выбирал.
 
-> An older "selfrag/ReAct" agent (LLM picks the next tool in a loop) was **removed**. It is not part of the current system; the only LLM calls in the local flow are the up-front planner and the final synthesizer.
+**Как это работает.** Activity `route_query` отправляет вопрос router-модели малого яруса со строгим промптом: ответь ровно одним словом — LOCAL, GLOBAL или DRIFT. Затем `AutoSearchWorkflow` мапит метку на дочерний workflow через чистый помощник `dispatch_for_route` и запускает его.
 
-**How it works.** `SearchOrchestratorWorkflow`:
+Есть **двойной fail-safe на локальный** (самый дешёвый, всегда-обоснованный режим):
 
-1. (Optional) contextualise the query against conversation history.
-2. **plan** — `plan_subquestions` (small planner model) splits the question into ≤ `max_subqueries` atomic sub-questions; an atomic question yields just `[query]`.
-3. **execute** — fan out one `SubQueryRetrievalWorkflow` child per sub-question, **in parallel** via `asyncio.gather`. Each child runs the deterministic vector+graph `retrieve_subquestion` (see Local search) — no agent, no tool-selection LLM.
-4. **merge** — union all children's sources, dedup by `chunk_id`.
-5. (coverage gate — next concept)
-6. **rerank** then **synthesize once** over the merged pool on the large tier.
+1. В `classify_route` (чистый парсер): пустой, битый или нераспознанный ответ → `route="local"`. Он также терпит обрамляющую прозу, распознавая первую известную метку, которая появляется («Route: GLOBAL.» всё равно парсится как global).
+2. В самом `route_query`: любая ошибка LLM (прокси упал, таймаут) ловится → `route="local"`.
 
-**Why we use it / alternatives.** A single retrieval over a multi-part question retrieves for the "average" of the parts and serves none of them well. An open-ended ReAct agent *can* decompose adaptively but is slow, non-deterministic, hard to test, and prone to loops — which is why it was removed here. Fixed plan-execute keeps the decomposition benefit (each sub-question retrieved well, in parallel) while staying deterministic and replay-safe under Temporal.
+И `dispatch_for_route` мапит любую неожиданную метку на локальный workflow как третий пояс с подтяжками. Так что флакающий роутер никогда не может сломать поиск — он просто деградирует до локального.
 
-**In our code.** `src/workflow/search/orchestrator.py` (`SearchOrchestratorWorkflow.run`: plan → parallel children → `merge_subquery_sources` → rerank → one `synthesize_answer`). The per-sub-question retrieval child: `src/workflow/search/subquery_wf.py` (`SubQueryRetrievalWorkflow`, deterministic, dedup by chunk_id). Config: `AGENT_MAX_SUBQUERIES` (`max_subqueries`, default `5`, range 1–20).
+**Почему мы это используем / альтернативы.** Альтернатива — заставить клиента выбрать режим (хрупко — клиенты угадывают неверно) или всегда запускать самый дорогой режим (drift) независимо (расточительно). Дешёвый классификатор малого яруса — хороший компромисс стоимость/качество, и поскольку каждый путь сбоя схлопывается до локального, худший случай — «мы запустили безопасный дешёвый режим».
+
+**В нашем коде.** Activity классификатора: `src/workflow/search/activities/route.py` (`route_query` + чистый `classify_route`). Workflow диспетча: `src/workflow/search/router_wf.py` (`AutoSearchWorkflow.run`, `dispatch_for_route` с локальным по умолчанию). Авто проводится в HTTP-эндпоинт `auto` в `src/api/routes/search_v2.py`.
 
 ---
 
-## Coverage check — bounded refinement loop
+## Декомпозиция plan-execute и оркестратор
 
-**What it is.** After merging the evidence, the system asks itself "does this actually cover the whole question, or is something missing?" If a concrete gap is named, it runs **one more** retrieval round for that gap and folds the results in. It's a small, bounded self-correction loop — not an open-ended "keep going until perfect."
+**Что это.** Сложный вопрос («кто соучредители X и где они сейчас базируются») трудно ответить одним извлечением. Декомпозиция **plan-execute** разбивает его на атомарные **под-запросы** заранее, извлекает для каждого независимо, объединяет свидетельства и синтезирует **один раз**. Нет цикла «LLM решает следующий шаг» — план фиксирован до того, как запускается какое-либо извлечение.
 
-**How it works.** After the merge step, while the round budget is left:
+> Более старый агент «selfrag/ReAct» (LLM выбирает следующий инструмент в цикле) был
+> **удалён**. Он не часть текущей системы; единственные LLM-вызовы в локальном потоке — это
+> заранее-планировщик и финальный синтезатор.
 
-1. `coverage_check` (small tier) reads the question + a bounded evidence blob (`build_evidence`, capped at ~12k chars) and returns `complete` plus a `missing` gap phrase.
-2. The pure `should_run_coverage_round` decides: if `complete` is false **and** a non-empty gap is named **and** rounds remain → return the gap phrase; otherwise → `None` (go straight to synthesis).
-3. On a named gap: run **one** extra `SubQueryRetrievalWorkflow` for that gap phrase, re-merge its sources into the pool (dedup by `chunk_id`), decrement the budget, loop.
+**Как это работает.** `SearchOrchestratorWorkflow`:
 
-The loop is **bounded** by `max_coverage_rounds` and **fail-open** at every step: any error in the check *or* the extra retrieval breaks out of the loop and proceeds to synthesis — it never blocks the answer. The feature is gated by `coverage_check_enabled`, which (like all knobs) is **resolved at submit time** and carried in the workflow input, so the decision is stable across replays.
+1. (Опционально) контекстуализировать запрос против истории диалога.
+2. **plan** — `plan_subquestions` (модель-планировщик малого яруса) расщепляет вопрос на ≤ `max_subqueries` атомарных под-вопросов; атомарный вопрос даёт просто `[query]`.
+3. **execute** — раскрыть один дочерний `SubQueryRetrievalWorkflow` на под-вопрос, **параллельно** через `asyncio.gather`. Каждый ребёнок запускает детерминированный вектор+граф `retrieve_subquestion` (см. Локальный поиск) — без агента, без LLM выбора инструментов.
+4. **merge** — объединить источники всех детей, дедуп по `chunk_id`.
+5. (gate покрытия — следующий концепт)
+6. **rerank**, затем **синтез один раз** над объединённым пулом на large-ярусе.
 
-**Why we use it / alternatives.** Plan-execute decomposition is done before retrieval, so it can miss a gap that only becomes obvious *after* seeing what was retrieved. The coverage check is a cheap second look that catches those. The alternatives are no self-correction (misses gaps) or an unbounded refinement agent (expensive, can loop forever) — the bounded one-round-by-default loop is the middle ground.
+**Почему мы это используем / альтернативы.** Одно извлечение над многочастным вопросом извлекает для «среднего» частей и не обслуживает ни одну хорошо. Открытый ReAct-агент *может* декомпозировать адаптивно, но медленный, недетерминированный, трудно-тестируемый и склонен к циклам — поэтому он был удалён здесь. Фиксированный plan-execute сохраняет выгоду декомпозиции (каждый под-вопрос извлечён хорошо, параллельно), оставаясь детерминированным и replay-safe под Temporal.
 
-**In our code.** Pure helpers: `src/workflow/search/_coverage.py` (`build_evidence`, `should_run_coverage_round`, `COVERAGE_EVIDENCE_MAX_CHARS = 12_000`). The loop + fail-open call sites are the "coverage gate" block in `src/workflow/search/orchestrator.py`. The judge activity is `coverage_check`. Config (`AGENT_`): `coverage_check_enabled` (default `True`), `max_coverage_rounds` (default `1`, range 0–3).
-
----
-
-## Conversation-history contextualization
-
-**What it is.** Follow-up questions are full of references — "what about *his* company?", "and *there*?". Retrieval can't resolve those, because the index doesn't know what "his" means. **Contextualization** rewrites the follow-up into a **self-contained** question using the recent conversation turns ("what about Ivanov's company?") *before* any retrieval runs.
-
-**How it works.** When the request carries `history` and the feature is on, the workflow runs `contextualize_query` (small tier) **once** at the start: it bounds the history to the most recent turns (by turn count and char budget, keeping the latest turns), prompts the model to "rewrite the LAST question as self-contained, expanding pronouns and references, keep the language, return ONLY the rewritten question", and replaces the query everywhere downstream via `model_copy`. It is **fail-open**: empty history, no usable turns, or any LLM error → the original query unchanged.
-
-It is **opt-in/gated** (`contextualize_enabled`, sourced from `AGENT_CONVERSATION_HISTORY_ENABLED`) and **resolved at submit time** (the flag and the history list are baked into the workflow input in `_local_params`/`_global_params`), so it's **replay-safe** — a replaying workflow makes the same decision it made the first time. Drift contextualises once in the parent and clears history on its children so it isn't redone.
-
-**Why we use it / alternatives.** Without it, multi-turn chat retrieval silently degrades on every follow-up because pronouns retrieve nothing useful. The alternative — stuffing raw history into the retrieval query — pollutes the embedding with off-topic earlier turns; a clean rewrite into one standalone question retrieves far better. Fail-open means it can only help: a bad rewrite falls back to the raw query.
-
-**In our code.** `src/workflow/search/activities/contextualize.py` (`contextualize_query`, `_bound_history`, `_build_prompt`; uses the small `route`-tier LLM). Called at step 0 of `SearchOrchestratorWorkflow`, `GlobalSearchWorkflow`, and once in `DriftSearchWorkflow`. Config (`AGENT_`): `conversation_history_enabled` (default `True`), `history_max_turns` (default `6`, range 0–40), `history_max_chars` (default `4000`).
+**В нашем коде.** `src/workflow/search/orchestrator.py` (`SearchOrchestratorWorkflow.run`: план → параллельные дети → `merge_subquery_sources` → rerank → один `synthesize_answer`). Дочерний по-под-вопросу ретривал: `src/workflow/search/subquery_wf.py` (`SubQueryRetrievalWorkflow`, детерминированный, дедуп по chunk_id). Конфиг: `AGENT_MAX_SUBQUERIES` (`max_subqueries`, по умолчанию `5`, диапазон 1–20).
 
 ---
 
-## Reranking
+## Проверка покрытия — ограниченный цикл доработки
 
-**What it is.** Retrievers (vector, graph) are *recall-oriented* — they cast a wide net and return many candidates in their own per-modality score order, which doesn't reflect true relevance to *this* question. A **reranker** is a second-stage model that reads each candidate chunk **together with** the query and re-scores it for relevance, so the best few float to the top before synthesis sees them. We use a **cross-encoder** (the query and chunk go through the model *jointly*), which is more accurate than the bi-encoder embeddings used for first-stage retrieval — but too expensive to run over the whole corpus, hence "second stage only."
+**Что это.** После объединения свидетельств система спрашивает себя: «покрывает ли это действительно весь вопрос, или чего-то не хватает?» Если назван конкретный пробел, она запускает **ещё один** раунд извлечения для этого пробела и складывает результаты внутрь. Это маленький, ограниченный цикл само-коррекции — не открытое «продолжай, пока не идеально».
 
-**How it works.** The orchestrator's merged pool mixes graph-derived and vector chunks in raw union order. Before synthesis, `rerank_sources` co-ranks them in **one** cross-encoder pass (`BAAI/bge-reranker-v2-m3` via `SentenceTransformerRerank`), deduping by `chunk_id` first so each unique chunk is scored once, and returns the top-N (`rerank_top_n`). This is **unified** rerank: graph and vector chunks compete in the *same* ranking rather than being interleaved by their incomparable native scores. It is **capped fail-open**: if the reranker errors, the orchestrator doesn't fail — it falls back to the merged pool but still **caps** it to `rerank_top_n` (`cap_synth_sources`), so a flaky reranker can't blow past the synthesis prompt size / timeout.
+**Как это работает.** После шага merge, пока остаётся бюджет раундов:
 
-**Why we use it / alternatives.** First-stage vector similarity is fast but coarse, and graph and vector scores aren't comparable, so feeding their raw union to synthesis wastes context on mediocre chunks. A cross-encoder rerank is the standard precision boost. The alternative is no rerank (cheaper, worse top-N) or reranking everything (too slow) — second-stage rerank of the merged candidate set is the usual sweet spot.
+1. `coverage_check` (малый ярус) читает вопрос + ограниченный блоб свидетельств (`build_evidence`, ограничен ~12k символов) и возвращает `complete` плюс фразу пробела `missing`.
+2. Чистый `should_run_coverage_round` решает: если `complete` ложен **и** назван непустой пробел **и** остаются раунды → вернуть фразу пробела; иначе → `None` (идти прямо к синтезу).
+3. На названный пробел: запустить **один** дополнительный `SubQueryRetrievalWorkflow` для этой фразы пробела, пере-объединить его источники в пул (дедуп по `chunk_id`), уменьшить бюджет, зациклить.
 
-**In our code.** Activity: `src/workflow/search/activities/rerank.py` (`rerank_sources`, `prepare_rerank_pool`). Model factory: `src/retrieval/reranker.py` (`build_reranker`, default `settings.hf.rerank_model = BAAI/bge-reranker-v2-m3`, offline-cache aware). The reranker is lazy-built and process-cached in `src/workflow/_search_deps.py` (`get_reranker`). Fail-open cap: `cap_synth_sources` in `src/workflow/search/orchestrator.py`.
+Цикл **ограничен** `max_coverage_rounds` и **fail-open** на каждом шаге: любая ошибка в проверке *или* дополнительном извлечении вырывается из цикла и идёт к синтезу — она никогда не блокирует ответ. Фича ограничена `coverage_check_enabled`, который (как все ручки) **разрешается в момент отправки** и несётся во входе workflow, так что решение стабильно между воспроизведениями.
 
-> **BM25 hybrid is NOT wired.** `src/retrieval/hybrid.py` (`build_bm25_retriever` / `build_hybrid_retriever`, BM25 + dense RRF fusion) exists as an A/B *experiment candidate* only — the production retriever is **dense-only** (built in `_search_deps`), and the file's own docstring says it is "NOT wired into the active search path." Despite the `vector_search` docstring saying "Hybrid (BM25 + dense)", the live retriever is dense vector retrieval; treat the hybrid module as off-path until benchmarked and adopted.
+**Почему мы это используем / альтернативы.** Декомпозиция plan-execute делается до извлечения, так что она может пропустить пробел, который становится очевиден только *после* того, как видно, что было извлечено. Проверка покрытия — дешёвый второй взгляд, который ловит их. Альтернативы — без само-коррекции (пропускает пробелы) или неограниченный агент доработки (дорого, может зациклиться навсегда) — ограниченный по умолчанию один-раунд цикл — это золотая середина.
 
----
-
-# Part 4 — Knowledge Anchor, Outputs, Models & Ops
-
-This section explains the platform layer around the RAG pipeline — the canonical knowledge anchor (Wikibase), the human-readable outputs (the continuous wiki editor and SPARQL access), how we pick and record models per role, the LLM gateway, observability, and the MCP tool surface — building each idea up from zero and then grounding it in the actual code.
+**В нашем коде.** Чистые помощники: `src/workflow/search/_coverage.py` (`build_evidence`, `should_run_coverage_round`, `COVERAGE_EVIDENCE_MAX_CHARS = 12_000`). Цикл + fail-open точки вызова — это блок «coverage gate» в `src/workflow/search/orchestrator.py`. Activity судьи — `coverage_check`. Конфиг (`AGENT_`): `coverage_check_enabled` (по умолчанию `True`), `max_coverage_rounds` (по умолчанию `1`, диапазон 0–3).
 
 ---
 
-## The Wikibase knowledge anchor
+## Контекстуализация истории диалога
 
-**What it is (from scratch).** Wikibase is the open-source software that runs Wikidata. It is built on MediaWiki (the wiki engine behind Wikipedia) plus an extension that adds *structured data*. The data model has three core object types:
+**Что это.** Follow-up вопросы полны ссылок — «а как насчёт *его* компании?», «и *там*?». Извлечение не может разрешить их, потому что индекс не знает, что значит «его». **Контекстуализация** переписывает follow-up в **самодостаточный** вопрос, используя недавние ходы диалога («а как насчёт компании Иванова?») *до* того, как запускается какое-либо извлечение.
 
-- **Items** — the "things" (a person, a company, a concept). Each Item has a stable machine ID called a **QID** (`Q42`, `Q14`, …), one or more human labels/descriptions/aliases, and a list of *statements*.
-- **Properties** — the *kinds of facts* you can assert. Each Property has a **PID** (`P31`, `P569`, …) and a fixed *datatype* (e.g. `wikibase-item` for "points at another Item", `external-id` for an identifier string, `string`, `quantity`). On Wikidata, `P31` is famously "instance of".
-- **Statements** — a fact about an Item, shaped as `(Item, Property, value)`. Example: `Q42 — instance-of → Q5 (human)`. The value's shape is governed by the Property's datatype.
+**Как это работает.** Когда запрос несёт `history` и фича включена, workflow запускает `contextualize_query` (малый ярус) **один раз** в начале: он ограничивает историю самыми недавними ходами (по числу ходов и бюджету символов, сохраняя последние ходы), промптит модель «переписать ПОСЛЕДНИЙ вопрос как самодостаточный, раскрывая местоимения и ссылки, сохрани язык, верни ТОЛЬКО переписанный вопрос» и заменяет запрос везде ниже по течению через `model_copy`. Он **fail-open**: пустая история, нет пригодных ходов или любая ошибка LLM → исходный запрос неизменным.
 
-So Wikibase is essentially a typed, queryable graph with stable IDs, an editing UI, a REST/Action API, and (via WDQS) a SPARQL endpoint.
+Он **опт-ин/ограничен** (`contextualize_enabled`, источник `AGENT_CONVERSATION_HISTORY_ENABLED`) и **разрешается в момент отправки** (флаг и список истории запекаются во вход workflow в `_local_params`/`_global_params`), так что он **replay-safe** — воспроизводящийся workflow принимает то же решение, что и в первый раз. Drift контекстуализирует один раз в родителе и очищает историю на своих детях, чтобы это не делалось повторно.
 
-**How it works.** We run a *self-hosted* Wikibase (the `wikibase/wikibase-bundle` image, MySQL-backed) and *project* our Neo4j knowledge graph into it after each successful ingest. The projection rules are:
+**Почему мы это используем / альтернативы.** Без него мульти-ходовое чат-извлечение молча деградирует на каждом follow-up, потому что местоимения не извлекают ничего полезного. Альтернатива — набивание сырой истории в извлекающий запрос — загрязняет эмбеддинг не-по-теме ранними ходами; чистая переписка в один самодостаточный вопрос извлекает куда лучше. Fail-open означает, что он может только помочь: плохая переписка откатывается на сырой запрос.
 
-- **Owner entities → Items.** Anything that is not an identifier type (Person, Organization, Concept, Metric, …) becomes a standalone Item.
-- **Identifier entities → external-id statements.** Phone, email, INN, OGRN, etc. do *not* get their own Item. Instead they are folded onto their owner Item as `external-id` statements (one Property per identifier type). This keeps the graph clean: an INN is an attribute of a company, not a node to navigate to.
-- **Owner↔owner relations → object-property statements.** A relation label between two owner entities becomes a `wikibase-item` statement linking the two Items.
-- **Common claims.** Every owner also gets `instance_of` (its base class QID), `er_canonical_name` (string), and `mention_count` (quantity), when those Properties exist in the bootstrap cache.
-- **Lazy property creation.** When a relation label has no matching PID yet, we `create_property` on the fly (datatype `wikibase-item`), cache the new PID in Neo4j, and reuse it next time.
-- **QID writeback for create-vs-update.** Before pushing an owner, we look up the `wikibase_qid` property on its `:__Entity__` node in Neo4j. If present, we `update_item` (reusing the QID); if absent, we `create_item` and *stamp the new QID back onto the Neo4j node*. This makes re-ingest idempotent: the second pass updates rather than duplicating.
-
-The push is **best-effort**: per-owner and per-relation errors are logged and skipped, and the whole activity never fails the workflow — a Wikibase outage cannot block ingest from completing.
-
-**Why we use it / alternatives.** Neo4j is the RAG team's working store; it is fast for the retriever but it is not a product consumers outside the team should be handed direct access to. Wikibase gives the *rest of the org* a canonical, schema-rich, stable-ID source of truth they can query over standard interfaces (Wikibase REST/Action API + WDQS SPARQL) without Neo4j credentials or Cypher knowledge. The alternative — exposing Neo4j directly, or hand-rolling a separate API — would couple external consumers to our internal store and its churn. Projecting into Wikibase decouples them and reuses the mature Wikidata tooling (UI, history, SPARQL) for free.
-
-**In our code.**
-- `src/workflow/activities/push_wikibase.py` — the Temporal activity. Honours `WIKIBASE_ENABLED` (returns `status="skipped"` when off), loads the `:WikibaseBaseClass` and `:WikibaseProperty` caches from Neo4j, logs in via `AsyncWikibase.from_settings`, then calls `push_entities`. It also flags the silent no-op case (entities in, 0 items created/updated → `status="failed"`).
-- `src/storage/wikibase.py` — `AsyncWikibase` (async wrapper over the synchronous `wikibaseintegrator` SDK via `asyncio.to_thread`) and `push_entities` (the projection orchestrator: partition owners vs identifiers, index relations, upsert owners, write owner↔owner statements, lazy-create properties). Identifier labels come from `IdentifierType` at import time (`_IDENTIFIER_LABELS`). QID lookup/writeback: `_lookup_qid_for_entity` / `_persist_qid_for_entity`. Observed surface forms are also written as Item *aliases* (`set_aliases`) to feed canonical entity linking.
-- `scripts/setup_wikibase.py` — one-time idempotent bootstrap: creates the 10 base-class Items and 27 Properties (3 common + 24 identifier `external-id`), provisions the runtime bot account via `createAndPromote`, and persists the QID/PID cache into Neo4j so the ingest hot path never re-looks-up. Flags: `--dry-run`, `--refresh-cache`.
-- Config knobs (`src/config.py`, `WikibaseSettings`, env prefix `WIKIBASE_`): `WIKIBASE_ENABLED` (default `False` — opt-in), `WIKIBASE_BASE_URL` (default `http://localhost:8181`), `WIKIBASE_BOT_USER` / `WIKIBASE_BOT_PASSWORD`, `WIKIBASE_LANGUAGE` (default `ru`), `WIKIBASE_TIMEOUT_S`.
-- Cross-link: `docs/runbook/wikibase.md` (bring-up, bootstrap, SPARQL examples, teardown).
+**В нашем коде.** `src/workflow/search/activities/contextualize.py` (`contextualize_query`, `_bound_history`, `_build_prompt`; использует малую LLM яруса `route`). Вызывается на шаге 0 `SearchOrchestratorWorkflow`, `GlobalSearchWorkflow` и один раз в `DriftSearchWorkflow`. Конфиг (`AGENT_`): `conversation_history_enabled` (по умолчанию `True`), `history_max_turns` (по умолчанию `6`, диапазон 0–40), `history_max_chars` (по умолчанию `4000`).
 
 ---
 
-## The continuous wiki editor
+## Реранкинг
 
-**What it is (from scratch).** A wiki editor that turns the graph into human-readable, per-entity MediaWiki articles. Every entity gets its own page; the page is (re)generated from the graph rather than written by hand. If the entity has a `wikibase_qid`, the page is also linked to its Wikibase Item via a *sitelink*. This is a separate concern from the Wikibase projection above: Wikibase holds *structured* data for machines/queries, the wiki editor produces *prose* for humans to read.
+**Что это.** Ретриверы (вектор, граф) *ориентированы на recall* — они закидывают широкую сеть и возвращают много кандидатов в своём пер-модальном порядке счёта, который не отражает истинную релевантность *этому* вопросу. **Реранкер** — это модель второй стадии, которая читает каждый кандидатный чанк **вместе с** запросом и пере-оценивает его на релевантность, так что лучшие несколько всплывают наверх до того, как синтез их увидит. Мы используем **кросс-энкодер** (запрос и чанк проходят через модель *совместно*), который точнее би-энкодер эмбеддингов, используемых для извлечения первой стадии — но слишком дорог, чтобы прогонять над всем корпусом, отсюда «только вторая стадия».
 
-**How it works.**
+**Как это работает.** Объединённый пул оркестратора смешивает графовые и векторные чанки в сыром порядке объединения. До синтеза `rerank_sources` со-ранжирует их за **один** проход кросс-энкодера (`BAAI/bge-reranker-v2-m3` через `SentenceTransformerRerank`), дедуплицируя по `chunk_id` сначала, так что каждый уникальный чанк оценивается один раз, и возвращает топ-N (`rerank_top_n`). Это **унифицированный** реранк: графовые и векторные чанки конкурируют в *одном* ранжировании, а не перемежаются по своим несравнимым нативным счётам. Он **ограничен-fail-open**: если реранкер ошибается, оркестратор не падает — он откатывается на объединённый пул, но всё ещё **ограничивает** его до `rerank_top_n` (`cap_synth_sources`), так что флакающий реранкер не может разнести размер промпта синтеза / таймаут.
 
-- **Hybrid trigger.** Ingest does not synchronously regenerate articles. Instead, right after writing to the graph, a best-effort hook *marks the touched entities dirty* (`wiki_dirty = true`). Separately, a Temporal-scheduled sweep periodically *drains* the dirty queue in batches. This decouples ingest latency from article generation and lets many small ingests coalesce into one sweep.
-- **Per-entity unit of work.** Each sweep selects up to `sweep_batch` dirty entities (oldest-dirty first), and runs one activity per entity.
-- **BOT-SECTION ownership.** Only the text between the markers `<!-- KB-BOT:START -->` and `<!-- KB-BOT:END -->` is owned by the bot. Everything outside the markers is human-owned and preserved verbatim. On first write (no markers), the bot section is prepended and any existing human text is kept below.
-- **Anti-drift design.** The LLM prompt is grounded *only* in current graph facts (relations) plus citation snippets — **prior article prose is never fed back to the model**. This is the key guarantee: hallucinations from one run cannot accumulate over successive regenerations, because each regeneration starts from the graph, not from the last article.
-- **Hash-skip change-detection.** Before doing any LLM work, the activity computes a stable hash over the entity's facts (name/label/description + relations) *and* its source-document id set. If the hash matches the last-written `wiki_hash`, the article is unchanged → the activity clears the dirty flag and returns `SKIPPED` with no MediaWiki call. Folding the doc-id set into the hash means a *new source document* (which adds a download link) also regenerates the article even if no 1-hop relation changed.
-- **"Источники" section.** After the LLM prose, a *deterministic* (non-LLM) `== Источники ==` section is appended with download links to the original source files (`{docs_base_url}/documents/{doc_id}`), one per distinct source document. Omitted entirely when there are no docs or no base URL.
+**Почему мы это используем / альтернативы.** Сходство вектора первой стадии быстро, но грубо, и графовые и векторные счёта несравнимы, так что подача их сырого объединения в синтез тратит контекст на посредственные чанки. Реранк кросс-энкодером — стандартный буст точности. Альтернатива — без реранка (дешевле, хуже топ-N) или реранк всего (слишком медленно) — реранк второй стадии объединённого набора кандидатов — обычная золотая середина.
 
-**Why we use it / alternatives.** A graph is great for machines but unreadable for a human browsing "what do we know about company X". Generating articles gives a familiar wiki UX. The alternatives — letting humans write articles by hand (stale, unscalable) or letting an LLM freely rewrite the whole page each time (drift / hallucination accumulation / clobbering human edits) — are exactly what the bot-section + anti-drift + hash-skip design avoids: the machine owns a bounded, regenerated-from-facts section; humans keep the rest; unchanged entities cost nothing.
+**В нашем коде.** Activity: `src/workflow/search/activities/rerank.py` (`rerank_sources`, `prepare_rerank_pool`). Фабрика модели: `src/retrieval/reranker.py` (`build_reranker`, по умолчанию `settings.hf.rerank_model = BAAI/bge-reranker-v2-m3`, осведомлён об офлайн-кэше). Реранкер лениво-строится и процесс-кэшируется в `src/workflow/_search_deps.py` (`get_reranker`). Fail-open ограничение: `cap_synth_sources` в `src/workflow/search/orchestrator.py`.
 
-**In our code.**
-- `src/workflow/wiki/wiki_sweep.py` — `WikiSweepWorkflow` plus the two activities: `select_dirty_entities` (drains the queue) and `write_entity_article` (reads subgraph + docs, hash-skips, renders the bot section, splices it into the page, upserts via MediaWiki, ensures the sitelink, persists the page title + hash, clears dirty).
-- `src/workflow/wiki/article.py` — `splice_bot_section` (marker-bounded replace/prepend), `render_bot_section` (the LLM render grounded only in `ctx` + citations), the prompt (note the explicit "Use ONLY the facts … Do NOT invent anything"), and `_fmt_sources` (the deterministic Источники section).
-- `src/graph/wiki_context.py` — `read_entity_subgraph` (1-hop subgraph, relations capped + ranked by neighbour `mention_count`), `read_citations`, `read_source_docs`, and `subgraph_hash` (the change-detection hash over facts + doc ids; deliberately excludes QID/page-title/citation text).
-- `src/graph/wiki_dirty.py` — `mark_dirty` / `select_dirty` / `clear_dirty` (the `wiki_dirty` / `wiki_hash` / `wiki_synced_at` bookkeeping on `:__Entity__` nodes). The ingest-side hook lives in `src/workflow/activities/mark_dirty.py`.
-- Config knobs (`src/config.py`, `WikiSettings`, env prefix `WIKI_`): `WIKI_ENABLED` (default `False` — opt-in), `WIKI_TASK_QUEUE` (`kb-wiki`), `WIKI_ACTIVITY_CONCURRENCY` (4), `WIKI_SWEEP_BATCH` (50), `WIKI_SWEEP_INTERVAL_MINUTES` (15), `WIKI_CITATIONS_TOP_K` (8), `WIKI_MAX_RELATIONS` (30), `WIKI_DOCS_BASE_URL` (`http://localhost:8000/api/v1`), `WIKI_MEDIAWIKI_API_URL` (empty → derived from `wikibase.base_url`), `WIKI_SITE_GLOBAL_ID` (`kbwiki`).
-- Cross-link: `docs/runbook/wiki-editor.md` (enable steps, schedule registration, data flow).
+> **BM25-гибрид НЕ проводен.** `src/retrieval/hybrid.py` (`build_bm25_retriever` /
+> `build_hybrid_retriever`, BM25 + плотный RRF-сплав) существует только как *кандидат на A/B
+> эксперимент* — продакшен-ретривер **только-плотный** (построен в `_search_deps`), и
+> собственный docstring файла говорит, что он «NOT wired into the active search path».
+> Несмотря на то что docstring `vector_search` говорит «Hybrid (BM25 + dense)», живой
+> ретривер — это плотное векторное извлечение; трактуйте гибридный модуль как вне-пути, пока
+> он не забенчмаркан и принят.
 
 ---
 
-## SPARQL & WDQS (briefly)
+# Часть 4 — Якорь знаний, выходы, модели и эксплуатация
 
-**What it is (from scratch).** SPARQL is the standard query language for RDF graph data — think "SQL for triples". You write graph patterns (`?item wdt:P31 wd:Q5 .`) and the engine returns every binding that matches, including multi-hop traversals across the whole dataset. **WDQS** (Wikidata Query Service) is the query frontend that exposes a Wikibase instance over SPARQL; in our stack it is backed by Blazegraph.
-
-**How it works / caveat.** WDQS does not query Wikibase's MySQL directly. It maintains its *own* copy, updated from the Wikibase change stream in batches. So it is **eventually consistent**: freshly-pushed Items usually appear within seconds, but under heavy ingest the lag can stretch to a minute or two. The MediaWiki REST/Action API (`wbgetentities`) is always authoritative — treat WDQS as the convenient-but-lagging analytics view, not the source of truth. WDQS is optional for runtime; we use it for instance-wide graph-style queries rather than per-Item lookups.
-
-**Why we use it / alternatives.** SPARQL is the right tool when a consumer wants traversal across the whole instance ("all Organizations linked to topic X") rather than fetching one known Item. The alternative — paging the REST API and stitching results client-side — is fine for single-Item reads but poor for graph queries. Knowing the eventual-consistency caveat avoids the classic "I just pushed it, why is SPARQL empty" trap (answer: re-check via REST).
-
-**In our code.** No application code calls WDQS directly; it is operator-facing. Exposed at `http://localhost:8989` (compose service `wdqs`). See `docs/runbook/wikibase.md` §6 ("Querying via SPARQL (wdqs)") for the endpoint, example queries, and the sync-lag caveat.
+Этот раздел объясняет платформенный слой вокруг RAG-конвейера — канонический якорь знаний (Wikibase), человекочитаемые выходы (непрерывный wiki-редактор и SPARQL-доступ), как мы выбираем и записываем модели по ролям, шлюз LLM, наблюдаемость и поверхность MCP-инструментов — строя каждую идею с нуля и затем обосновывая её в фактическом коде.
 
 ---
 
-## Multi-model / role-based model selection
+## Якорь знаний Wikibase
 
-**What it is (from scratch).** Different jobs in the pipeline have different cost/quality needs. High-volume internal work (entity extraction, judging, search-side normalisation) wants a cheap, fast, local model; the single user-facing answer synthesis wants the best model available. "Role-based model selection" means we name *logical roles* (`extraction`, `judge`, `search`, `route`, `plan`, `retrieve`, `synthesis`) and map each to one of just two *physical tiers* the operator actually manages — `small` and `large`.
+**Что это (с нуля).** Wikibase — это open-source ПО, на котором работает Wikidata. Оно построено на MediaWiki (wiki-движок за Википедией) плюс расширение, добавляющее *структурные данные*. Модель данных имеет три основных типа объектов:
 
-**How it works.**
+- **Items** — «вещи» (человек, компания, концепт). У каждого Item есть стабильный машинный ID, называемый **QID** (`Q42`, `Q14`, …), один или более человеческих меток/описаний/алиасов и список *statements*.
+- **Properties** — *виды фактов*, которые можно утверждать. У каждого Property есть **PID** (`P31`, `P569`, …) и фиксированный *datatype* (например `wikibase-item` для «указывает на другой Item», `external-id` для строки-идентификатора, `string`, `quantity`). На Wikidata `P31` знаменито «instance of».
+- **Statements** — факт об Item, в форме `(Item, Property, value)`. Пример: `Q42 — instance-of → Q5 (human)`. Форма значения управляется datatype'ом Property.
 
-- Two physical model names: `LITELLM_MODEL_SMALL` and `LITELLM_MODEL_LARGE`. Operators manage exactly these two.
-- A declarative role→tier map (`_DEFAULT_ROLE_TIERS`): everything defaults to `small` *except* `synthesis`, which is `large`.
-- `LITELLM_ROLE_TIERS` lets an operator escalate a single role without re-declaring the rest — provided overrides are *merged* onto the defaults (e.g. `{"plan":"large"}` only changes `plan`).
-- Resolution is `model_for(role)`: `role → tier_for(role) → model_large if "large" else model_small`.
-- **Model snapshots at submit time.** When a document is submitted for ingest, the API records the *exact* model resolved for each role *right then* (`cfg.model_for("extraction")`, `"judge"`, `"search"`) and carries those strings through the workflow. So even if config changes later, the run is tagged with the models it actually used. The `finalize` activity passes these per-role models into the metrics extractor, and they land in `ingest_metrics.model` per activity row — giving accurate per-activity model attribution for version-compare dashboards.
+Так что Wikibase по сути — это типизированный, запрашиваемый граф со стабильными ID, UI редактирования, REST/Action API и (через WDQS) SPARQL-эндпоинтом.
 
-**Why we use it / alternatives.** A single global model forces a bad trade-off: either pay large-model cost on every extraction call, or accept small-model quality on the final answer. The tier indirection keeps the *operator's* surface tiny (two model names) while still letting any one role be escalated. Recording the snapshot at submit time (rather than reading live config at metrics-write time) is what makes "version A vs version B" comparisons honest.
+**Как это работает.** Мы запускаем *самохостящийся* Wikibase (образ `wikibase/wikibase-bundle`, на MySQL) и *проецируем* наш граф знаний Neo4j в него после каждого успешного инжеста. Правила проекции:
 
-**In our code.**
-- `src/config.py` — `LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE`, `_DEFAULT_ROLE_TIERS`, the `LITELLM_ROLE_TIERS` merge validator, and `LiteLLMSettings.model_for(role)` / `tier_for(role)`.
-- `src/api/routes/ingest.py` — captures the per-role snapshots at submit (`extraction_model` / `judge_model` / `search_model` via `cfg.model_for(...)`) and the `version_tag`.
-- `src/workflow/activities/finalize.py` — builds `models_per_role` from the snapshotted fields and feeds it to the timings extractor.
-- `src/storage/ingest_metrics.py` — the `MetricRow` schema and writer; `model` is one of the recorded columns (with `version_tag`, `env`).
-- Cross-link: `docs/MODELS.md`.
+- **Сущности-владельцы → Items.** Всё, что не является типом идентификатора (Person, Organization, Concept, Metric, …), становится отдельным Item.
+- **Сущности-идентификаторы → external-id statements.** Телефон, email, ИНН, ОГРН и т.д. *не* получают свой собственный Item. Вместо этого они складываются на их Item-владельца как `external-id` statements (один Property на тип идентификатора). Это держит граф чистым: ИНН — это атрибут компании, а не нода, к которой нужно навигировать.
+- **Отношения владелец↔владелец → object-property statements.** Метка отношения между двумя сущностями-владельцами становится `wikibase-item` statement, связывающим два Item.
+- **Общие claim'ы.** Каждый владелец также получает `instance_of` (QID его базового класса), `er_canonical_name` (string) и `mention_count` (quantity), когда эти Properties существуют в bootstrap-кэше.
+- **Ленивое создание property.** Когда у метки отношения ещё нет совпадающего PID, мы `create_property` на лету (datatype `wikibase-item`), кэшируем новый PID в Neo4j и переиспользуем в следующий раз.
+- **Запись QID обратно для create-vs-update.** Перед пушем владельца мы смотрим свойство `wikibase_qid` на его ноде `:__Entity__` в Neo4j. Если присутствует, мы `update_item` (переиспользуя QID); если отсутствует, мы `create_item` и *штампуем новый QID обратно на ноду Neo4j*. Это делает ре-инжест идемпотентным: второй проход обновляет, а не дублирует.
 
----
+Пуш **best-effort**: пер-владельцевые и пер-отношенческие ошибки логируются и пропускаются, и вся activity никогда не проваливает workflow — сбой Wikibase не может заблокировать завершение инжеста.
 
-## LiteLLM gateway
+**Почему мы это используем / альтернативы.** Neo4j — рабочее хранилище RAG-команды; оно быстро для ретривера, но это не продукт, которому потребителям вне команды стоит давать прямой доступ. Wikibase даёт *остальной части организации* канонический, схема-богатый источник истины со стабильными ID, который они могут запрашивать по стандартным интерфейсам (Wikibase REST/Action API + WDQS SPARQL) без учётных данных Neo4j или знания Cypher. Альтернатива — выставить Neo4j напрямую или самописать отдельный API — связала бы внешних потребителей с нашим внутренним хранилищем и его изменчивостью. Проекция в Wikibase развязывает их и переиспользует зрелый тулинг Wikidata (UI, история, SPARQL) бесплатно.
 
-**What it is (from scratch).** An *LLM gateway* (a.k.a. proxy/front-door) is a single service that sits in front of one or more model backends and exposes them all behind one OpenAI-compatible HTTP API. Clients always speak the same protocol (`/v1/chat/completions`, `/v1/embeddings`) and just pass a model name; the gateway routes to the actual backend (a local server, a hosted API, etc.). **LiteLLM** is the gateway we run.
-
-**How it works.** Everything in the app — LlamaIndex LLM calls and embeddings — points at one base URL (`LITELLM_BASE_URL`, default `http://localhost:4000`) with an API key. LiteLLM, configured by `docker/litellm_config.yaml`, maps the model names we send (the small/large tier names) to real upstreams. Because both `llama-index-llms-openai-like` and `llama-index-embeddings-openai-like` speak the OpenAI wire format, no client code needs to know which backend is live.
-
-**Why we use it / alternatives.** Routing every call through one OpenAI-compatible endpoint means swapping a backend (local → hosted, or one model → another) is a *config-only* change with zero application edits; it also centralises auth, the place to add rate-limiting/observability, and keeps the codebase provider-agnostic. The alternative — wiring each client to a specific provider SDK — scatters provider knowledge across the code and makes model swaps a code change.
-
-**In our code.**
-- `docker-compose.yml` — the `litellm` service (`ghcr.io/berriai/litellm:main-stable`, port `4000`, config mounted from `docker/litellm_config.yaml`, master key from `LITELLM_API_KEY`, plus a liveness healthcheck).
-- `src/config.py` — `LiteLLMSettings.base_url` (`LITELLM_BASE_URL`) and `api_key` (`LITELLM_API_KEY`); model/embedding names resolve here too.
+**В нашем коде.**
+- `src/workflow/activities/push_wikibase.py` — Temporal-activity. Честит `WIKIBASE_ENABLED` (возвращает `status="skipped"`, когда выключено), загружает кэши `:WikibaseBaseClass` и `:WikibaseProperty` из Neo4j, логинится через `AsyncWikibase.from_settings`, затем вызывает `push_entities`. Она также флагует случай молчаливого no-op (сущности на входе, 0 items создано/обновлено → `status="failed"`).
+- `src/storage/wikibase.py` — `AsyncWikibase` (асинхронная обёртка над синхронным SDK `wikibaseintegrator` через `asyncio.to_thread`) и `push_entities` (оркестратор проекции: разделить владельцев против идентификаторов, индексировать отношения, upsert владельцев, записать statements владелец↔владелец, лениво-создать properties). Метки идентификаторов приходят из `IdentifierType` во время импорта (`_IDENTIFIER_LABELS`). Поиск/запись QID: `_lookup_qid_for_entity` / `_persist_qid_for_entity`. Наблюдаемые поверхностные формы также записываются как *алиасы* Item (`set_aliases`), чтобы питать каноническое entity linking.
+- `scripts/setup_wikibase.py` — одноразовый идемпотентный bootstrap: создаёт 10 Item базовых классов и 27 Properties (3 общих + 24 идентификаторных `external-id`), провижинит рантайм-аккаунт бота через `createAndPromote` и персистит кэш QID/PID в Neo4j, чтобы горячий путь инжеста никогда не пере-искал. Флаги: `--dry-run`, `--refresh-cache`.
+- Ручки конфига (`src/config.py`, `WikibaseSettings`, префикс окружения `WIKIBASE_`): `WIKIBASE_ENABLED` (по умолчанию `False` — опт-ин), `WIKIBASE_BASE_URL` (по умолчанию `http://localhost:8181`), `WIKIBASE_BOT_USER` / `WIKIBASE_BOT_PASSWORD`, `WIKIBASE_LANGUAGE` (по умолчанию `ru`), `WIKIBASE_TIMEOUT_S`.
+- Кросс-линк: `docs/runbook/wikibase.md` (поднятие, bootstrap, примеры SPARQL, демонтаж).
 
 ---
 
-## Observability
+## Непрерывный wiki-редактор
 
-**What it is (from scratch).** Observability is being able to answer "what happened, and why" after the fact. Our stack has three complementary layers:
+**Что это (с нуля).** Wiki-редактор, который превращает граф в человекочитаемые, пер-сущностные MediaWiki-статьи. Каждая сущность получает свою страницу; страница (пере)генерируется из графа, а не пишется вручную. Если у сущности есть `wikibase_qid`, страница также связывается со своим Wikibase Item через *sitelink*. Это отдельная забота от проекции Wikibase выше: Wikibase держит *структурные* данные для машин/запросов, wiki-редактор производит *прозу* для чтения людьми.
 
-1. **Temporal Web UI** — Temporal records every workflow's full event history (each activity scheduled/started/completed/failed, inputs, retries). The Web UI lets you inspect any run, see exactly where it is/failed, and — because Temporal is deterministic-replay based — *replay* a workflow's history to debug it.
-2. **Prometheus + Grafana** — the Temporal Python worker exposes a built-in Prometheus metrics endpoint; Prometheus scrapes it on an interval, and Grafana dashboards visualise the aggregates. This is the *live, aggregated* view (activity latencies, success/fail counts, labelled by activity type and task queue).
-3. **Per-activity `ingest_metrics` (Postgres)** — the *frozen, per-run* view. At the end of each workflow, `finalize` reads its own Temporal history, derives per-activity durations, and writes one row per `(activity, attempt)` into Postgres, tagged with `version_tag`, `model`, and `env`.
+**Как это работает.**
 
-**How it works.** The two metric paths are deliberately redundant. Prometheus answers "how is the system doing right now / over the last hour" (live, aggregated, ephemeral retention). Postgres `ingest_metrics` answers "exactly how did *this specific run* behave, and how does version A compare to version B" (durable, per-run, model-tagged). The Postgres write is best-effort — a Temporal/Postgres hiccup logs a warning but never fails ingest — and de-duped via an `ON CONFLICT DO NOTHING` on `(workflow_run_id, activity_name, attempt)`, so Temporal history replays don't double-count.
+- **Гибридный триггер.** Инжест не синхронно перегенерирует статьи. Вместо этого, сразу после записи в граф, best-effort хук *помечает затронутые сущности грязными* (`wiki_dirty = true`). Отдельно Temporal-расписанный sweep периодически *дренирует* грязную очередь батчами. Это развязывает латентность инжеста от генерации статей и позволяет многим маленьким инжестам скоалесцировать в один sweep.
+- **Пер-сущностная единица работы.** Каждый sweep выбирает до `sweep_batch` грязных сущностей (старейшие-грязные первыми) и запускает одну activity на сущность.
+- **Владение BOT-SECTION.** Только текст между маркерами `<!-- KB-BOT:START -->` и `<!-- KB-BOT:END -->` принадлежит боту. Всё вне маркеров принадлежит человеку и сохраняется дословно. При первой записи (нет маркеров) bot-секция добавляется впереди, и любой существующий человеческий текст сохраняется ниже.
+- **Анти-дрейф дизайн.** Промпт LLM обоснован *только* в текущих графовых фактах (отношениях) плюс цитатных сниппетах — **прежняя проза статьи никогда не подаётся обратно модели**. Это ключевая гарантия: галлюцинации из одного запуска не могут накапливаться через последовательные перегенерации, потому что каждая перегенерация стартует из графа, а не из последней статьи.
+- **Hash-skip обнаружение изменений.** Перед любой LLM-работой activity вычисляет стабильный хеш над фактами сущности (name/label/description + отношения) *и* набором её исходных-документных id. Если хеш совпадает с последним записанным `wiki_hash`, статья неизменна → activity очищает грязный флаг и возвращает `SKIPPED` без вызова MediaWiki. Складывание набора doc-id в хеш означает, что *новый исходный документ* (который добавляет ссылку на скачивание) также перегенерирует статью, даже если ни одно 1-хоповое отношение не изменилось.
+- **Секция «Источники».** После прозы LLM добавляется *детерминированная* (не-LLM) секция `== Источники ==` со ссылками на скачивание оригинальных исходных файлов (`{docs_base_url}/documents/{doc_id}`), по одной на каждый различный исходный документ. Полностью опускается, когда нет документов или нет базового URL.
 
-**Why we use it / alternatives.** Workflow histories give causal, replayable detail but are awkward to aggregate; Prometheus aggregates beautifully but forgets specifics and lacks our business tags (version, model); a per-run Postgres table gives exactly the durable, queryable, version/model-tagged drill-down that A/B model comparisons need. Each covers the others' blind spot.
+**Почему мы это используем / альтернативы.** Граф отличен для машин, но нечитаем для человека, просматривающего «что мы знаем о компании X». Генерация статей даёт привычный wiki-UX. Альтернативы — позволить людям писать статьи вручную (устаревает, немасштабируемо) или позволить LLM свободно переписывать всю страницу каждый раз (дрейф / накопление галлюцинаций / затирание человеческих правок) — это ровно то, чего избегает дизайн bot-секция + анти-дрейф + hash-skip: машина владеет ограниченной, перегенерируемой-из-фактов секцией; люди держат остальное; неизменённые сущности ничего не стоят.
 
-**In our code.**
-- `src/storage/ingest_metrics.py` — `MetricRow` schema + `AsyncIngestMetrics.insert_metrics` (bulk insert with the `ON CONFLICT DO NOTHING` de-dup). Columns include `duration_ms`, `started_at`/`completed_at`, `version_tag`, `model`, `env`.
-- `src/workflow/activities/finalize.py` — `_persist_ingest_metrics` fetches parent + child workflow histories and parses per-activity timings (best-effort).
-- `docker-compose.yml` — `prometheus` (`prom/prometheus`, scrape config from `infra/prometheus/prometheus.yml`) and `grafana` (`grafana/grafana`, auto-provisioned datasources + dashboards from `infra/grafana/provisioning`).
-- Cross-link: `docs/runbook/analytics.md` (the two paths, bring-up, the three Grafana dashboards: Ingest Overview / Version compare / Run drill-down).
+**В нашем коде.**
+- `src/workflow/wiki/wiki_sweep.py` — `WikiSweepWorkflow` плюс две activity: `select_dirty_entities` (дренирует очередь) и `write_entity_article` (читает подграф + документы, hash-skip'ит, рендерит bot-секцию, вставляет её в страницу, upsert'ит через MediaWiki, обеспечивает sitelink, персистит заголовок страницы + хеш, очищает грязное).
+- `src/workflow/wiki/article.py` — `splice_bot_section` (маркер-ограниченная замена/добавление-впереди), `render_bot_section` (LLM-рендер, обоснованный только в `ctx` + цитаты), промпт (заметьте явное «Use ONLY the facts … Do NOT invent anything») и `_fmt_sources` (детерминированная секция Источники).
+- `src/graph/wiki_context.py` — `read_entity_subgraph` (1-хоповый подграф, отношения ограничены + ранжированы по `mention_count` соседа), `read_citations`, `read_source_docs` и `subgraph_hash` (хеш обнаружения изменений над фактами + doc id; намеренно исключает QID/заголовок-страницы/текст-цитаты).
+- `src/graph/wiki_dirty.py` — `mark_dirty` / `select_dirty` / `clear_dirty` (бухгалтерия `wiki_dirty` / `wiki_hash` / `wiki_synced_at` на нодах `:__Entity__`). Хук на стороне инжеста живёт в `src/workflow/activities/mark_dirty.py`.
+- Ручки конфига (`src/config.py`, `WikiSettings`, префикс окружения `WIKI_`): `WIKI_ENABLED` (по умолчанию `False` — опт-ин), `WIKI_TASK_QUEUE` (`kb-wiki`), `WIKI_ACTIVITY_CONCURRENCY` (4), `WIKI_SWEEP_BATCH` (50), `WIKI_SWEEP_INTERVAL_MINUTES` (15), `WIKI_CITATIONS_TOP_K` (8), `WIKI_MAX_RELATIONS` (30), `WIKI_DOCS_BASE_URL` (`http://localhost:8000/api/v1`), `WIKI_MEDIAWIKI_API_URL` (пусто → выводится из `wikibase.base_url`), `WIKI_SITE_GLOBAL_ID` (`kbwiki`).
+- Кросс-линк: `docs/runbook/wiki-editor.md` (шаги включения, регистрация расписания, поток данных).
 
 ---
 
-## MCP (Model Context Protocol) surface
+## SPARQL и WDQS (вкратце)
 
-**What it is (from scratch).** MCP (Model Context Protocol) is a standard protocol for exposing *tools* (and resources/prompts) to LLM agents. An MCP *server* advertises a set of callable tools with typed schemas; an MCP *client* (an LLM host like Claude Desktop, Cursor, OpenWebUI, or our Hermes Agent) discovers those tools and lets the model call them during its own reasoning loop. It standardises the "give the model tools" plumbing across hosts, the way LSP standardised editor↔language-server plumbing.
+**Что это (с нуля).** SPARQL — это стандартный язык запросов для RDF-графовых данных — думайте «SQL для триплетов». Вы пишете графовые паттерны (`?item wdt:P31 wd:Q5 .`), и движок возвращает каждую связку, которая совпадает, включая многохоповые обходы по всему датасету. **WDQS** (Wikidata Query Service) — это фронтенд запросов, который выставляет инстанс Wikibase по SPARQL; в нашем стеке он подкреплён Blazegraph.
 
-**How it works.** We expose our raw retrieval primitives as atomic MCP tools — no Temporal workflow in between. The client's LLM drives its *own* ReAct-style loop and composes these primitives itself. The exposed tools include `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, and `read_full_document`. Each tool returns a JSON-serialisable dict, carries an 1800s (30 min) execution timeout so a slow graph walk can't hang a client, and routes every LLM sub-call (e.g. the synonym-normalisation step inside `graph_search`) through the per-process `LLMPool`, which keeps each role bounded and serialises concurrent clients behind it. (`filter_by_metadata` is deliberately *not* exposed — it operates on an in-process accumulator that stateless tool-call clients don't maintain.)
+**Как это работает / оговорка.** WDQS не запрашивает MySQL Wikibase напрямую. Он поддерживает *свою* копию, обновляемую из потока изменений Wikibase батчами. Так что он **eventually consistent**: свеже-запушенные Items обычно появляются в течение секунд, но под тяжёлым инжестом лаг может растянуться до минуты или двух. MediaWiki REST/Action API (`wbgetentities`) всегда авторитетен — трактуйте WDQS как удобное-но-лагающее аналитическое представление, а не источник истины. WDQS опционален для рантайма; мы используем его для инстанс-широких графово-стильных запросов, а не пер-Item поисков.
 
-**Why we use it / alternatives.** Exposing atomic tools over a standard protocol lets *any* MCP-capable agent build its own search strategy against our knowledge base without us shipping a bespoke client per host or hard-coding one orchestration. This complements the sibling "already-orchestrated answer" server (MCP-1, `kb_search`): MCP-2 hands over primitives for clients that want to drive the loop; MCP-1 returns a finished answer for clients that don't. The alternative — a single fixed endpoint — denies agents the flexibility to compose retrieval themselves.
+**Почему мы это используем / альтернативы.** SPARQL — правильный инструмент, когда потребитель хочет обход по всему инстансу («все Organizations, связанные с темой X»), а не получение одного известного Item. Альтернатива — пейджить REST API и сшивать результаты на клиенте — нормальна для одно-Item чтений, но плоха для графовых запросов. Знание оговорки об eventual-consistency избегает классической ловушки «я только что запушил, почему SPARQL пуст» (ответ: пере-проверь через REST).
 
-**In our code.**
-- `src/mcp/tools_server.py` — the FastMCP server `kb-llamaindex-tools`: the 8 `@mcp.tool` definitions (each wrapping a function from `src/retrieval/atomic_tools.py`), lazy dependency bootstrap (`_init`), the 1800s per-tool timeout, SSE auth (`build_sse_auth`), and the `--transport stdio|sse` entrypoint. GPU/LLM protection via the per-process `LLMPool` (`src/retrieval/llm_pool.py`).
-- Cross-link: `docs/runbook/mcp.md` (two-server overview; note its banner that MCP-1 was re-pointed at `SearchOrchestratorWorkflow` post-R7b — the MCP-2 atomic-tools section is current).
+**В нашем коде.** Никакой код приложения не вызывает WDQS напрямую; он обращён к оператору. Выставлен на `http://localhost:8989` (compose-сервис `wdqs`). См. `docs/runbook/wikibase.md` §6 («Querying via SPARQL (wdqs)») для эндпоинта, примеров запросов и оговорки о лаге синхронизации.
+
+---
+
+## Мультимодельный / ролевой выбор модели
+
+**Что это (с нуля).** Разные работы в конвейере имеют разные потребности стоимость/качество. Высокообъёмная внутренняя работа (извлечение сущностей, судейство, нормализация на стороне поиска) хочет дешёвую, быструю, локальную модель; единственный обращённый к пользователю синтез ответа хочет лучшую доступную модель. «Ролевой выбор модели» означает, что мы именуем *логические роли* (`extraction`, `judge`, `search`, `route`, `plan`, `retrieve`, `synthesis`) и мапим каждую на один из всего двух *физических ярусов*, которыми оператор фактически управляет — `small` и `large`.
+
+**Как это работает.**
+
+- Два физических имени модели: `LITELLM_MODEL_SMALL` и `LITELLM_MODEL_LARGE`. Операторы управляют ровно этими двумя.
+- Декларативная карта роль→ярус (`_DEFAULT_ROLE_TIERS`): всё по умолчанию `small`, *кроме* `synthesis`, который `large`.
+- `LITELLM_ROLE_TIERS` позволяет оператору эскалировать одну роль без пере-объявления остальных — при условии, что переопределения *смешиваются* на дефолты (например `{"plan":"large"}` меняет только `plan`).
+- Разрешение — это `model_for(role)`: `role → tier_for(role) → model_large если "large" иначе model_small`.
+- **Снапшоты модели в момент отправки.** Когда документ отправляется на инжест, API записывает *точную* модель, разрешённую для каждой роли *именно тогда* (`cfg.model_for("extraction")`, `"judge"`, `"search"`) и несёт эти строки через workflow. Так что даже если конфиг меняется позже, запуск помечен моделями, которые он фактически использовал. Activity `finalize` передаёт эти пер-ролевые модели в экстрактор метрик, и они приземляются в `ingest_metrics.model` на строку activity — давая точную пер-activity атрибуцию модели для дашбордов сравнения версий.
+
+**Почему мы это используем / альтернативы.** Одна глобальная модель форсирует плохой компромисс: либо платить стоимость large-модели на каждом вызове извлечения, либо принимать качество small-модели на финальном ответе. Ярусная индирекция держит *поверхность оператора* крошечной (два имени модели), всё ещё позволяя эскалировать любую одну роль. Запись снапшота в момент отправки (а не чтение живого конфига в момент записи метрик) — это то, что делает сравнения «версия A против версии B» честными.
+
+**В нашем коде.**
+- `src/config.py` — `LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE`, `_DEFAULT_ROLE_TIERS`, merge-валидатор `LITELLM_ROLE_TIERS` и `LiteLLMSettings.model_for(role)` / `tier_for(role)`.
+- `src/api/routes/ingest.py` — захватывает пер-ролевые снапшоты при отправке (`extraction_model` / `judge_model` / `search_model` через `cfg.model_for(...)`) и `version_tag`.
+- `src/workflow/activities/finalize.py` — строит `models_per_role` из заснапшоченных полей и питает им экстрактор таймингов.
+- `src/storage/ingest_metrics.py` — схема `MetricRow` и writer; `model` — один из записанных столбцов (с `version_tag`, `env`).
+- Кросс-линк: `docs/MODELS.md`.
+
+---
+
+## Шлюз LiteLLM
+
+**Что это (с нуля).** *Шлюз LLM* (a.k.a. прокси/парадная дверь) — это единый сервис, который сидит перед одним или более бэкендами моделей и выставляет их все за одним OpenAI-совместимым HTTP API. Клиенты всегда говорят на одном протоколе (`/v1/chat/completions`, `/v1/embeddings`) и просто передают имя модели; шлюз маршрутизирует на фактический бэкенд (локальный сервер, хостящийся API и т.д.). **LiteLLM** — это шлюз, который мы запускаем.
+
+**Как это работает.** Всё в приложении — LlamaIndex LLM-вызовы и эмбеддинги — указывает на один базовый URL (`LITELLM_BASE_URL`, по умолчанию `http://localhost:4000`) с API-ключом. LiteLLM, сконфигурированный `docker/litellm_config.yaml`, мапит имена моделей, которые мы отправляем (имена ярусов small/large), на реальные апстримы. Поскольку и `llama-index-llms-openai-like`, и `llama-index-embeddings-openai-like` говорят на формате провода OpenAI, никакому клиентскому коду не нужно знать, какой бэкенд жив.
+
+**Почему мы это используем / альтернативы.** Маршрутизация каждого вызова через один OpenAI-совместимый эндпоинт означает, что замена бэкенда (локальный → хостящийся, или одна модель → другая) — это *только-конфиг* изменение с нулевыми правками приложения; это также централизует аутентификацию, место для добавления rate-limiting/наблюдаемости и держит кодовую базу провайдер-агностичной. Альтернатива — проводить каждый клиент к конкретному SDK провайдера — рассеивает знание провайдера по коду и делает замены модели изменением кода.
+
+**В нашем коде.**
+- `docker-compose.yml` — сервис `litellm` (`ghcr.io/berriai/litellm:main-stable`, порт `4000`, конфиг смонтирован из `docker/litellm_config.yaml`, мастер-ключ из `LITELLM_API_KEY`, плюс liveness healthcheck).
+- `src/config.py` — `LiteLLMSettings.base_url` (`LITELLM_BASE_URL`) и `api_key` (`LITELLM_API_KEY`); имена модели/эмбеддинга разрешаются здесь же.
+
+---
+
+## Наблюдаемость
+
+**Что это (с нуля).** Наблюдаемость — это способность ответить «что произошло и почему» постфактум. Наш стек имеет три комплементарных слоя:
+
+1. **Temporal Web UI** — Temporal записывает полную историю событий каждого workflow (каждая activity запланирована/стартовала/завершена/упала, входы, ретраи). Web UI позволяет инспектировать любой запуск, увидеть точно, где он находится/упал, и — поскольку Temporal основан на детерминированном воспроизведении — *воспроизвести* историю workflow, чтобы дебажить его.
+2. **Prometheus + Grafana** — Temporal Python-воркер выставляет встроенный Prometheus-эндпоинт метрик; Prometheus скрейпит его на интервале, и дашборды Grafana визуализируют агрегаты. Это *живое, агрегированное* представление (латентности activity, счётчики успехов/сбоев, размеченные по типу activity и очереди задач).
+3. **Пер-activity `ingest_metrics` (Postgres)** — *замороженное, пер-запуск* представление. В конце каждого workflow `finalize` читает свою собственную историю Temporal, выводит пер-activity длительности и записывает одну строку на `(activity, attempt)` в Postgres, помеченную `version_tag`, `model` и `env`.
+
+**Как это работает.** Два пути метрик намеренно избыточны. Prometheus отвечает «как система поживает прямо сейчас / за последний час» (живое, агрегированное, эфемерное хранение). Postgres `ingest_metrics` отвечает «точно как вёл себя *этот конкретный запуск*, и как версия A сравнивается с версией B» (долговечное, пер-запуск, помечено моделью). Запись в Postgres best-effort — заминка Temporal/Postgres логирует предупреждение, но никогда не проваливает инжест — и дедуплицирована через `ON CONFLICT DO NOTHING` по `(workflow_run_id, activity_name, attempt)`, так что воспроизведения истории Temporal не двойной-счёт.
+
+**Почему мы это используем / альтернативы.** Истории workflow дают причинную, воспроизводимую детализацию, но неуклюжи для агрегации; Prometheus агрегирует прекрасно, но забывает специфику и лишён наших бизнес-меток (версия, модель); пер-запуск Postgres-таблица даёт ровно долговечную, запрашиваемую, помеченную версией/моделью детализацию, которая нужна A/B-сравнениям моделей. Каждый покрывает слепое пятно остальных.
+
+**В нашем коде.**
+- `src/storage/ingest_metrics.py` — схема `MetricRow` + `AsyncIngestMetrics.insert_metrics` (массовая вставка с `ON CONFLICT DO NOTHING` дедупом). Столбцы включают `duration_ms`, `started_at`/`completed_at`, `version_tag`, `model`, `env`.
+- `src/workflow/activities/finalize.py` — `_persist_ingest_metrics` достаёт истории родительского + дочернего workflow и парсит пер-activity тайминги (best-effort).
+- `docker-compose.yml` — `prometheus` (`prom/prometheus`, конфиг скрейпа из `infra/prometheus/prometheus.yml`) и `grafana` (`grafana/grafana`, авто-провижионенные datasources + дашборды из `infra/grafana/provisioning`).
+- Кросс-линк: `docs/runbook/analytics.md` (два пути, поднятие, три дашборда Grafana: Ingest Overview / Version compare / Run drill-down).
+
+---
+
+## Поверхность MCP (Model Context Protocol)
+
+**Что это (с нуля).** MCP (Model Context Protocol) — это стандартный протокол для выставления *инструментов* (и ресурсов/промптов) LLM-агентам. MCP-*сервер* рекламирует набор вызываемых инструментов с типизированными схемами; MCP-*клиент* (LLM-хост вроде Claude Desktop, Cursor, OpenWebUI или наш Hermes Agent) обнаруживает эти инструменты и позволяет модели вызывать их во время её собственного цикла рассуждения. Он стандартизирует «дай модели инструменты» сантехнику между хостами, как LSP стандартизировал сантехнику редактор↔языковой-сервер.
+
+**Как это работает.** Мы выставляем наши сырые примитивы извлечения как атомарные MCP-инструменты — без Temporal-workflow между. LLM клиента ведёт *свой собственный* ReAct-стильный цикл и компонует эти примитивы сам. Выставленные инструменты включают `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id` и `read_full_document`. Каждый инструмент возвращает JSON-сериализуемый dict, несёт таймаут выполнения 1800с (30 мин), так что медленный обход графа не может подвесить клиента, и маршрутизирует каждый LLM-под-вызов (например шаг нормализации синонимов внутри `graph_search`) через пер-процессный `LLMPool`, который держит каждую роль ограниченной и сериализует конкурентных клиентов за ним. (`filter_by_metadata` намеренно *не* выставлен — он оперирует на in-process аккумуляторе, который stateless tool-call клиенты не поддерживают.)
+
+**Почему мы это используем / альтернативы.** Выставление атомарных инструментов по стандартному протоколу позволяет *любому* MCP-способному агенту строить свою собственную стратегию поиска против нашей базы знаний без того, чтобы мы поставляли кастомный клиент на хост или хардкодили одну оркестрацию. Это комплементарно сестринскому серверу «уже-оркестрированный ответ» (MCP-1, `kb_search`): MCP-2 передаёт примитивы клиентам, которые хотят вести цикл; MCP-1 возвращает готовый ответ клиентам, которые не хотят. Альтернатива — один фиксированный эндпоинт — отрицает агентам гибкость компоновать извлечение самим.
+
+**В нашем коде.**
+- `src/mcp/tools_server.py` — FastMCP-сервер `kb-llamaindex-tools`: 8 определений `@mcp.tool` (каждое оборачивает функцию из `src/retrieval/atomic_tools.py`), ленивый bootstrap зависимостей (`_init`), пер-инструментный таймаут 1800с, SSE-аутентификация (`build_sse_auth`) и entrypoint `--transport stdio|sse`. Защита GPU/LLM через пер-процессный `LLMPool` (`src/retrieval/llm_pool.py`).
+- Кросс-линк: `docs/runbook/mcp.md` (обзор двух серверов; заметьте его баннер, что MCP-1 был пере-нацелен на `SearchOrchestratorWorkflow` после R7b — секция атомарных-инструментов MCP-2 актуальна).

@@ -1,52 +1,53 @@
-# ADR-0012: Wikibase as the canonical anchor + continuous wiki editor with anti-drift bot-sections
+# ADR-0012: Wikibase как канонический якорь + непрерывный wiki-редактор с anti-drift bot-секциями
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-The knowledge graph needs a canonical, human-auditable anchor for the entities
-it extracts, and a human-readable surface that stays faithful to the graph. A
-naive "LLM rewrites the article from the previous article" approach drifts:
-each generation edits the prior prose and errors compound; humans and the bot
-also fight over the same text.
+Графу знаний нужен канонический, проверяемый человеком якорь для сущностей,
+которые он извлекает, и читаемая человеком поверхность, остающаяся верной графу.
+Наивный подход «LLM переписывает статью из предыдущей статьи» дрейфует: каждая
+генерация правит предыдущую прозу, и ошибки накапливаются; люди и бот к тому же
+борются за один и тот же текст.
 
-## Decision
+## Решение
 
-Two coupled decisions:
-1. **Wikibase as the canonical anchor.** The `push_wikibase` activity projects
-   each ingested batch's merged entities into the local Wikibase (items keyed to
-   graph entities, statements from relations, via bootstrap caches of
-   `:WikibaseBaseClass` / `:WikibaseProperty`). It is best-effort
-   (`WIKIBASE_ENABLED=false` → skipped; any error → failed) so ingest still
-   finalizes, and it detects the silent no-op (entities in, 0 items
-   created/updated → marked failed).
-2. **Continuous wiki editor with anti-drift bot-sections.** A `kb-wiki`
-   `WikiSweepWorkflow` regenerates each `wiki_dirty` entity's article. The bot
-   owns ONLY the text between `KB-BOT:START`/`KB-BOT:END` markers (human text
-   outside is preserved verbatim), and the section is rewritten **from the graph
-   each time** — no prior article prose is fed to the LLM. Unchanged entities
-   are skipped via a subgraph hash. Opt-in via `WIKI_ENABLED`.
+Два связанных решения:
+1. **Wikibase как канонический якорь.** Activity `push_wikibase` проецирует
+   слитые сущности каждого загруженного батча в локальный Wikibase (items
+   ключуются к сущностям графа, statements из отношений, через bootstrap-кэши
+   `:WikibaseBaseClass` / `:WikibaseProperty`). Она best-effort
+   (`WIKIBASE_ENABLED=false` → пропуск; любая ошибка → провал), так что ingest
+   всё равно финализируется, и она детектирует молчаливый no-op (сущности на
+   входе, 0 items создано/обновлено → помечается как провал).
+2. **Непрерывный wiki-редактор с anti-drift bot-секциями.** `kb-wiki`
+   `WikiSweepWorkflow` регенерирует статью каждой `wiki_dirty` сущности. Бот
+   владеет ТОЛЬКО текстом между маркерами `KB-BOT:START`/`KB-BOT:END` (человеческий
+   текст снаружи сохраняется дословно), и секция переписывается **из графа каждый
+   раз** — никакая предыдущая проза статьи не подаётся в LLM. Неизменённые
+   сущности пропускаются через хеш подграфа. Opt-in через `WIKI_ENABLED`.
 
-## Consequences
+## Последствия
 
-- A stable canonical anchor plus a grounded, cited, drift-free human surface;
-  bot and human edits coexist by ownership markers.
-- Commits us to running/maintaining a Wikibase + MediaWiki and the dirty-flag /
-  subgraph-hash machinery; both features are opt-in and best-effort so ingest is
-  never blocked by them.
+- Стабильный канонический якорь плюс обоснованная, цитированная, свободная от
+  дрейфа человеческая поверхность; правки бота и человека сосуществуют через
+  маркеры владения.
+- Обязывает нас запускать/поддерживать Wikibase + MediaWiki и машинерию
+  dirty-флага / хеша подграфа; обе фичи opt-in и best-effort, так что ingest
+  никогда ими не блокируется.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Rewrite the article from its previous prose** — compounding drift; rejected
-  for the regenerate-from-graph guarantee.
-- **One-shot wiki generation** — goes stale as the graph evolves; the continuous
-  dirty-driven sweep keeps articles current.
+- **Переписывать статью из её предыдущей прозы** — накапливающийся дрейф;
+  отклонено в пользу гарантии регенерации-из-графа.
+- **Одноразовая генерация wiki** — устаревает по мере эволюции графа; непрерывный
+  проход, управляемый dirty, держит статьи актуальными.
 
-## References
+## Ссылки
 
 - `src/workflow/activities/push_wikibase.py`, `src/storage/wikibase.py`,
   `src/workflow/wiki/` (`wiki_sweep.py`, `article.py`), `src/graph/wiki_dirty.py`,
   `src/graph/wiki_context.py`
 - `docs/runbook/wikibase.md`, `docs/runbook/wiki-editor.md`;
-  CONCEPTS.md → "Wikibase anchor & continuous wiki editor"
+  CONCEPTS.md → «Wikibase anchor & continuous wiki editor»

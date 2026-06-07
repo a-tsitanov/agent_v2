@@ -1,56 +1,58 @@
-# ADR-0013: Multi-model role/tier selection + submit-time model snapshots into ingest_metrics
+# ADR-0013: Мультимодельный выбор role/tier + снимки модели на момент отправки в ingest_metrics
 
-- Status: Accepted
-- Date: 2026-06-07
+- Статус: Принято
+- Дата: 2026-06-07
 
-## Context
+## Контекст
 
-Different workloads have different cost/quality needs: high-volume extraction,
-judging, search, planning, and routing are cheap and parallel; only the final
-user-facing synthesis warrants an expensive model. Operators should manage few
-model names, not one per call site. Separately, when benchmarking ingest we must
-know exactly which model produced each run's metrics, even if the configured
-model changes later.
+У разных нагрузок разные потребности в стоимости/качестве: высокообъёмное
+извлечение, судейство, поиск, планирование и маршрутизация дёшевы и параллельны;
+только финальный обращённый к пользователю синтез заслуживает дорогой модели.
+Операторы должны управлять немногими именами моделей, а не одним на точку вызова.
+Отдельно: при бенчмаркинге ingest мы должны точно знать, какая модель породила
+метрики каждого прогона, даже если сконфигурированная модель позже изменится.
 
-## Decision
+## Решение
 
-A **declarative role→tier map**. Seven logical roles (`extraction`, `judge`,
-`search`, `route`, `plan`, `retrieve`, `synthesis`) each map to one of two
-physical tiers (`small`, `large`) via `_DEFAULT_ROLE_TIERS`; everything is
-`small` except `synthesis` (`large`). Operators manage two model names
-(`LITELLM_MODEL_SMALL` / `_LARGE`) and can escalate any single role with
-`LITELLM_ROLE_TIERS='{"plan":"large"}'` (overrides merge onto the full default
-map). `build_llm(role)` → `tier_for(role)` → physical model; the LLMPool
-(ADR-0004) gates by tier+role.
+**Декларативная карта role→tier**. Семь логических ролей (`extraction`, `judge`,
+`search`, `route`, `plan`, `retrieve`, `synthesis`) каждая маппится в один из двух
+физических tier-ов (`small`, `large`) через `_DEFAULT_ROLE_TIERS`; всё — `small`,
+кроме `synthesis` (`large`). Операторы управляют двумя именами моделей
+(`LITELLM_MODEL_SMALL` / `_LARGE`) и могут эскалировать любую отдельную роль через
+`LITELLM_ROLE_TIERS='{"plan":"large"}'` (переопределения мерджатся на полную карту
+по умолчанию). `build_llm(role)` → `tier_for(role)` → физическая модель; LLMPool
+(ADR-0004) гейтит по tier+role.
 
-For benchmarking, the per-role model names are **snapshotted at submit time**
-onto the workflow payload (`extraction_model` / `judge_model` / `search_model`,
-`version_tag`) and persisted by `finalize` into the Postgres `ingest_metrics`
-table alongside per-activity durations derived from the workflow histories.
+Для бенчмаркинга имена моделей по ролям **снимаются на момент отправки** в payload
+workflow (`extraction_model` / `judge_model` / `search_model`, `version_tag`) и
+сохраняются `finalize` в таблицу Postgres `ingest_metrics` наряду с длительностями
+по activity, выведенными из историй workflow.
 
-## Consequences
+## Последствия
 
-- Two-tier model management with per-role escalation; cheap tier handles volume,
-  large tier reserved for the one synthesis per session.
-- `ingest_metrics` rows are reproducible — each run records the exact models and
-  `version_tag` used, so later config changes don't corrupt historical
-  benchmarks.
-- Metrics persistence is best-effort (Temporal/Postgres hiccups are logged, not
-  fatal); finalize's own duration is recorded only on the next ingest's read.
+- Двухуровневое управление моделями с эскалацией по ролям; дешёвый tier
+  обрабатывает объём, large-tier зарезервирован для одного синтеза на сессию.
+- Строки `ingest_metrics` воспроизводимы — каждый прогон записывает точные модели
+  и `version_tag`, так что последующие изменения конфига не портят исторические
+  бенчмарки.
+- Персистентность метрик best-effort (сбои Temporal/Postgres логируются, не
+  фатальны); собственная длительность finalize записывается только при чтении
+  следующего ingest-а.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **One global model** — no cost/quality split between volume work and final
-  synthesis.
-- **Read the live config when querying metrics** — a later model change would
-  misattribute past runs; submit-time snapshots avoid this.
+- **Одна глобальная модель** — нет разделения стоимость/качество между объёмной
+  работой и финальным синтезом.
+- **Читать живой конфиг при запросе метрик** — последующее изменение модели
+  ошибочно атрибутирует прошлые прогоны; снимки на момент отправки этого
+  избегают.
 
-## References
+## Ссылки
 
 - `src/config.py` (`LLMRole`/`LLMTier`, `_DEFAULT_ROLE_TIERS`,
   `LiteLLMSettings.tier_for`/`model_for`), `src/retrieval/llm.py`,
   `src/workflow/activities/finalize.py` (`_persist_ingest_metrics`),
-  `src/workflow/contracts.py` (model snapshot fields),
+  `src/workflow/contracts.py` (поля снимка модели),
   `src/storage/ingest_metrics.py`
 - `docs/MODELS.md`, `docs/runbook/multimodel.md`, `docs/runbook/analytics.md`;
-  CONCEPTS.md → "Model tiers & ingest metrics"
+  CONCEPTS.md → «Model tiers & ingest metrics»

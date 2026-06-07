@@ -1,6 +1,6 @@
-# Ingest analytics runbook
+# Runbook по аналитике ingest
 
-## 1. Overview
+## 1. Обзор
 
 Тайминги каждой активности ingest-workflow собираются двумя независимыми путями, дублирующими друг друга:
 
@@ -9,9 +9,9 @@
 
 Grafana (`:3001`) подключена к обоим источникам и обслуживает три дашборда: **Ingest Overview** (live, Prom), **Version compare** (PG), **Run drill-down** (PG).
 
-Plan reference: `docs/superpowers/plans/2026-05-18-grafana-analytics.md` (если перенесён в репо) или `~/.claude/plans/merry-scribbling-thimble.md`.
+Ссылка на план: `docs/superpowers/plans/2026-05-18-grafana-analytics.md` (если перенесён в репо) или `~/.claude/plans/merry-scribbling-thimble.md`.
 
-## 2. Bring-up
+## 2. Поднятие (bring-up)
 
 ```bash
 docker compose -p kb-llamaindex up -d prometheus grafana
@@ -22,7 +22,7 @@ curl -sf http://localhost:3001/api/health && echo "grafana OK"
 
 Авто-provisioning сразу загружает datasource'ы (`prom-kb`, `pg-kb`) и три дашборда в папку `kb-llamaindex` (см. `infra/grafana/provisioning/`).
 
-## 3. Worker — Prometheus exporter
+## 3. Воркер — Prometheus exporter
 
 Воркер должен запускаться с включённым флагом `METRICS_ENABLED=true` (по умолчанию). Тогда при старте увидим в логах:
 
@@ -40,9 +40,9 @@ curl http://localhost:9092/api/v1/targets | jq '.data.activeTargets[] | {job: .l
 
 Если `temporal-worker.health=down` — воркер не запущен или порт 9090 занят. Активность-метрики появляются после первого реального ingest'а (histogram bucket'ы инициализируются по факту).
 
-## 4. Version tagging
+## 4. Тегирование версий (version tagging)
 
-Каждый ingest helmет тегом `version_tag` (string, свободный). Сабмит:
+Каждый ingest снабжается тегом `version_tag` (строка, произвольная). Сабмит:
 
 ```bash
 # Per-request (header):
@@ -104,21 +104,21 @@ open http://localhost:3001/d/kb-ingest-version-compare/
 # что изменилось.
 ```
 
-## 6. Dashboards
+## 6. Дашборды
 
-| URL slug | Title | Datasource | Назначение |
+| URL slug | Заголовок | Источник данных | Назначение |
 |---|---|---|---|
-| `/d/kb-ingest-overview` | Ingest · Overview (live) | Prom + PG | Pollers, slots, p50/p95 per activity, throughput, failed rate, recent ingests table |
+| `/d/kb-ingest-overview` | Ingest · Overview (live) | Prom + PG | Поллеры, слоты, p50/p95 по активностям, throughput, доля failed, таблица недавних ingest'ов |
 | `/d/kb-ingest-version-compare` | Ingest · Version compare | PG | Бар-чарт avg duration A vs B + дельта-таблица avg + p95 |
-| `/d/kb-ingest-run-drilldown` | Ingest · Run drill-down | PG | Один doc_id: per-stage bar + timeline table |
+| `/d/kb-ingest-run-drilldown` | Ingest · Run drill-down | PG | Один doc_id: бар по стадиям + таблица timeline |
 
 Все три auto-loaded из `infra/grafana/dashboards/*.json` через provisioning. Чтобы поправить — отредактировать JSON и `docker compose restart grafana` (либо вызвать `POST /api/admin/provisioning/dashboards/reload`).
 
-## 6a. Per-activity model column (multimodel-плагин)
+## 6a. Колонка model по активностям (multimodel-плагин)
 
 Каждая строка `ingest_metrics` несёт `model` — модель, **фактически использованную** именно для этой активности. Резолвится в момент `finalize` через `src/observability/role_map.py:ACTIVITY_TO_ROLE`:
 
-| Activity | LLM role | `model` колонка |
+| Активность | LLM-роль | Колонка `model` |
 |---|---|---|
 | `parse_and_chunk` | extraction | snapshot LITELLM_EXTRACTION_MODEL (с fallback на LITELLM_LLM_MODEL) |
 | `extract_kg` | extraction | то же |
@@ -131,25 +131,25 @@ Compare-дашборд (`/d/kb-ingest-version-compare/`) теперь показ
 
 **Каверзный случай — child workflow.** Активности `merge_and_resolve` и `build_property_graph` живут в `GraphBuildWorkflow` (child от `DocumentIngestWorkflow`). Их event-history лежит в **отдельной** workflow execution (`graph-{doc_id}`). `finalize._persist_ingest_metrics` явно тянет обе истории и мерджит в один список. Если parent выпал в `vector_only` (child failed), child-history просто не существует — fetch swallow'ит ошибку и в `ingest_metrics` ляжет только parent-side rows.
 
-## 7. Retention
+## 7. Хранение (retention)
 
 | Слой | Retention |
 |------|-----------|
 | Prometheus | 30 дней (`--storage.tsdb.retention.time=30d` в compose) |
 | Postgres `ingest_metrics` | **навсегда** до явной очистки |
-| Temporal event history | 24 часа (default) |
+| Temporal event history | 24 часа (по умолчанию) |
 
-Postgres — единственный источник для long-term comparisons. Если нужен trim:
+Postgres — единственный источник для долгосрочных сравнений. Если нужна очистка:
 
 ```sql
 DELETE FROM ingest_metrics WHERE completed_at < NOW() - INTERVAL '6 months';
 ```
 
-## 8. Linux note
+## 8. Замечание для Linux
 
 На Linux compose `extra_hosts: host.docker.internal:host-gateway` маппит на gateway-IP контейнера. Если не работает (старый Docker), заменить в `infra/prometheus/prometheus.yml` на `172.17.0.1:9090` или прописать явный bridge-network gateway.
 
-## 9. Troubleshooting
+## 9. Диагностика проблем
 
 | Симптом | Причина | Действие |
 |---|---|---|
@@ -160,9 +160,9 @@ DELETE FROM ingest_metrics WHERE completed_at < NOW() - INTERVAL '6 months';
 | Drill-down `$doc_id` не предлагает свежий ingest | Кэш Grafana template-variable 30s | F5 / `Reload variables` в шапке дашборда |
 | Search attribute `VersionTag` не виден в Temporal UI | Visibility-store без advanced support (Postgres-only) | Не блокирует analytics — ingest_metrics всё равно пишет тег |
 
-## 10. Future improvements
+## 10. Дальнейшие улучшения
 
-- **Activity-internal sub-stage timings.** Внутри `extract_kg` сейчас единый блок. Прокинуть `time.perf_counter` через `activity.heartbeat({"sub_stage": "llm", "ms": ...})` для разбивки на `llm_call_ms` / `parse_ms`.
-- **Self-timing для finalize.** `fetch_history()` внутри finalize не видит свой Completed-event → строка finalize не пишется. Добавить локальный `perf_counter` для отдельной MetricRow.
-- **Alerts.** Grafana alerting на `p95_extract_kg > 30s` и rate `temporal_activity_execution_failed > 0`.
-- **LangFuse alignment.** Соединить LangFuse trace_id с `workflow_run_id` через label, чтобы из drill-down прыгать в LLM-trace.
+- **Тайминги под-стадий внутри активности.** Внутри `extract_kg` сейчас единый блок. Прокинуть `time.perf_counter` через `activity.heartbeat({"sub_stage": "llm", "ms": ...})` для разбивки на `llm_call_ms` / `parse_ms`.
+- **Самозамер для finalize.** `fetch_history()` внутри finalize не видит свой Completed-event → строка finalize не пишется. Добавить локальный `perf_counter` для отдельной MetricRow.
+- **Алерты.** Grafana alerting на `p95_extract_kg > 30s` и rate `temporal_activity_execution_failed > 0`.
+- **Связка с LangFuse.** Соединить LangFuse trace_id с `workflow_run_id` через label, чтобы из drill-down прыгать в LLM-trace.

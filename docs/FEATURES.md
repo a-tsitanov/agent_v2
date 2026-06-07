@@ -1,127 +1,127 @@
-# Features
+# Возможности
 
-Reference for every feature in kb-llamaindex: what it is, why it exists, how it works, and the env/config that controls it. Process flows live in [`INGEST.md`](INGEST.md) and [`SEARCH-FLOW.md`](SEARCH-FLOW.md); operator playbooks in [`runbook/`](runbook/).
+Справочник по каждой возможности kb-llamaindex: что это, зачем существует, как работает и какие env/config это контролируют. Потоки процессов описаны в [`INGEST.md`](INGEST.md) и [`SEARCH-FLOW.md`](SEARCH-FLOW.md); операторские плейбуки — в [`runbook/`](runbook/).
 
-**Legend:** 🆕 = added in the 2026-06 scale/GraphRAG work (deep-dived in [§ New features](#new-features-deep-dive)). All 🆕 search/ER/community behaviours are **opt-in with defaults equal to prior behaviour**.
+**Легенда:** 🆕 = добавлено в работе по масштабированию/GraphRAG за 2026-06 (подробный разбор в [§ Глубокий разбор новых возможностей](#глубокий-разбор-новых-возможностей)). Все 🆕 поведения search/ER/community **opt-in, с дефолтами, равными прежнему поведению**.
 
 ---
 
-## 1. Ingestion
+## 1. Инжест
 
-### Parsing & chunking
-LlamaIndex `IngestionPipeline`: a reader extracts the document, a splitter (`SentenceSplitter` or `SemanticSplitterNodeParser`) produces chunks (`INGESTION_CHUNK_SIZE` / `_OVERLAP`). Output is `BaseNode` chunks carrying text + metadata. — `ingestion/pipeline.py`, `activities/parse_and_chunk.py`
+### Парсинг и чанкинг
+LlamaIndex `IngestionPipeline`: ридер извлекает документ, сплиттер (`SentenceSplitter` или `SemanticSplitterNodeParser`) производит чанки (`INGESTION_CHUNK_SIZE` / `_OVERLAP`). На выходе — чанки `BaseNode`, несущие текст + метаданные. — `ingestion/pipeline.py`, `activities/parse_and_chunk.py`
 
-### Multilingual translation
-Optional translate-to-Russian transform (per-document or per-chunk by size threshold) so a heterogeneous corpus normalises for embedding/extraction while **entity names stay in the source language**. Translation metadata is scrubbed before downstream stores. — `runbook/multimodel.md`
+### Многоязычный перевод
+Опциональная трансформация перевода на русский (на документ или на чанк по порогу размера), чтобы разнородный корпус нормализовался для эмбеддинга/экстракции, при этом **имена сущностей остаются на языке оригинала**. Метаданные перевода вычищаются перед нижестоящими хранилищами. — `runbook/multimodel.md`
 
-### Deterministic identifier canonicalization
-24 structured identifier types (phones→E.164, INN/OGRN/BIC with checksums, email, URLs, postal addresses via libpostal, dates, amounts, IMEI/MAC/VIN/plates …) extracted **without an LLM**, stored on chunk metadata, appended to chunk text (so the LLM sees canonical forms), and pre-injected as `:__Entity__` nodes **before** KG extraction. Guarantees identifier dedup even when the LLM extracts a verbatim mention. — `ingestion/identifiers.py`, `ingestion/identifier_transform.py`, `activities/inject_canonical.py`
+### Детерминированная канонизация идентификаторов
+24 типа структурных идентификаторов (телефоны→E.164, ИНН/ОГРН/БИК с контрольными суммами, email, URL, почтовые адреса через libpostal, даты, суммы, IMEI/MAC/VIN/госномера …) извлекаются **без LLM**, хранятся в метаданных чанка, дописываются в текст чанка (чтобы LLM видела канонические формы) и предварительно инжектятся как ноды `:__Entity__` **перед** KG-экстракцией. Гарантирует дедуп идентификаторов даже когда LLM извлекает дословное упоминание. — `ingestion/identifiers.py`, `ingestion/identifier_transform.py`, `activities/inject_canonical.py`
 
-### LightRAG knowledge-graph extraction
-Per chunk, one LLM call (the `LightRAGExtractor`, ported from HKUDS/LightRAG) emits typed entities (name + type + 1–2 sentence description) and relations (src + tgt + keywords + description) in a single structured response. Multilingual prompt; `/no_think` for qwen3. — `graph/lightrag_extract.py`, `graph/lightrag_prompts.py`, `activities/extract_kg.py`
+### KG-экстракция LightRAG
+На каждый чанк — один LLM-вызов (`LightRAGExtractor`, портированный из HKUDS/LightRAG) выдаёт типизированные сущности (имя + тип + описание в 1–2 предложения) и связи (src + tgt + ключевые слова + описание) одним структурированным ответом. Многоязычный промпт; `/no_think` для qwen3. — `graph/lightrag_extract.py`, `graph/lightrag_prompts.py`, `activities/extract_kg.py`
 
 ### Entity Resolution (ER) 🆕(native-vector)
-Cross-chunk + cross-document deduplication of semantically-equal entities ("BCC" ≡ "Базальноклеточный рак"; "Иванов И.И." ≡ "Иван Иванов"). Pipeline: within-batch name merge → phone consolidation → **ER** (`resolve_entities`): candidate generation (vectorised cosine + name-overlap), an LLM judge for borderline pairs (with a Neo4j `:ERVerdict` cache), union-find clustering, hyper-hub clamp, canonical selection. Identifier-type labels are excluded (they have deterministic canon). See [§ Native-vector ER](#native-vector-er-) for the new kNN path. — `graph/entity_resolution.py`, `activities/merge_and_resolve.py`
+Кросс-чанковая + кросс-документная дедупликация семантически равных сущностей («BCC» ≡ «Базальноклеточный рак»; «Иванов И.И.» ≡ «Иван Иванов»). Конвейер: слияние имён внутри батча → консолидация телефонов → **ER** (`resolve_entities`): генерация кандидатов (векторизованный косинус + перекрытие имён), LLM-судья для пограничных пар (с кэшем Neo4j `:ERVerdict`), кластеризация union-find, зажим гипер-хабов, выбор канонического. Метки типов-идентификаторов исключаются (у них детерминированная канонизация). См. [§ Native-vector ER](#native-vector-er-) о новом пути kNN. — `graph/entity_resolution.py`, `activities/merge_and_resolve.py`
 
-### Property-graph build
-Merged entities/relations upserted to Neo4j with `(:Chunk)-[:MENTIONS]->(:__Entity__)` edges; entity embeddings written to the native vector index; fulltext + range indexes ensured. — `activities/build_property_graph.py`, `graph/index.py`
+### Сборка property-графа
+Объединённые сущности/связи делаются upsert в Neo4j с рёбрами `(:Chunk)-[:MENTIONS]->(:__Entity__)`; эмбеддинги сущностей пишутся в нативный векторный индекс; гарантируются fulltext- и range-индексы. — `activities/build_property_graph.py`, `graph/index.py`
 
-### Multimodel & analytics
-Per-role model names snapshotted at submit and written per-activity into the Postgres `ingest_metrics` table (durations + version tags), so dashboards reflect the exact model that ran each step. — `runbook/multimodel.md`, `runbook/analytics.md`
-
----
-
-## 2. Search
-
-The four modes, the deterministic tool pipeline, reranking, and coverage are documented in [`SEARCH-FLOW.md`](SEARCH-FLOW.md). Summary:
-
-- **local** — plan → parallel deterministic retrieve (vector_search, graph_search, find_entity_by_name, graph_walk) → coverage check → bge rerank → large-tier synthesis.
-- **global** — map-reduce over community reports.
-- **drift** — local then global, with graceful fallback 🆕.
-- **auto** — a router classifies the query and dispatches one mode.
-- **Reranker** — bge-reranker-v2-m3 cross-encoder, top-N to synthesis.
-- **Coverage check** — detects an evidence gap and runs one extra targeted round.
-
-New search behaviours: [conversation history](#conversation-history-), [dual walk-seed](#dual-walk-seed-), [drift fallback](#drift-graceful-fallback-), [community indexes](#community-indexes-).
+### Мультимодель и аналитика
+Имена моделей по ролям снимаются при сабмите и пишутся по каждой активности в таблицу Postgres `ingest_metrics` (длительности + теги версий), так что дашборды отражают точную модель, выполнявшую каждый шаг. — `runbook/multimodel.md`, `runbook/analytics.md`
 
 ---
 
-## 3. Knowledge anchors
+## 2. Поиск
 
-### Wikibase canonical anchor
-A self-hosted Wikibase instance is the curated identity layer: ingest projects entities/relations into it (`push_wikibase`, best-effort), minting/patching Items keyed by `wikibase_qid`, folding identifier-type entities as external-id statements. Off by default (`WIKIBASE_ENABLED`). — `runbook/wikibase.md`, `activities/push_wikibase.py`
+Четыре режима, детерминированный конвейер инструментов, реранкинг и покрытие описаны в [`SEARCH-FLOW.md`](SEARCH-FLOW.md). Сводка:
 
-### Continuous wiki editor (Project A)
-Turns Neo4j entities into per-entity MediaWiki article pages. Ingest marks affected entities `wiki_dirty`; a scheduled `WikiSweepWorkflow` (queue `kb-wiki`) rewrites a bot-section between markers **from graph facts only** (anti-drift), preserving human edits, with a content-hash skip for unchanged entities. Off by default (`WIKI_ENABLED`). — `runbook/wiki-editor.md`
+- **local** — план → параллельный детерминированный retrieve (vector_search, graph_search, find_entity_by_name, graph_walk) → проверка покрытия → реранк bge → синтез на large-уровне.
+- **global** — map-reduce по отчётам сообществ.
+- **drift** — сначала local, затем global, с мягким fallback 🆕.
+- **auto** — роутер классифицирует запрос и диспетчеризует один режим.
+- **Реранкер** — кросс-энкодер bge-reranker-v2-m3, топ-N на синтез.
+- **Проверка покрытия** — обнаруживает пробел в доказательствах и запускает один дополнительный целевой раунд.
+
+Новые поведения поиска: [история диалога](#история-диалога-), [двойной walk-seed](#двойной-walk-seed-), [drift fallback](#drift-мягкий-fallback-), [индексы сообществ](#индексы-сообществ-).
 
 ---
 
-## 4. Platform
+## 3. Якоря знаний
 
-### Durable Temporal workflows + queues
-Ingest and search are durable workflows with automatic retries, heartbeats, and idempotent activities. Dedicated queues isolate LLM bursts from Neo4j-write/merge work: `kb-ingest`, `kb-ingest-llm`, `kb-ingest-merge`, `kb-search-small`, `kb-search-large`, `kb-graph-build`, `kb-wiki`. — [`QUEUES.md`](QUEUES.md)
+### Канонический якорь Wikibase
+Самостоятельно размещённый инстанс Wikibase — это курируемый слой идентичности: инжест проецирует в него сущности/связи (`push_wikibase`, best-effort), создавая/патча Items с ключом `wikibase_qid`, сворачивая сущности типов-идентификаторов в external-id statements. По умолчанию выключено (`WIKIBASE_ENABLED`). — `runbook/wikibase.md`, `activities/push_wikibase.py`
 
-### LLMPool (per-process concurrency)
-A single per-process pool owns LLM concurrency with hierarchical gates — a tier ceiling (small=GPU capacity, large=API budget) and per-role lanes (extraction/judge/search/…), acquired lane-first then tier-global — so Temporal's queue caps can be generous while actual concurrent LLM calls match the GPU. — `retrieval/llm_pool.py`
+### Непрерывный wiki-редактор (Project A)
+Превращает сущности Neo4j в per-entity статьи MediaWiki. Инжест помечает затронутые сущности `wiki_dirty`; запланированный `WikiSweepWorkflow` (очередь `kb-wiki`) переписывает бот-секцию между маркерами **только по фактам графа** (анти-дрейф), сохраняя правки человека, с пропуском по content-hash для неизменённых сущностей. По умолчанию выключено (`WIKI_ENABLED`). — `runbook/wiki-editor.md`
+
+---
+
+## 4. Платформа
+
+### Долговечные воркфлоу Temporal + очереди
+Инжест и поиск — это долговечные воркфлоу с автоматическими retry, heartbeat и идемпотентными активностями. Выделенные очереди изолируют всплески LLM от работы по записи в Neo4j/слиянию: `kb-ingest`, `kb-ingest-llm`, `kb-ingest-merge`, `kb-search-small`, `kb-search-large`, `kb-graph-build`, `kb-wiki`. — [`QUEUES.md`](QUEUES.md)
+
+### LLMPool (пер-процессная конкурентность)
+Единый пер-процессный пул владеет конкурентностью LLM с иерархическими гейтами — потолок уровня (small=ёмкость GPU, large=бюджет API) и полосы по ролям (extraction/judge/search/…), захватываемые сначала по полосе, затем глобально по уровню, — так что лимиты очередей Temporal могут быть щедрыми, а фактические одновременные LLM-вызовы соответствуют GPU. — `retrieval/llm_pool.py`
 
 ### Claim-check staging
-Heavy state (nodes, entities) is pickled to MinIO and passed between activities by URI; only small contracts travel in Temporal payloads; orphan blobs from crashed runs are swept. — `workflow/staging.py`
+Тяжёлое состояние (ноды, сущности) сериализуется в MinIO и передаётся между активностями по URI; в полезной нагрузке Temporal путешествуют только небольшие контракты; осиротевшие блобы упавших прогонов подметаются. — `workflow/staging.py`
 
-### MCP servers
-Two MCP surfaces expose search to OpenWebUI / Claude Desktop / Cursor: MCP-1 (`kb_search` via the Temporal search workflow) and MCP-2 (atomic retrieval tools in-process). — `runbook/mcp.md`
+### MCP-серверы
+Две MCP-поверхности открывают поиск для OpenWebUI / Claude Desktop / Cursor: MCP-1 (`kb_search` через воркфлоу поиска Temporal) и MCP-2 (атомарные инструменты ретрива в процессе). — `runbook/mcp.md`
 
 ### Scale-bench harness 🆕
-A synthetic, zero-prod-data benchmark suite (`tests/eval/scale/`) that brackets the scaling cliffs (ER candidate-gen O(N²), Milvus FLAT vs HNSW, graph_walk hub cost, native-vector ER reach vs the window) by generating realistic data shapes locally. — `tests/eval/scale/README.md`
+Синтетический набор бенчмарков без продакшен-данных (`tests/eval/scale/`), который очерчивает обрывы масштабирования (генерация кандидатов ER O(N²), Milvus FLAT против HNSW, стоимость хабов в graph_walk, охват native-vector ER против окна), генерируя реалистичные формы данных локально. — `tests/eval/scale/README.md`
 
 ---
 
-## New features deep dive
+## Глубокий разбор новых возможностей
 
 ### Native-vector ER 🆕
-**Problem:** incremental ER loaded at most a 5000-entity window per ingest; at 250k canonicals that window reaches ~2 % of true nearest matches (measured), so new mentions silently fragment into duplicates — degrading every search mode.
-**Fix (opt-in):** store the ER embedding as a native Neo4j vector (`er_vec`) + a `er_embedding_vec` index, and replace the window load with a per-entity `db.index.vector.queryNodes` kNN over the **whole graph**. Measured: ~96 % recall at ~6 ms/query vs ~2 % for the window.
-**Also fixed:** the window load now `ORDER BY mention_count DESC` (hub entities always in-window); candidate generation vectorised (~118× — `_normalized_matrix` BLAS cosine + per-item token cache); stored-loser cleanup is safe-by-inaction (no silent edge loss).
-**Enable (after a Neo4j backup):**
+**Проблема:** инкрементальный ER загружал максимум окно из 5000 сущностей на инжест; при 250k канонических это окно достигает ~2 % истинных ближайших матчей (замерено), так что новые упоминания молча фрагментируются в дубли — деградируя каждый режим поиска.
+**Исправление (opt-in):** хранить ER-эмбеддинг как нативный вектор Neo4j (`er_vec`) + индекс `er_embedding_vec` и заменить загрузку окна на пер-сущностный kNN `db.index.vector.queryNodes` по **всему графу**. Замерено: ~96 % recall при ~6 мс/запрос против ~2 % у окна.
+**Также исправлено:** загрузка окна теперь `ORDER BY mention_count DESC` (хаб-сущности всегда в окне); генерация кандидатов векторизована (~118× — BLAS-косинус `_normalized_matrix` + пер-итемный кэш токенов); очистка сохранённых проигравших безопасна по бездействию (без молчаливой потери рёбер).
+**Включить (после бэкапа Neo4j):**
 ```bash
 python -m scripts.backfill_er_vector --no-dry-run   # parse er_embedding JSON → er_vec + build index
 AGENT_ER_USE_NATIVE_VECTOR_KNN=true                 # restart ingest worker
 ```
-Default OFF. — runbook [`runbook/er-native-vector-knn.md`](runbook/er-native-vector-knn.md), `graph/entity_resolution.py`
+По умолчанию OFF. — runbook [`runbook/er-native-vector-knn.md`](runbook/er-native-vector-knn.md), `graph/entity_resolution.py`
 
-### Conversation history 🆕
-**Problem:** `/search` was stateless — follow-ups ("а что по цене?") had no referent.
-**Fix:** the client passes `history` (turns); a small-LLM `contextualize_query` activity rewrites the follow-up into a **standalone question** once at the start of each workflow (only when history is non-empty); `params.model_copy(query=…)` makes the whole pipeline use it. Client-managed (no server sessions, stays stateless/replay-safe); the enable gate is resolved at submit time (`contextualize_enabled`). Drift contextualises once and clears children history.
-**Config:** `AGENT_CONVERSATION_HISTORY_ENABLED` (default true, inert without history), `AGENT_HISTORY_MAX_TURNS` (6), `AGENT_HISTORY_MAX_CHARS` (4000). — `activities/contextualize.py`
+### История диалога 🆕
+**Проблема:** `/search` был без состояния — у уточнений («а что по цене?») не было референта.
+**Исправление:** клиент передаёт `history` (ходы); small-LLM активность `contextualize_query` переписывает уточнение в **самодостаточный вопрос** один раз в начале каждого воркфлоу (только когда история непуста); `params.model_copy(query=…)` заставляет весь конвейер использовать его. Управляется клиентом (без серверных сессий, остаётся без состояния / безопасно к replay); гейт включения резолвится в момент сабмита (`contextualize_enabled`). Drift контекстуализирует один раз и очищает историю дочерних. — `activities/contextualize.py`
+**Config:** `AGENT_CONVERSATION_HISTORY_ENABLED` (по умолчанию true, инертен без истории), `AGENT_HISTORY_MAX_TURNS` (6), `AGENT_HISTORY_MAX_CHARS` (4000). — `activities/contextualize.py`
 
-### Hierarchical communities + dynamic selection 🆕
-**Problem:** flat level-0 communities + short summaries + O(N) Python lexical ranking — weak, semantically blind ("GPU"≠"видеокарта"), and re-summarised in full every build.
-**Fix (GraphRAG-style, opt-in):**
-- **Hierarchy** — one GDS Leiden run with `includeIntermediateCommunities` materialises multi-level `:Community` + `PARENT_OF` edges (level 0 = coarsest, back-compat; `members_hash` per community). — `graph/communities.py::detect_hierarchy`
-- **Structured reports** — `{title, summary, findings:[{statement, importance}]}` generated bottom-up (level-0 from members, level>0 from child reports), embedded into a native `community_report_vec` index. — `activities/community.py`
-- **Incremental** — a community whose `(level, members_hash)` is unchanged **carries its report over** (no LLM); the build runs **level-by-level finest-first** and summarises only changed communities. — `community_wf.py`
-- **Dynamic selection** for global/drift — **v1 semantic** (kNN over `community_report_vec`) and **v2 descent** (start coarsest, rank by cosine, descend `PARENT_OF` into relevant children → finest relevant), with **lexical fallback** on empty/error. — `activities/global_search.py`
-**Config:** `AGENT_COMMUNITY_MAX_LEVELS` (default 1 = single-level/today; raise to build the hierarchy), `AGENT_COMMUNITY_DYNAMIC_SELECTION` (`lexical`|`semantic`|`descent`, default `lexical` = today). Build the hierarchy via the community-rebuild admin trigger, then flip selection. Spec/plan in [`superpowers/specs`](superpowers/) ; backlog (recursive coarsening, claims) in [`superpowers/backlog-graph-scale.md`](superpowers/backlog-graph-scale.md).
+### Иерархические сообщества + динамический выбор 🆕
+**Проблема:** плоские сообщества уровня 0 + короткие сводки + O(N) лексическое ранжирование на Python — слабо, семантически слепо («GPU»≠«видеокарта») и пересуммаризируется целиком при каждой сборке.
+**Исправление (в стиле GraphRAG, opt-in):**
+- **Иерархия** — один прогон GDS Leiden с `includeIntermediateCommunities` материализует многоуровневые `:Community` + рёбра `PARENT_OF` (уровень 0 = самый грубый, обратная совместимость; `members_hash` на сообщество). — `graph/communities.py::detect_hierarchy`
+- **Структурированные отчёты** — `{title, summary, findings:[{statement, importance}]}` генерируются снизу вверх (уровень 0 из членов, уровень>0 из дочерних отчётов), embed в нативный индекс `community_report_vec`. — `activities/community.py`
+- **Инкрементально** — сообщество, у которого `(level, members_hash)` не изменился, **переносит свой отчёт** (без LLM); сборка идёт **уровень за уровнем, от самого мелкого**, и суммаризирует только изменившиеся сообщества. — `community_wf.py`
+- **Динамический выбор** для global/drift — **v1 семантический** (kNN по `community_report_vec`) и **v2 спуск** (старт с самого грубого, ранжирование по косинусу, спуск по `PARENT_OF` в релевантные дочерние → самые мелкие релевантные), с **лексическим fallback** при пустоте/ошибке. — `activities/global_search.py`
+**Config:** `AGENT_COMMUNITY_MAX_LEVELS` (по умолчанию 1 = один уровень/как сейчас; повысьте, чтобы построить иерархию), `AGENT_COMMUNITY_DYNAMIC_SELECTION` (`lexical`|`semantic`|`descent`, по умолчанию `lexical` = как сейчас). Постройте иерархию через admin-триггер пересборки сообществ, затем переключите выбор. Спека/план в [`superpowers/specs`](superpowers/); бэклог (рекурсивное огрубление, claims) в [`superpowers/backlog-graph-scale.md`](superpowers/backlog-graph-scale.md).
 
-### Dual walk-seed 🆕
-`graph_walk` is seeded from **both** the top `graph_search` entity and the top `find_entity_by_name` entity when they differ (results deduped by chunk_id), so a fulltext-matched entity contributes its neighbourhood even when `graph_search` already returned something. `AGENT_GRAPH_WALK_DUAL_SEED` (default on). — `activities/retrieve.py`
+### Двойной walk-seed 🆕
+`graph_walk` сидится из **обеих** топ-сущностей — `graph_search` и `find_entity_by_name` — когда они различаются (результаты дедуплицируются по chunk_id), так что найденная по fulltext сущность вносит свою окрестность даже когда `graph_search` уже что-то вернул. `AGENT_GRAPH_WALK_DUAL_SEED` (по умолчанию on). — `activities/retrieve.py`
 
-### Drift graceful fallback 🆕
-If the global pass of a drift query fails/times out, the request **degrades to the local answer** (mode kept `"drift"`) instead of failing the whole request. — `search/router_wf.py::_drift_local_fallback`
+### Drift: мягкий fallback 🆕
+Если global-проход drift-запроса падает/таймаутится, запрос **деградирует до локального ответа** (режим сохраняется `"drift"`) вместо провала всего запроса. — `search/router_wf.py::_drift_local_fallback`
 
-### Community indexes 🆕
-Range indexes on `Community.level` (global summary read) and `Chunk.doc_id` (community→document traversal) — the `community_level` index is required despite the `(id,level)` composite constraint (composite can't serve a level-only lookup). — `graph/index.py::ensure_community_indexes`
+### Индексы сообществ 🆕
+Range-индексы на `Community.level` (чтение глобальной сводки) и `Chunk.doc_id` (обход сообщество→документ) — индекс `community_level` обязателен несмотря на композитное ограничение `(id,level)` (композитное не обслуживает выборку только по level). — `graph/index.py::ensure_community_indexes`
 
 ---
 
-## Config quick-reference (new feature env vars)
+## Быстрый справочник по конфигу (env-переменные новых возможностей)
 
-| Env | Default | Effect |
+| Env | По умолчанию | Эффект |
 |---|---|---|
-| `AGENT_ER_USE_NATIVE_VECTOR_KNN` | false | ER kNN over the whole graph (after backfill) instead of the 5000-window |
-| `AGENT_ER_VECTOR_KNN_K` | 20 | neighbours per new entity (native ER) |
-| `AGENT_CONVERSATION_HISTORY_ENABLED` | true | contextualise follow-ups when `history` is provided |
-| `AGENT_HISTORY_MAX_TURNS` / `_CHARS` | 6 / 4000 | bound the history fed to contextualisation |
-| `AGENT_GRAPH_WALK_DUAL_SEED` | true | seed graph_walk from graph_search + fulltext |
-| `AGENT_COMMUNITY_MAX_LEVELS` | 1 | Leiden hierarchy depth to materialise (1 = today) |
-| `AGENT_COMMUNITY_DYNAMIC_SELECTION` | lexical | global/drift community selection: lexical \| semantic \| descent |
-| `MILVUS_INDEX_TYPE` | HNSW | chunk ANN index (set FLAT for exact) — applied on (re)create |
+| `AGENT_ER_USE_NATIVE_VECTOR_KNN` | false | ER kNN по всему графу (после бэкфилла) вместо окна 5000 |
+| `AGENT_ER_VECTOR_KNN_K` | 20 | соседей на новую сущность (native ER) |
+| `AGENT_CONVERSATION_HISTORY_ENABLED` | true | контекстуализировать уточнения, когда передан `history` |
+| `AGENT_HISTORY_MAX_TURNS` / `_CHARS` | 6 / 4000 | ограничивают историю, подаваемую в контекстуализацию |
+| `AGENT_GRAPH_WALK_DUAL_SEED` | true | сидировать graph_walk из graph_search + fulltext |
+| `AGENT_COMMUNITY_MAX_LEVELS` | 1 | глубина иерархии Leiden для материализации (1 = как сейчас) |
+| `AGENT_COMMUNITY_DYNAMIC_SELECTION` | lexical | выбор сообществ для global/drift: lexical \| semantic \| descent |
+| `MILVUS_INDEX_TYPE` | HNSW | ANN-индекс чанков (FLAT для точного) — применяется при (пере)создании |
