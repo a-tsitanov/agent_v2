@@ -429,6 +429,9 @@ class CommunityRef(_Frozen):
     community_id: str
     level: int = 0
     members: list[str] = Field(default_factory=list)
+    members_hash: str = ""
+    parent_id: str = ""
+    needs_report: bool = True
 
     @property
     def member_count(self) -> int:

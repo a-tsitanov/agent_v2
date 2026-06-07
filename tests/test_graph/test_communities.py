@@ -141,3 +141,27 @@ async def test_detect_failsafe_on_store_error_returns_empty():
 @pytest.mark.asyncio
 async def test_detect_none_store_returns_empty():
     assert await detect_communities(None, min_size=3) == []
+
+
+def test_members_hash_order_insensitive():
+    from src.graph.communities import members_hash
+    assert members_hash(["B","A"]) == members_hash(["A","B"])
+    assert len(members_hash(["A"])) == 64
+
+
+def test_group_by_levels_maps_dendrogram_and_parents():
+    from src.graph.communities import _group_by_levels
+    # node → intermediateCommunityIds (finest..coarsest). 3 nodes, 2 levels.
+    rows = [
+        {"name":"a","ids":[10, 1]},
+        {"name":"b","ids":[10, 1]},
+        {"name":"c","ids":[11, 1]},
+    ]
+    levels = _group_by_levels(rows, min_size=1, max_levels=10)
+    # level 0 = coarsest (id 1) holds a,b,c; level 1 (finer) has {a,b}=10, {c}=11
+    l0 = {c.community_id: set(c.members) for c in levels if c.level == 0}
+    l1 = {c.community_id: set(c.members) for c in levels if c.level == 1}
+    assert l0 == {"1": {"a","b","c"}}
+    assert l1 == {"10": {"a","b"}, "11": {"c"}}
+    # parent of finer 10/11 is coarser 1
+    assert all(c.parent_id == "1" for c in levels if c.level == 1)

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import uuid
 from typing import Any
 
@@ -81,12 +82,22 @@ RETURN gds.graph.project(
 """
 
 
-# 2. Leiden stream — community per node, read back the entity name.
+# 2. Leiden stream — full dendrogram per node.  ``includeIntermediate
+#    Communities: true`` yields ``intermediateCommunityIds`` (a list per
+#    node, finest→coarsest; its LAST element == the final ``communityId``).
+#    We read that list back as ``ids`` so ``_group_by_levels`` can build the
+#    HIERARCHY.  The legacy single-level path is just ``max_levels=1`` over
+#    the same stream (coarsest column = ids[-1] = today's ``communityId``).
 def _leiden_stream_cypher(graph_name: str) -> str:
     return f"""
-CALL gds.leiden.stream('{graph_name}', {{ randomSeed: 19 }})
-YIELD nodeId, communityId
-RETURN gds.util.asNode(nodeId).name AS name, communityId AS communityId
+CALL gds.leiden.stream(
+    '{graph_name}',
+    {{ randomSeed: 19, includeIntermediateCommunities: true }}
+)
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN gds.util.asNode(nodeId).name AS name,
+       communityId AS communityId,
+       intermediateCommunityIds AS ids
 """
 
 
@@ -104,6 +115,15 @@ MATCH (c:Community {level: $level})
 DETACH DELETE c
 """
 
+# Hierarchy rebuild prunes EVERY level at once: a re-run of Leiden can
+# produce a different number of dendrogram levels (and renumbered ids), so
+# any prior ``:Community`` (at any level, with its PARENT_OF / IN_COMMUNITY
+# / summary edges) would otherwise leak.  Used by ``detect_hierarchy``.
+_PRUNE_ALL_CYPHER = """
+MATCH (c:Community)
+DETACH DELETE c
+"""
+
 # Constraint backing the :Community MERGE (idempotent, prevents dupes).
 _COMMUNITY_CONSTRAINT = (
     "CREATE CONSTRAINT community_key IF NOT EXISTS "
@@ -116,7 +136,8 @@ _COMMUNITY_CONSTRAINT = (
 #    cleared first so a re-shuffled community doesn't keep ghost members.
 _MERGE_COMMUNITY_CYPHER = """
 MERGE (c:Community {id: $community_id, level: $level})
-SET c.member_count = $member_count, c.updated = timestamp()
+SET c.member_count = $member_count, c.members_hash = $members_hash,
+    c.updated = timestamp()
 WITH c
 OPTIONAL MATCH (c)<-[old:IN_COMMUNITY]-(:__Entity__)
 DELETE old
@@ -124,6 +145,21 @@ WITH c
 UNWIND $members AS member_name
 MATCH (e:__Entity__ {name: member_name})
 MERGE (e)-[:IN_COMMUNITY]->(c)
+"""
+
+# Sub-community MERGE for level k > 0 (the finer dendrogram columns).  No
+# entity ``IN_COMMUNITY`` links at level > 0 — only level 0 carries those
+# (back-compat).  Instead we wire ``(parent:Community {level:$level-1})-
+# [:PARENT_OF]->(this)`` coarser→finer so the dendrogram is navigable.  The
+# parent (a level-$level-1 community) is MERGEd here too in case it has not
+# been written yet (ordering-independent), then de-dup the PARENT_OF edge.
+_MERGE_SUBCOMMUNITY_CYPHER = """
+MERGE (c:Community {id: $community_id, level: $level})
+SET c.member_count = $member_count, c.members_hash = $members_hash,
+    c.updated = timestamp()
+WITH c
+MATCH (p:Community {id: $parent_id, level: $level - 1})
+MERGE (p)-[:PARENT_OF]->(c)
 """
 
 
@@ -164,6 +200,114 @@ def _group_by_community(
     return out
 
 
+def members_hash(members: list[str]) -> str:
+    """Order-insensitive content hash of a community's members.
+
+    Lets a re-run skip re-summarising a community whose membership is
+    unchanged (``members_hash`` persisted on the ``:Community`` node).  The
+    ``\\x1f`` (unit separator) join is collision-safe vs. member names that
+    might themselves contain commas/spaces.
+    """
+    return hashlib.sha256("\x1f".join(sorted(members)).encode("utf-8")).hexdigest()
+
+
+def _group_by_levels(
+    rows: list[dict], *, min_size: int, max_levels: int,
+) -> list[CommunityRef]:
+    """Map a Leiden dendrogram stream into ``CommunityRef``s across levels.
+
+    ``rows``: ``[{name, ids:[finest..coarsest]}]`` (the
+    ``intermediateCommunityIds`` list per node).  level 0 == coarsest
+    (``ids[-1]`` == today's ``communityId``); level k == ``ids[-(k+1)]``
+    (finer as k grows).  ``parent_id`` of a level-k community == the id of
+    the level-(k-1) (coarser) community its members map to.  Pure /
+    unit-testable; communities below ``min_size`` are dropped.
+    """
+    if not rows:
+        return []
+    # node name → [level0_cid, level1_cid, ...] (coarsest..finer).  Rows may
+    # carry ragged ``ids`` (a degenerate single-level run yields a bare int
+    # column); guard the first valid row for ``depth``.
+    node_level_cid: dict[str, list[str]] = {}
+    depth = 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        name = r.get("name")
+        ids = r.get("ids")
+        if not name or not isinstance(ids, (list, tuple)) or not ids:
+            continue
+        d = min(len(ids), max_levels)
+        depth = max(depth, d)
+        node_level_cid[str(name)] = [str(ids[-(k + 1)]) for k in range(d)]
+    if not node_level_cid:
+        return []
+
+    out: list[CommunityRef] = []
+    for k in range(depth):
+        members_by_cid: dict[str, list[str]] = {}
+        parent_by_cid: dict[str, str] = {}
+        for name, cids in node_level_cid.items():
+            if k >= len(cids):
+                continue
+            cid = cids[k]
+            members_by_cid.setdefault(cid, []).append(name)
+            if k > 0:
+                parent_by_cid[cid] = cids[k - 1]  # coarser level is the parent
+        for cid, members in members_by_cid.items():
+            if len(members) < min_size:
+                continue
+            members = sorted(members)
+            out.append(CommunityRef(
+                community_id=cid, level=k, members=members,
+                members_hash=members_hash(members),
+                parent_id=parent_by_cid.get(cid, ""),
+                needs_report=True,
+            ))
+    # Deterministic ordering — coarsest level first, then largest, then id.
+    out.sort(key=lambda c: (c.level, -c.member_count, c.community_id))
+    return out
+
+
+def _coarsest_from_rows(
+    rows: list[dict], *, min_size: int, level: int,
+) -> list[CommunityRef]:
+    """Group the COARSEST dendrogram column (today's ``communityId``) into
+    ``CommunityRef``s, dropping communities below ``min_size``.
+
+    Back-compat shim for the single-level ``detect_communities`` path: it
+    reads ``communityId`` (the last/coarsest column == ``ids[-1]``) so the
+    grouping is identical to the legacy ``_group_by_community`` while ALSO
+    stamping ``members_hash`` (the new ``:Community`` field).  ``level``
+    tags the output exactly as the caller asked (legacy ``level`` param).
+    """
+    buckets: dict[str, list[str]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        cid = row.get("communityId")
+        if cid is None:
+            ids = row.get("ids")
+            if isinstance(ids, (list, tuple)) and ids:
+                cid = ids[-1]
+        if not name or cid is None:
+            continue
+        buckets.setdefault(str(cid), []).append(str(name))
+    out: list[CommunityRef] = []
+    for cid, members in buckets.items():
+        if len(members) < min_size:
+            continue
+        members = sorted(members)
+        out.append(CommunityRef(
+            community_id=cid, level=level, members=members,
+            members_hash=members_hash(members), parent_id="",
+            needs_report=True,
+        ))
+    out.sort(key=lambda c: (-c.member_count, c.community_id))
+    return out
+
+
 async def detect_communities(
     store: Any | None,
     *,
@@ -171,6 +315,13 @@ async def detect_communities(
     level: int = 0,
 ) -> list[CommunityRef]:
     """Run GDS Leiden over ``__Entity__`` and materialise ``:Community``.
+
+    SINGLE-LEVEL (back-compat) path: detects only the coarsest dendrogram
+    column (today's ``communityId``) and writes it at the requested
+    ``level`` with ``(:__Entity__)-[:IN_COMMUNITY]->(:Community)`` links and
+    a level-scoped prune — IDENTICAL to the pre-hierarchy behaviour, now
+    additionally stamping ``members_hash``.  For the full dendrogram use
+    ``detect_hierarchy``.
 
     Returns the detected communities (``member_count >= min_size``).
     Fail-safe: ``store is None`` or ANY GDS / Cypher error → ``[]`` (logged,
@@ -197,7 +348,7 @@ async def detect_communities(
             await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         return []
 
-    communities = _group_by_community(rows, min_size=min_size, level=level)
+    communities = _coarsest_from_rows(rows, min_size=min_size, level=level)
     logger.info(
         "communities: detected {n} communities (>= {m} members) from {r} rows",
         n=len(communities), m=min_size, r=len(rows),
@@ -221,6 +372,7 @@ async def detect_communities(
                     "community_id": comm.community_id,
                     "level": comm.level,
                     "member_count": comm.member_count,
+                    "members_hash": comm.members_hash,
                     "members": comm.members,
                 },
             )
@@ -235,4 +387,93 @@ async def detect_communities(
     return communities
 
 
-__all__ = ["detect_communities"]
+async def detect_hierarchy(
+    store: Any | None,
+    *,
+    max_levels: int,
+    min_size: int = 3,
+) -> list[CommunityRef]:
+    """Run GDS Leiden over ``__Entity__`` and materialise the community
+    HIERARCHY (up to ``max_levels`` dendrogram levels).
+
+    level 0 == coarsest (today's ``communityId``) and keeps
+    ``(:__Entity__)-[:IN_COMMUNITY]->(:Community {level:0})`` exactly as
+    ``detect_communities`` does.  level k>0 (finer) carries NO entity links;
+    instead ``(:Community {level:k-1})-[:PARENT_OF]->(:Community {level:k})``
+    wires the dendrogram coarser→finer.  Every level stamps
+    ``member_count`` + ``members_hash``.
+
+    A rebuild prunes ALL prior ``:Community`` (every level) up front since
+    the dendrogram depth/ids can change between runs.
+
+    Returns the detected communities across all levels (coarsest first).
+    Fail-safe: ``store is None`` or ANY GDS / Cypher error → ``[]`` (logged,
+    never raised).
+    """
+    if store is None:
+        logger.info("communities: no graph store — skipping hierarchy detection")
+        return []
+
+    graph_name = _new_graph_name()
+
+    try:
+        await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+        await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+        rows = await asyncio.to_thread(_run_query, store, _leiden_stream_cypher(graph_name))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("communities: GDS Leiden hierarchy detection failed: {e}", e=exc)
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+        return []
+
+    communities = _group_by_levels(rows, min_size=min_size, max_levels=max_levels)
+    n_levels = len({c.level for c in communities})
+    logger.info(
+        "communities: detected {n} communities across {L} level(s) "
+        "(>= {m} members) from {r} rows",
+        n=len(communities), L=n_levels, m=min_size, r=len(rows),
+    )
+
+    # Persist the hierarchy.  Communities are sorted coarsest-first, so a
+    # level-k node's level-(k-1) parent is always written before it.
+    try:
+        await asyncio.to_thread(_run_query, store, _COMMUNITY_CONSTRAINT)
+        from src.graph.index import ensure_community_indexes
+        await asyncio.to_thread(ensure_community_indexes, store)
+        # Prune EVERY prior :Community (depth/ids can change between runs).
+        await asyncio.to_thread(_run_query, store, _PRUNE_ALL_CYPHER)
+        for comm in communities:
+            if comm.level == 0:
+                # Coarsest: entity IN_COMMUNITY links (identical to today).
+                await asyncio.to_thread(
+                    _run_query, store, _MERGE_COMMUNITY_CYPHER,
+                    {
+                        "community_id": comm.community_id,
+                        "level": comm.level,
+                        "member_count": comm.member_count,
+                        "members_hash": comm.members_hash,
+                        "members": comm.members,
+                    },
+                )
+            else:
+                # Finer: PARENT_OF edge, no entity links.
+                await asyncio.to_thread(
+                    _run_query, store, _MERGE_SUBCOMMUNITY_CYPHER,
+                    {
+                        "community_id": comm.community_id,
+                        "level": comm.level,
+                        "member_count": comm.member_count,
+                        "members_hash": comm.members_hash,
+                        "parent_id": comm.parent_id,
+                    },
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("communities: :Community hierarchy write failed: {e}", e=exc)
+    finally:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+
+    return communities
+
+
+__all__ = ["detect_communities", "detect_hierarchy", "members_hash"]
