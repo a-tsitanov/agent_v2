@@ -125,6 +125,15 @@ def ensure_er_vector_index(store, dim: int) -> bool:
         return False
 
 
+# Range indexes for the community / global read paths.
+#   * community_level — backs `MATCH (c:Community {level: $level})`
+#     (global_search summary read).  NOT redundant with the
+#     `community_key` UNIQUE constraint on `(c.id, c.level)`: a composite
+#     index is only usable when its LEADING column (id) is bound, so it
+#     can't serve a level-only lookup — this standalone index is required.
+#   * chunk_doc_id — backs the `(:Chunk)-[:MENTIONS]->…->(:Community)`
+#     traversal returning `c.doc_id` (verified live: Chunk nodes carry
+#     `doc_id`).
 COMMUNITY_LEVEL_INDEX_CYPHER = (
     "CREATE INDEX community_level IF NOT EXISTS FOR (c:Community) ON (c.level)"
 )
