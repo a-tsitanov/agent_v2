@@ -144,18 +144,24 @@ class CommunityBuildWorkflow:
                     retry_policy=FAST_RETRY,
                 )
 
+        # Process finest level first (highest level number) so a coarser
+        # parent's child reports are persisted before it runs.  Partial
+        # failures degrade gracefully: a coarse report composes from
+        # whatever child reports DID persist + raw members (see
+        # _gather_context), and idempotent re-runs heal it — a level
+        # barrier means "this level finished", not "all children present".
         summarized = 0
         for group in group_specs_by_level(specs):
-            level = group[0].level if group else -1
+            level = group[0].level  # group_specs_by_level never emits an empty group
             results: list[SummarizeCommunityResult] = await asyncio.gather(
                 *[_summarize_one(s) for s in group],
             )
-            summarized += sum(1 for r in results if r.persisted)
+            level_persisted = sum(1 for r in results if r.persisted)
+            summarized += level_persisted
             self._state["summarized"] = summarized
             log.info(
                 "community_build  level=%d summarized %d/%d (running total %d)",
-                level, sum(1 for r in results if r.persisted), len(group),
-                summarized,
+                level, level_persisted, len(group), summarized,
             )
         self._state["phase"] = "done"
         log.info(

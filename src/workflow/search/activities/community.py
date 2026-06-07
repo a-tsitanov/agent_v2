@@ -264,18 +264,28 @@ async def detect_communities_activity(
 
     # Ensure the report vector index ONCE (one-shot, before the summarize
     # fan-out reads/writes report_vec).  Fail-open — a missing index only
-    # disables report-vector search, never the build.
+    # disables report-vector search (degrades to lexical), never the build.
+    # This is now the SOLE ensure (the per-community net was removed), so a
+    # failure here leaves the whole rebuild's vectors unindexed until the
+    # next full build — log at ERROR so it's visible, not buried.
     if store is not None:
         try:
             from src.config import settings
             from src.graph.index import ensure_community_report_vector_index
 
-            await asyncio.to_thread(
+            ok = await asyncio.to_thread(
                 ensure_community_report_vector_index, store, settings.milvus.dim,
             )
+            if not ok:
+                activity.logger.error(
+                    "detect_communities_activity  report vector index NOT "
+                    "ensured — report-vector search will be DEGRADED to lexical "
+                    "until the index is created on a later build",
+                )
         except Exception as exc:  # noqa: BLE001 — fail-open
-            activity.logger.warning(
-                "detect_communities_activity  report index ensure err=%s", exc,
+            activity.logger.error(
+                "detect_communities_activity  report index ensure raised "
+                "(search degraded) err=%s", exc,
             )
 
     activity.logger.info(
