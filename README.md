@@ -95,6 +95,7 @@ export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
 
 | Where to start | What you'll find |
 |---|---|
+| [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | **Run it in 5 steps** — bring up the stack, init schemas, start worker + API, smoke-test ingest/search; key env params + the feature-enable matrix (native ER, communities, wiki) |
 | [`docs/CONCEPTS.md`](docs/CONCEPTS.md) | **Start here to understand the service** — every technique from scratch (Temporal, claim-check, LLMPool, identifier canonicalization, entity resolution, HNSW, **Leiden** communities, local/global/drift search, Wikibase anchor, wiki-editor) — what it is, how the algorithm works, why we chose it, where it lives in code |
 | [`docs/adr/README.md`](docs/adr/README.md) | **Architecture Decision Records** — the *why* of each major choice in record form (Context/Decision/Consequences/Alternatives) |
 | [`docs/FEATURES.md`](docs/FEATURES.md) | **Every feature** — what/why/how + env, with a deep dive on the new scale/GraphRAG work (native-vector ER, conversation history, hierarchical communities + dynamic selection, dual walk-seed, drift fallback) |
