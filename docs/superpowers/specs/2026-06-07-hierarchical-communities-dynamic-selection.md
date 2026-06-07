@@ -27,7 +27,7 @@ Non-goals: changing local search; changing extraction; replacing Leiden with ano
 
 GDS 2.x `gds.leiden.stream(g, {includeIntermediateCommunities: true})` yields `intermediateCommunityIds` — a list per node, one community id per dendrogram iteration (finest → coarsest). One run gives every level; no multiple-resolution sweeps needed (confirmed: Neo4j 5-enterprise + GDS plugin in `docker-compose.yml`).
 
-- **Level numbering:** level 0 = finest (most communities, current behaviour), increasing = coarser. We cap at `community_max_levels` (e.g. 3) by taking the first K distinct dendrogram columns; the coarsest cap is the last column.
+- **Level numbering (DECIDED: replicate GraphRAG — full hierarchy):** materialise **every** dendrogram level (level 0 = finest, increasing = coarser), exactly as GraphRAG does — no artificial cap. `community_max_levels` exists only as a runaway safety ceiling (default high, e.g. 10); normal graphs produce 3–6 levels. Global search defaults to working at a configurable level (GraphRAG-style), but reports exist at all levels.
 - **Materialise** `:Community {id, level, member_count, members_hash}` per (level, community) and a `(:Community)-[:PARENT_OF]->(:Community)` edge from level L+1 (coarser) to level L (finer), derived from the dendrogram (a finer community's nodes all share one coarser id). Level-0 communities keep `(:__Entity__)-[:IN_COMMUNITY]->(:Community {level:0})` exactly as today; higher levels link to their child communities, not to entities.
 - **Decision:** keep `detect_communities(level=...)` callable for a single level (back-compat); add `detect_hierarchy(max_levels)` that does the intermediate-communities run and the parent wiring. When `community_max_levels == 1`, `detect_hierarchy` degrades to today's single-level behaviour.
 
@@ -44,7 +44,7 @@ Replace the flat lexical scan in `global_search`:
 
 - **v1 (semantic flat):** embed the query; kNN over `community_report_vec` at the working level to pick the top-`global_max_communities` reports. Drop-in replacement for `rank_summaries`; immediately removes the O(N) Python word-overlap and the "GPU"≠"видеокарта" miss. Low risk.
 - **v2 (hierarchy descent):** start at the coarsest level, rate each community's relevance (cheap-LLM yes/no or a similarity threshold), keep relevant, descend via `PARENT_OF` into their children, repeat to level 0 or a node budget. Only relevant leaf reports enter the existing MAP→REDUCE. This is the −77%-token GraphRAG behaviour; built on top of v1's index.
-- **Decision:** ship v1 first (semantic ranking), then v2 (descent) as a follow-up flag. Both behind `community_dynamic_selection` (off → today's lexical path).
+- **Decision (DECIDED: both v1 + v2 in the first cut):** build the report vector index (v1) AND the hierarchy descent (v2) together — the full GraphRAG dynamic-selection behaviour. v2's descent uses v1's report index for the per-level relevance test. Both behind `community_dynamic_selection` (off → today's lexical path). Selection strategy is a config enum (`semantic` | `descent`) so v1 can run standalone if descent regresses.
 
 ### Data flow
 
@@ -86,9 +86,9 @@ QUERY (global / drift):
 - Live smoke (local Neo4j + GDS): build hierarchy on the 156-entity dev graph, assert ≥2 levels + PARENT_OF edges + report_vec populated; rebuild with no change → reports carried over (LLM calls ≈ 0); a global query returns selected reports. Isolated label cleanup, never touch prod.
 - Extend `tests/eval/scale/` with a community-count/level probe so hierarchy size is measurable on a synthetic graph.
 
-## Open questions (decide before / during plan)
+## Resolved decisions (2026-06-07)
 
-1. **Levels:** auto-take all dendrogram columns, or cap at `community_max_levels` (default 3)? (Recommend cap — bounded reports/cost.)
-2. **Selection v1 vs v2 in first cut:** ship v1 (semantic kNN) only, v2 (descent) next? (Recommend yes — v1 is the cheap, high-value win.)
-3. **Higher-level reports:** synthesise from child reports (cheap) vs from all members (faithful but costly)? (Recommend child reports.)
-4. **Keep flat lexical global** as a permanent fallback mode, or remove once v1 is verified? (Recommend keep as fallback.)
+1. **Levels:** replicate GraphRAG — materialise the **full** dendrogram hierarchy (no cap; `community_max_levels` is only a safety ceiling).
+2. **Selection:** ship **both v1 (semantic kNN) and v2 (hierarchy descent)** in the first cut — full GraphRAG dynamic selection; v2 builds on v1's report index; config enum lets v1 run standalone.
+3. **Higher-level reports:** synthesise **from child reports** (cheap, scalable, GraphRAG-style).
+4. **Flat lexical global:** **kept** as a permanent fail-open fallback (no report index / embed failure / feature off).

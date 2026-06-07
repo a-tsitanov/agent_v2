@@ -59,8 +59,8 @@ SearchRequest(query, history)  ─►  Orchestrator/Global workflow
 - Route: `SearchRequest` accepts/round-trips `history`; `_local_params`/`_global_params` carry it into params.
 - Live smoke (optional): two-turn session via `/search/local` — turn 2 ("а что по цене?") returns an answer grounded in turn 1's entity.
 
-## Open questions (decide before plan)
+## Resolved decisions (2026-06-07)
 
-1. **Server-side sessions?** Recommend **no** — client-managed history (Hermes/agent owns it). Revisit only if a bare chat UI needs it.
-2. **History into synthesis** (referential answers) in v1, or contextualise-only? Recommend contextualise-only first; add to synthesis if answers feel disjointed.
-3. **`history_max_turns` default** — 6? (3 user + 3 assistant.)
+1. **Sessions:** **client-managed** history (caller/Hermes owns the transcript; server stays stateless). No server-side session store.
+2. **Usage:** **contextualise-only** in v1 (rewrite follow-up → standalone query; do not feed raw history into synthesis). Revisit synthesis-history later if answers feel disjointed.
+3. **`history_max_turns`:** **6** (3 user + 3 assistant), plus `history_max_chars` ceiling.
