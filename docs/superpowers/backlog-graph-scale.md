@@ -58,6 +58,26 @@ currently lose). Big ingest track, not search. Separate initiative.
 - **Milvus collection partitioning** — M. Single index over all chunks; partitions would help only if queries can be segmented (e.g. by doc_type). HNSW already ~5ms at 250k, so low priority.
 - **recall tuning** `graph_similarity_top_k` 20→50, `path_depth` 1→2 — S + eval. Needs the recall@k labelled set (harness stub exists) to validate; safe now that the hub-walk cliff is measured mild.
 
+## Documentation
+
+### Fully document the search paths — S–M (docs only)
+Write end-to-end documentation of **every** search path, not just the high-level
+overview in `docs/SEARCH-FLOW.md`. Each mode traced from `POST /search` →
+router/auto-mode → activities → stores → synthesis, with the exact decision
+points and fallbacks:
+- **local** (vector + graph_search dual walk-seed, ER-canonical entity linking),
+- **global** (community map-reduce; lexical | semantic-kNN | descent selection,
+  fail-open to lexical),
+- **drift** (local+global one-shot + `_drift_local_fallback`),
+- **auto / router** mode-selection logic and the **coverage-check → extra round**
+  loop (SearchOrchestratorWorkflow / SubQueryRetrievalWorkflow),
+- per-call knobs (`graph_search.depth`, `find_neighbours.hops`, `top_k`,
+  `path_depth`) and where each is resolved (submit-time vs activity),
+- conversation-history contextualization path,
+- what degrades vs hard-fails on each store outage.
+Include per-path sequence diagrams (Mermaid + D2) like `docs/INGEST.md`. Goal: a
+reader can follow any query to the exact code without reading the source first.
+
 ## Notes
 - P1.2 hub-walk degree-cap: measured MILD (≤2× across hops 2–3) → not worth a fix unless a restored hub→hub→hub graph shows otherwise.
 - All "search feature" gaps are deltas vs systems we already resemble (extractor ported from LightRAG; local/global/drift naming from GraphRAG).
