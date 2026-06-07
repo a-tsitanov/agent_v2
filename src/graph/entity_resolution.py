@@ -1065,10 +1065,17 @@ async def _cleanup_stored_losers(
     """Repoint relations from each loser stored node onto its
     canonical sibling, then detach-delete the loser.
 
-    Plain-Cypher only (no APOC dependency): we copy each loser's
-    incoming and outgoing edges to the canonical (label preserved
-    via CALL { ... }), then `DETACH DELETE` the loser.  Self-loops
-    are dropped.
+    Uses ``apoc.merge.relationship`` to copy each loser's incoming and
+    outgoing edges onto the canonical with the original (dynamic)
+    relationship type and dedup, then ``DETACH DELETE`` the loser.
+    APOC is already a project-wide dependency (e.g. ``graph_walk`` uses
+    ``apoc.coll.flatten``).
+
+    Failure is SAFE-BY-INACTION: if the repoint+delete throws (APOC
+    missing, transient error), the loser node is LEFT INTACT — it stays
+    an un-merged duplicate (recoverable on a later run) rather than
+    losing its relationships.  The old fallback ``DETACH DELETE``d the
+    loser *without* moving its edges, silently dropping them.
     """
     for loser_name, canon_name in pairs:
         try:
@@ -1103,34 +1110,15 @@ async def _cleanup_stored_losers(
                 {"loser": loser_name, "canon": canon_name},
             )
         except Exception as exc:  # noqa: BLE001
-            # APOC may be unavailable — fall back to plain Cypher
-            # (no merge dedup, but still moves edges).
+            # Safe-by-inaction: leave the loser node INTACT (with its
+            # edges) rather than deleting it without repointing.  Worst
+            # case is a lingering duplicate, which a later ER run can
+            # still merge — never silent relationship loss.
             logger.warning(
-                "ER stored-loser cleanup APOC failed for "
-                "{l}→{c}, falling back: {e}",
+                "ER stored-loser cleanup failed for {l}→{c}; leaving "
+                "loser intact (un-merged duplicate, recoverable): {e}",
                 l=loser_name, c=canon_name, e=exc,
             )
-            try:
-                await asyncio.to_thread(
-                    graph_store.structured_query,
-                    """
-                    MATCH (loser:__Entity__ {name: $loser})
-                    MATCH (canon:__Entity__ {name: $canon})
-                    WHERE elementId(loser) <> elementId(canon)
-                    OPTIONAL MATCH (loser)-[r_out]->(t)
-                    WHERE elementId(t) <> elementId(canon)
-                    OPTIONAL MATCH (s)-[r_in]->(loser)
-                    WHERE elementId(s) <> elementId(canon)
-                    DETACH DELETE loser
-                    """,
-                    {"loser": loser_name, "canon": canon_name},
-                )
-            except Exception as exc2:  # noqa: BLE001
-                logger.warning(
-                    "ER stored-loser cleanup failed entirely for "
-                    "{l}→{c}: {e}",
-                    l=loser_name, c=canon_name, e=exc2,
-                )
 
 
 async def _load_existing_canonicals(

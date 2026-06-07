@@ -512,3 +512,25 @@ def test_candidate_pairs_numpy_path_matches_pure_python(monkeypatch):
     set_py = {(a, b) for a, b, _ in [*auto_py, *bord_py]}
 
     assert set_np == set_py
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stored_losers_safe_on_failure():
+    """When the repoint+delete query fails (e.g. APOC missing), the loser
+    node must be LEFT INTACT — exactly one query attempt per pair, no
+    second `DETACH DELETE` that would drop its edges, and no raise."""
+    from src.graph.entity_resolution import _cleanup_stored_losers
+
+    calls: list[dict] = []
+
+    class _BoomStore:
+        def structured_query(self, query, param_map=None):
+            calls.append({"query": query, "param_map": param_map})
+            raise RuntimeError("apoc.merge.relationship not found")
+
+    # Must not raise.
+    await _cleanup_stored_losers(_BoomStore(), [("Loser A", "Canon A")])
+
+    # Exactly one attempt (the APOC repoint) — no destructive fallback.
+    assert len(calls) == 1
+    assert "DETACH DELETE" not in calls[0]["query"] or "apoc.merge" in calls[0]["query"]
