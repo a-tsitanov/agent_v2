@@ -26,7 +26,6 @@ from __future__ import annotations
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
-    from src.config import settings
     from src.workflow.contracts import (
         ContextualizeParams,
         ContextualizeResult,
@@ -97,7 +96,7 @@ class DriftSearchWorkflow:
         #    with history CLEARED so neither the local orchestrator nor the
         #    global pass re-runs contextualisation.  Empty history ⇒ skipped
         #    (back-compat — children run exactly as before).
-        if local_params.history and settings.agent.conversation_history_enabled:
+        if local_params.history and local_params.contextualize_enabled:
             ctx = await workflow.execute_activity(
                 "contextualize_query",
                 ContextualizeParams(

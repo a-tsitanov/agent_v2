@@ -177,7 +177,7 @@ class GlobalSearchWorkflow:
         # the standalone query.  Empty history ⇒ skipped (back-compat).
         # NOTE: drift dispatches global as a child with history CLEARED, so
         # this block does NOT re-run for the drift path.
-        if params.history and settings.agent.conversation_history_enabled:
+        if params.history and params.contextualize_enabled:
             ctx = await workflow.execute_activity(
                 "contextualize_query",
                 ContextualizeParams(

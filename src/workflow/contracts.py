@@ -396,6 +396,10 @@ class OrchestratorParams(_Frozen):
     coverage_check_enabled: bool = True
     max_coverage_rounds: int = 1
     history: list[ConversationTurnDict] = Field(default_factory=list)
+    # Conversation-history contextualisation gate — resolved from
+    # AgentSettings at submit time (like coverage_check_enabled) so the
+    # workflow never reads env at runtime (replay-safe).
+    contextualize_enabled: bool = True
 
 
 class SearchOutcome(_Frozen):
@@ -584,3 +588,5 @@ class GlobalSearchParams(_Frozen):
     # rather than standing alone.  Plain global leaves this False.
     drift_mode: bool = False
     history: list[ConversationTurnDict] = Field(default_factory=list)
+    # Resolved from AgentSettings at submit time (replay-safe gate).
+    contextualize_enabled: bool = True

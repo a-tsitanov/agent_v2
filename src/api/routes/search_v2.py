@@ -52,6 +52,7 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
             ConversationTurnDict(role=t.role, content=t.content)
             for t in req.history
         ],
+        contextualize_enabled=settings.agent.conversation_history_enabled,
     )
 
 
@@ -67,6 +68,7 @@ def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSea
             ConversationTurnDict(role=t.role, content=t.content)
             for t in req.history
         ],
+        contextualize_enabled=settings.agent.conversation_history_enabled,
     )
 
 

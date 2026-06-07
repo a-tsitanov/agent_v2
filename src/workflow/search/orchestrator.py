@@ -137,7 +137,7 @@ class SearchOrchestratorWorkflow:
         # follow-up into a standalone question; the model_copy makes the
         # WHOLE downstream pipeline use the standalone query with no other
         # edits.  Empty history ⇒ this block is skipped (back-compat).
-        if params.history and settings.agent.conversation_history_enabled:
+        if params.history and params.contextualize_enabled:
             ctx = await workflow.execute_activity(
                 "contextualize_query",
                 ContextualizeParams(
