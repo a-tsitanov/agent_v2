@@ -34,8 +34,9 @@ from src.workflow.contracts import RetrieveParams, RetrieveResult
 # in this fixed pipeline because it needs an explicit `start_entity`
 # (a real entity name). R3b ACTIVATES it deterministically WITHOUT an
 # LLM tool-pick: after graph_search runs, the activity seeds graph_walk
-# from the TOP graph_search entity (``top_entity_name`` + the seed block
-# in the activity body), flag-gated by
+# from the top graph_search entity AND (when ``graph_walk_dual_seed`` is
+# on) the top find_entity_by_name entity (``top_entity_name`` +
+# ``_walk_seeds`` in the activity body), flag-gated by
 # ``settings.agent.graph_walk_enabled`` and fail-open.
 _PIPELINE = ("vector_search", "graph_search", "find_entity_by_name")
 
@@ -147,9 +148,10 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
         _merge_sources(result.sources)
 
     # R3b: deterministically seed the bounded multi-hop graph_walk from
-    # the TOP graph_search entity. FAIL-OPEN — any error (parse failure,
-    # store error, missing seed) just skips the walk and returns the
-    # vector + graph_search results unchanged; never raises.
+    # the top graph_search entity (and, with dual-seed, the top fulltext
+    # entity — see ``_walk_seeds``). FAIL-OPEN per seed — any error (parse
+    # failure, store error, missing seed) just skips that walk and returns
+    # the vector + graph_search results unchanged; never raises.
     if settings.agent.graph_walk_enabled:
         seeds = _walk_seeds(
             graph_search_obs or "", find_name_obs or "",
