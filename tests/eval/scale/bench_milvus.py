@@ -24,6 +24,9 @@ import numpy as np
 from tests.eval.scale.synth import gen_vectors
 
 _DEFAULT_URI = "http://localhost:19530"
+# Rows per insert call — keeps each gRPC message well under Milvus's
+# 64 MB cap (2000 × 768 float32 ≈ 6 MB).
+_INSERT_BATCH = 2000
 
 
 def _client(uri: str, timeout: float = 4.0):
@@ -56,7 +59,10 @@ def _build_and_query(
     client.create_collection(collection_name=name, schema=schema)
 
     rows = [{"id": i, "vec": corpus[i].tolist()} for i in range(corpus.shape[0])]
-    client.insert(collection_name=name, data=rows)
+    # Batch inserts: a single insert of the whole corpus blows past
+    # Milvus's 64 MB gRPC message cap (768-dim floats add up fast).
+    for j in range(0, len(rows), _INSERT_BATCH):
+        client.insert(collection_name=name, data=rows[j:j + _INSERT_BATCH])
 
     ip = client.prepare_index_params()
     ip.add_index(

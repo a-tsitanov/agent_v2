@@ -50,21 +50,58 @@ uv run python -m tests.eval.scale.run_scale_bench all
 - **walk** `slowdown_vs_normal` shows the hub cliff — pick a degree cap
   where it becomes unacceptable.
 
-## First measured numbers (Apple Silicon dev box)
+## Measured numbers (Apple Silicon dev box, live local stack)
 
-ER candidate-gen, single label, real `_candidate_pairs` (pure-Python
-cosine, recomputes norms per pair):
+### P0.2 — ER candidate-gen, single label, real `_candidate_pairs`
 
-| entities-in-label | seconds |
-|---|---|
-| 200 | 1.0 |
-| 400 | 4.1 |
-| 800 | 16.1 |
+| entities-in-label | original (pure-Python) | after numpy cosine | after numpy + token-cache |
+|---|---|---|---|
+| 800 | 16.1 s | 1.6 s | **0.136 s** |
 
-Clean O(N²) (×4 time per ×2 entities). Extrapolated to the ER window
-(~2250 same-label entities at a 5000 window) ⇒ ~120 s/ingest on
-candidate-gen alone — the P0.2 case for vector-kNN / blocking.
+The original was clean O(N²) (×4 time per ×2 entities) dominated by a
+pure-Python `_cosine` that re-normalised per pair, plus per-pair name
+re-tokenisation. Vectorising the cosine (one BLAS matrix-vector per row)
+gave ~10×; caching name tokens per item gave the rest → **~118×** total,
+**identical candidate set** (locked by
+`test_candidate_pairs_numpy_path_matches_pure_python`). Extrapolated to a
+~2250-same-label window: ~127 s → ~1.1 s/ingest.
 
-Dedup candidate-recall for *close* duplicates (jitter 0.03) is 100 % at
-knn_k 5/10/20 — i.e. the candidate floor isn't the dedup bottleneck; the
-window (P0.1, fixed) and the O(N²) cost (P0.2) are.
+Dedup candidate-recall for close duplicates is 100 % at knn_k 5/10/20 —
+the candidate floor isn't the dedup bottleneck; the window (P0.1, fixed)
+and the O(N²) cost (P0.2, now fixed) were.
+
+### P1.1 — Milvus FLAT vs HNSW (clustered vectors, top-k=10, ef=64)
+
+| n vectors | FLAT p50 | HNSW p50 | speedup | recall@10 |
+|---|---|---|---|---|
+| 50k | 16 ms | 2.1 ms | 7.6× | **1.00** |
+| 250k | 26.6 ms | 5.2 ms | 5.1× | **1.00** |
+
+ef-sweep at 50k (64/128/256) held recall 1.00 throughout. FLAT latency
+grows with N (16→27 ms); HNSW stays single-digit ms. The shipped HNSW
+default is safe at **perfect recall** on structured data, and the win is
+conservative here — at 250k *entities* the real *chunk* collection is
+~0.6–1M vectors, where FLAT is even slower. (NB: recall is only
+meaningful on *clustered* vectors — uniform-random vectors in 768-d are
+near-equidistant and give a misleading ~0.3; `gen_vectors` scales cluster
+noise by `1/sqrt(dim)` so the structure survives.)
+
+### P1.2 — graph_walk hub cliff (live Neo4j, 20k nodes, hops=2, cap=50)
+
+| start node | degree | walk p50 | slowdown vs normal |
+|---|---|---|---|
+| normal | ~4 | 11.0 ms | 1.0× |
+| hub | 500 | 9.0 ms | 0.8× |
+| hub | 1000 | 10.7 ms | 1.0× |
+| hub | 5000 | 15.6 ms | **1.4×** |
+
+At hops=**3** the worst case (degree 5000, cap 50) is ×1.9 / 19 ms; with
+cap 200 it is not slower at all (the hub fills the cap from its abundant
+1-hop neighbours before any deep traversal).
+
+The `LIMIT` inside the subquery makes Neo4j stop early, so across
+hops 2–3 and caps 50–200 the hub cliff never exceeded ~2× / ~20 ms —
+**not** the orders-of-magnitude blow-up first feared → P1.2 deprioritised.
+(Caveat: synthetic hubs link to random low-degree nodes; a real
+hub→hub→hub chain on a much larger graph could differ — re-measure on a
+restored graph before fully closing.)

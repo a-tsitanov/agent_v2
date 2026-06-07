@@ -121,20 +121,50 @@ def gen_items(
 
 
 def gen_vectors(
-    *, n: int, dim: int = 768, n_queries: int = 100, seed: int = 7,
+    *,
+    n: int,
+    dim: int = 768,
+    n_queries: int = 100,
+    n_clusters: int | None = None,
+    cluster_spread: float = 0.35,
+    query_jitter: float = 0.10,
+    seed: int = 7,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(corpus[n,dim], queries[n_queries,dim])`` unit vectors.
+    """Return ``(corpus[n,dim], queries[n_queries,dim])`` unit vectors
+    with realistic CLUSTER structure.
 
-    Queries are near random corpus rows (corpus row + jitter) so there
-    is a real nearest neighbour to recover — lets the Milvus benchmark
-    measure HNSW recall against the exhaustive FLAT ground truth.
+    Uniform random vectors in high dim are near-equidistant (curse of
+    dimensionality): every point's "10 nearest" are near-ties, so
+    ANN-vs-exhaustive recall@k looks artificially terrible even though
+    latency is faithful.  Real embeddings cluster by topic, so we
+    generate ``n_clusters`` centroids and scatter points around them.
+
+    Noise is scaled by ``1/sqrt(dim)`` so ``cluster_spread`` /
+    ``query_jitter`` are the *relative* L2 norm of the offset vs the
+    unit centroid — otherwise ``spread · N(0,1)^dim`` has norm
+    ``spread·sqrt(dim)`` which in 768-d dwarfs the centroid and destroys
+    the cluster structure (the bug that made recall look like ~0.3).
+    With the defaults a point sits at cosine ≈0.94 to its centroid, so
+    each query has genuine near neighbours a correctly-tuned HNSW
+    recovers — making recall@k meaningful.
     """
     rng = np.random.default_rng(seed)
-    corpus = _unit_rows(rng, n, dim)
+    n_clusters = n_clusters or max(8, n // 500)
+    centroids = _unit_rows(rng, n_clusters, dim)
+    assign = rng.integers(0, n_clusters, size=n)
+    sigma = cluster_spread / (dim ** 0.5)
+    corpus = centroids[assign] + sigma * rng.standard_normal(
+        (n, dim)
+    ).astype("float32")
+    corpus /= np.linalg.norm(corpus, axis=1, keepdims=True) + 1e-12
+
+    qsigma = query_jitter / (dim ** 0.5)
     pick = rng.choice(n, size=n_queries, replace=False)
-    q = corpus[pick] + 0.05 * rng.standard_normal((n_queries, dim)).astype("float32")
+    q = corpus[pick] + qsigma * rng.standard_normal(
+        (n_queries, dim)
+    ).astype("float32")
     q /= np.linalg.norm(q, axis=1, keepdims=True) + 1e-12
-    return corpus, q
+    return corpus.astype("float32"), q.astype("float32")
 
 
 def gen_edges(
