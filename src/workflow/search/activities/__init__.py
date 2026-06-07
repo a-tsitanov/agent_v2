@@ -10,6 +10,7 @@ from src.workflow.search.activities.community import (
     detect_communities_activity,
     summarize_community_activity,
 )
+from src.workflow.search.activities.contextualize import contextualize_query
 from src.workflow.search.activities.documents import documents_for_communities
 from src.workflow.search.activities.global_search import (
     map_communities,
@@ -30,6 +31,9 @@ SEARCH_V2_ACTIVITIES = [
     map_communities,
     map_community_partial,
     documents_for_communities,
+    # Conversation history: rewrite a follow-up into a standalone query
+    # (small tier, fail-open).  Not wired into any workflow/route yet.
+    contextualize_query,
 ]
 
 # Offline graph-community build (Search R6) — registered ONLY on the
@@ -43,6 +47,7 @@ GRAPH_BUILD_ACTIVITIES = [
 __all__ = [
     "GRAPH_BUILD_ACTIVITIES",
     "SEARCH_V2_ACTIVITIES",
+    "contextualize_query",
     "detect_communities_activity",
     "documents_for_communities",
     "map_communities",
