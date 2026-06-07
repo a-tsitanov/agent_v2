@@ -45,3 +45,27 @@ def test_local_params_resolves_contextualize_flag_at_submit_time():
     from src.config import settings
     p = _local_params(SearchRequest(query="q"))
     assert p.contextualize_enabled == settings.agent.conversation_history_enabled
+
+
+def test_global_params_resolves_community_selection_at_submit_time():
+    # Same replay-safe convention: the community-selection strategy is
+    # resolved from settings at submit time into GlobalSearchParams, never
+    # read live inside the workflow.  Default = lexical (unchanged today).
+    from src.config import settings
+    p = _global_params(SearchRequest(query="q"))
+    assert p.community_selection == settings.agent.community_dynamic_selection
+
+
+def test_detect_params_threads_max_levels_from_config():
+    # The admin rebuild endpoint constructs DetectCommunitiesParams with
+    # max_levels resolved from settings at submit time (replay-safe).
+    # Default = 1 (single-level, today's cost) until an operator raises it.
+    from src.config import settings
+    from src.workflow.contracts import DetectCommunitiesParams
+    p = DetectCommunitiesParams(
+        min_size=settings.temporal.community_min_size,
+        level=0,
+        max_levels=settings.agent.community_max_levels,
+    )
+    assert p.max_levels == settings.agent.community_max_levels
+    assert p.max_levels == 1  # back-compat default

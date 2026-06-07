@@ -69,6 +69,7 @@ def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSea
             for t in req.history
         ],
         contextualize_enabled=settings.agent.conversation_history_enabled,
+        community_selection=settings.agent.community_dynamic_selection,
     )
 
 
@@ -254,6 +255,7 @@ async def rebuild_communities() -> dict[str, str]:
             DetectCommunitiesParams(
                 min_size=settings.temporal.community_min_size,
                 level=0,
+                max_levels=settings.agent.community_max_levels,
             ),
             id=f"community-build-{request_id}",
             task_queue=settings.temporal.graph_build_task_queue,

@@ -550,6 +550,15 @@ class AgentSettings(BaseSettings):
     # linker + alias storage ship as building blocks and are NOT yet
     # wired into the ingest activity.
     canonical_linker_enabled: bool = False
+    # Community build: how many Leiden dendrogram levels to materialise.
+    # 1 = single-level (today's cost/behaviour); raise to build the
+    # hierarchy (offline, additive). Safety-capped.
+    community_max_levels: int = Field(default=1, ge=1, le=10)
+    # Global/drift community selection strategy. "lexical" = today's
+    # word-overlap; "semantic" = kNN over report_vec; "descent" = GraphRAG
+    # hierarchy descent. Default lexical (query behaviour unchanged) — flip
+    # only after a hierarchy build has populated reports + report_vec.
+    community_dynamic_selection: Literal["lexical", "semantic", "descent"] = "lexical"
 
 
 class LLMPoolSettings(BaseSettings):

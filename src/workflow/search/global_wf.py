@@ -197,6 +197,7 @@ class GlobalSearchWorkflow:
                 query=params.query,
                 level=params.level,
                 limit=params.max_communities,
+                selection=params.community_selection,
             ),
             result_type=MapCommunitiesResult,
             start_to_close_timeout=timedelta(minutes=2),

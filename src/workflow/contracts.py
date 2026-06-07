@@ -605,3 +605,8 @@ class GlobalSearchParams(_Frozen):
     history: list[ConversationTurnDict] = Field(default_factory=list)
     # Resolved from AgentSettings at submit time (replay-safe gate).
     contextualize_enabled: bool = True
+    # Community-selection strategy for the MAP step, resolved from
+    # AgentSettings at submit time (replay-safe). "lexical" (default —
+    # today's behaviour), "semantic", or "descent". Threaded into
+    # ``MapCommunitiesParams.selection`` inside the workflow.
+    community_selection: str = "lexical"
