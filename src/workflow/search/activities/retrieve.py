@@ -77,6 +77,24 @@ def top_entity_name(observation: str) -> str | None:
     return None
 
 
+def _walk_seeds(graph_search_obs: str, find_name_obs: str, *, dual: bool) -> list[str]:
+    """Seed entity name(s) for graph_walk.
+
+    Legacy (dual=False): graph_search's top entity, else fulltext's — one
+    seed.  dual=True: the union of both (deduped, order: graph_search
+    first) so a fulltext-matched entity also contributes its neighbourhood
+    even when graph_search returned something."""
+    gs = top_entity_name(graph_search_obs or "")
+    fn = top_entity_name(find_name_obs or "")
+    if not dual:
+        return [s for s in (gs or fn,) if s]
+    out: list[str] = []
+    for s in (gs, fn):
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 @activity.defn
 async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
     """Run the deterministic retrieve pipeline for one sub-question."""
@@ -132,26 +150,25 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
     # the TOP graph_search entity. FAIL-OPEN — any error (parse failure,
     # store error, missing seed) just skips the walk and returns the
     # vector + graph_search results unchanged; never raises.
-    seed_obs = graph_search_obs if graph_search_obs is not None else find_name_obs
-    if settings.agent.graph_walk_enabled and seed_obs is not None:
-        try:
-            start = top_entity_name(graph_search_obs or "") \
-                or top_entity_name(find_name_obs or "")
-            if start:
+    if settings.agent.graph_walk_enabled:
+        seeds = _walk_seeds(
+            graph_search_obs or "", find_name_obs or "",
+            dual=settings.agent.graph_walk_dual_seed,
+        )
+        for start in seeds:
+            try:
                 walk = await atomic_tools.dispatch(
                     "graph_walk",
-                    {
-                        "start_entity": start,
-                        "hops": settings.agent.graph_walk_hops,
-                    },
+                    {"start_entity": start, "hops": settings.agent.graph_walk_hops},
                     graph_retriever=graph_retriever,
                 )
                 _merge_sources(walk.sources)
-        except Exception as exc:
-            activity.logger.warning(
-                "retrieve_subquestion  graph_walk skipped  err=%s", exc,
-            )
-            errors.append(f"graph_walk: {exc}")
+            except Exception as exc:
+                activity.logger.warning(
+                    "retrieve_subquestion  graph_walk skipped  start=%s  err=%s",
+                    start, exc,
+                )
+                errors.append(f"graph_walk: {exc}")
 
     sources = [node_to_serialized(n) for n in collected]
     duration_ms = int((time.monotonic() - t0) * 1000)

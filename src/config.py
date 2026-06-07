@@ -523,6 +523,11 @@ class AgentSettings(BaseSettings):
     # (the tool clamps it to GRAPH_WALK_MAX_HOPS).
     graph_walk_enabled: bool = True
     graph_walk_hops: int = Field(default=2, ge=1, le=3)
+    # When on, graph_walk is seeded from BOTH the top graph_search entity
+    # AND the top find_entity_by_name (fulltext) entity when they differ —
+    # so a fulltext-matched entity (partial name / typo) still contributes
+    # its neighbourhood even if graph_search already returned something.
+    graph_walk_dual_seed: bool = True
     # ``path_depth`` for the similarity graph_search inside the local
     # pipeline: how many triplet-hops of neighbours aretrieve pulls around
     # each matched entity. Default 1 (current behaviour); raise (≤3) to
