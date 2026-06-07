@@ -52,7 +52,14 @@ ORDER BY name
 
 # Child-report context for level>0 communities — a parent report is
 # composed from its children's reports (cheaper than re-reading every
-# leaf member).  Only children that already have a report participate.
+# leaf member).  Direction is intentional: PARENT_OF runs coarser→finer
+# (``(parent {level:k})-[:PARENT_OF]->(child {level:k+1})``), so a level-k
+# community here reads its finer level-(k+1) constituents — i.e. a coarse
+# report is built bottom-up from its finer children.  Only children that
+# ALREADY have a report participate, so the summarise fan-out MUST run
+# finest-level-first for parents to see them — that level ordering is wired
+# in Phase 3 (CommunityBuildWorkflow); until then the level>0 path is
+# latent (the build workflow only detects the coarsest level).
 _CHILD_REPORTS_CYPHER = """
 MATCH (c:Community {id: $community_id, level: $level})-[:PARENT_OF]->(child:Community)
 WHERE child.report IS NOT NULL
@@ -359,6 +366,12 @@ async def summarize_community_activity(
 
     # 3b. Ensure the native report vector index exists (idempotent, fail-
     #     open — mirrors how ER ensures its index before writing vectors).
+    #     NOTE: this runs per-community inside the bounded fan-out, so the
+    #     first build issues N concurrent (idempotent) CREATE VECTOR INDEX
+    #     calls.  Phase 3 should promote this to a single workflow-level
+    #     one-shot before the fan-out (like detect_communities does for
+    #     ensure_community_indexes); kept here so Phase-2a stands alone
+    #     (the index must be created somewhere for reports to be searchable).
     if report_vec is not None:
         try:
             from src.graph.index import ensure_community_report_vector_index
