@@ -29,6 +29,9 @@ def _bound_history(
     total = 0
     for t in reversed(recent):  # keep the most recent within the char budget
         c = len(t.content or "")
+        # ``max_chars == 0`` ⇒ no char cap (falsy). The ``and out`` guard
+        # always keeps at least the latest turn, even if it alone exceeds
+        # the budget — better one over-budget turn than empty history.
         if max_chars and total + c > max_chars and out:
             break
         out.append(t)
@@ -37,7 +40,7 @@ def _bound_history(
 
 
 def _build_prompt(query: str, turns: list[ConversationTurnDict]) -> str:
-    lines = [f"{t.role}: {t.content}" for t in turns]
+    lines = [f"{t.role}: {t.content or ''}" for t in turns]
     return _PROMPT.format(history="\n".join(lines), query=query)
 
 
