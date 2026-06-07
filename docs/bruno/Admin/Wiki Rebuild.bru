@@ -1,0 +1,56 @@
+meta {
+  name: Wiki Rebuild
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/admin/wiki/rebuild?all=false
+  body: none
+  auth: none
+}
+
+params:query {
+  all: false
+}
+
+docs {
+  # POST /admin/wiki/rebuild
+
+  Trigger the **wiki-editor sweep** — runs `WikiSweepWorkflow` on the
+  `kb-wiki` task queue to (re)generate per-entity MediaWiki articles.
+
+  > ⚠️ **Path differs from the rest of the API.** This route is mounted
+  > **without** the `/api/v1` prefix (its router already carries
+  > `prefix="/admin/wiki"`), so the real path is `/admin/wiki/rebuild`,
+  > NOT `/api/v1/admin/wiki/rebuild`. It also does **not** require
+  > `X-API-Key` — there's no `require_api_key` dependency on it in
+  > `src/api/routes/admin.py`.
+
+  This is a **different** trigger from
+  `POST /api/v1/admin/communities/rebuild` (GraphRAG community build).
+  Don't confuse the two.
+
+  ## Query parameter
+  - **all** *(default `false`)* — when `true`, first marks **every**
+    `:__Entity__` in Neo4j `wiki_dirty=true` (full rebuild of all
+    articles); when `false`, only entities already flagged dirty are
+    rewritten.
+
+  ## Behaviour
+  Fire-and-forget. Returns the workflow id immediately; the sweep runs
+  asynchronously on the `kb-wiki` worker.
+
+  ## Response 200
+  ```json
+  { "status": "started", "workflow_id": "wiki-sweep-manual" }
+  ```
+  When the wiki editor is disabled (`WIKI_ENABLED=false`):
+  ```json
+  { "status": "disabled" }
+  ```
+
+  ## Requires
+  - `WIKI_ENABLED=true` and a worker polling the `kb-wiki` queue.
+  - A reachable MediaWiki/Wikibase instance for article writes.
+}

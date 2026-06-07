@@ -51,16 +51,27 @@ curl -F file=@doc.txt -H "X-API-Key: $API_KEY" \
      http://localhost:8000/api/v1/ingest
 
 # Per-batch (env default — если хочется не повторять header):
-export ANALYTICS_VERSION_TAG=qwen3-baseline
+export ANALYTICS_DEFAULT_VERSION_TAG=qwen3-baseline
 # … 20 ingest'ов без header'а — все попадут в этот snapshot
 
 # Поменяли модель:
 export LITELLM_LLM_MODEL=llama3.3:70b
-export ANALYTICS_VERSION_TAG=llama-3.3-baseline
+export ANALYTICS_DEFAULT_VERSION_TAG=llama-3.3-baseline
 # перезапустить API + worker → batch №2 с новым тегом
 ```
 
-В Postgres `ingest_metrics` поле `model` snapshot'ится из `settings.litellm.llm_model` **на момент сабмита**, поэтому смена модели в env автоматически отражается в данных.
+> ⚠️ Имя env-переменной — `ANALYTICS_DEFAULT_VERSION_TAG`, НЕ `ANALYTICS_VERSION_TAG`.
+> Поле `AnalyticsSettings.default_version_tag` имеет prefix `ANALYTICS_` без alias
+> (`src/config.py`), поэтому pydantic-settings читает именно
+> `ANALYTICS_DEFAULT_VERSION_TAG`. Старое имя `ANALYTICS_VERSION_TAG` (всё ещё
+> фигурирует в `.env.example`) молча игнорируется → ingest получит default
+> `unspecified`. Для разовых сабмитов надёжнее header `X-Version-Tag`.
+
+В Postgres `ingest_metrics` поле `model` snapshot'ится из конфига LiteLLM **на
+момент сабмита**: глобальный default берётся из `settings.litellm.effective_base`,
+а per-role значения (`extraction` / `judge` / `search`) — из
+`settings.litellm.model_for(role)` (см. `src/api/routes/ingest.py`). Поэтому смена
+модели в env автоматически отражается в данных. Per-activity разбивка — в §6a.
 
 `env` — это `ANALYTICS_ENV_NAME` (default `dev-local`). Используется для разделения dev / staging / prod в одной БД, если нужно.
 

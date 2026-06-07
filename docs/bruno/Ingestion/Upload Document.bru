@@ -12,6 +12,7 @@ post {
 
 headers {
   X-API-Key: {{apiKey}}
+  ~X-Version-Tag: qwen3-baseline
 }
 
 body:multipart-form {
@@ -43,6 +44,10 @@ docs {
 
   ## Headers
   - **X-API-Key** *(required)* — one of the keys in the `API_KEYS` env.
+  - **X-Version-Tag** *(optional, disabled by default)* — analytics
+    label for this ingest; written to `ingest_metrics.version_tag` and
+    Temporal search attrs. Falls back to `ANALYTICS_DEFAULT_VERSION_TAG`
+    (default `unspecified`) when absent. Enable the header to tag a run.
 
   ## Response 202
   ```json

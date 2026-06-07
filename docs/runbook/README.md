@@ -22,8 +22,7 @@ Operator-facing руководства по эксплуатации kb-llamaind
 | [`../MODELS.md`](../MODELS.md) | Model selection guidance, capability flags, escalation path |
 | [`../DEPLOYMENT.md`](../DEPLOYMENT.md) | Deploy-сценарии |
 | [`../SEARCH.md`](../SEARCH.md) | Search-подсистема: архитектура R7b (`/search/{local,global,drift,auto}`), workflows, очереди |
-| [`../architecture.html`](../architecture.html) | Визуальная карта системы (открывается в браузере) |
-| [`../architecture.d2`](../architecture.d2) / [`../architecture.svg`](../architecture.svg) | D2-источник + рендер |
+| [`../diagrams/system_architecture.svg`](../diagrams/system_architecture.svg) / [`../diagrams/system_architecture.d2`](../diagrams/system_architecture.d2) | Визуальная карта системы (рендер + D2-источник) |
 
 ## Плэны и specs
 
@@ -33,7 +32,7 @@ Operator-facing руководства по эксплуатации kb-llamaind
 ## Что обновляется когда
 
 - Добавляешь новую фичу → новый файл `docs/runbook/<feature>.md` + строка в этом index'е
-- Меняешь архитектуру / data flow → обновить `ARCHITECTURE.md` + `architecture.html` + `architecture.d2`
+- Меняешь архитектуру / data flow → обновить `ARCHITECTURE.md` + `diagrams/system_architecture.d2` (перерендерить `.svg`)
 - Меняешь модели / роли → `MODELS.md`
 - Меняешь Grafana JSON → секция в `analytics.md` обновляется
 

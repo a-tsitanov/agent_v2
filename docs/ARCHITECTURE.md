@@ -1,371 +1,237 @@
 # Architecture
 
-`kb-llamaindex` is a multi-store, async RAG service.  It accepts
-documents in any language, normalises the knowledge graph to
-Russian (entities + descriptions + relations), preserves the
-source-language chunk text for citation fidelity, and serves three
-parallel search endpoints with increasing levels of agentic
-sophistication.
+`kb-llamaindex` is a multi-store, durable-execution RAG service. It
+accepts documents in any language, normalises the knowledge graph to
+Russian (entity names + descriptions + relations) while preserving the
+source-language chunk text for citation fidelity, and serves four
+search modes (`local` / `global` / `drift` / `auto`) of increasing
+agentic sophistication.
 
-This document is the **single map** of the system — every other
-doc (`DEPLOYMENT.md`, `SEARCH.md`, `runbook/search-usage.md`,
-`MODELS.md`) drills into a specific layer.
+This document is the **high-level map**. Deeper docs drill into each
+layer:
 
-> ⚠️ **Note (2026-05-19):** Section 3 «Ingestion data flow» below
-> describes the **taskiq-era** pipeline; the current implementation
-> uses **Temporal workflows** with a `DocumentIngestWorkflow` parent
-> + `GraphBuildWorkflow` child (for `merge_and_resolve` +
-> `build_property_graph`).  Per-activity model attribution lives in
-> the Postgres `ingest_metrics` table.  Read the updated story in
-> [`runbook/multimodel.md`](runbook/multimodel.md) (current state +
-> code excerpts) and [`runbook/analytics.md`](runbook/analytics.md)
-> (observability).  This section is retained as a reference for the
-> pre-Temporal design — it will be rewritten in a future sprint.
-
----
-
-## 1. Top-level data flow
-
-```
-┌─────────────┐                                        ┌──────────────┐
-│  user       │                                        │  user        │
-│  upload     │                                        │  query       │
-└──────┬──────┘                                        └──────┬───────┘
-       ▼                                                      ▼
-┌──────────────┐    ┌──────────┐                       ┌──────────────┐
-│ POST         │    │ RabbitMQ │                       │ POST         │
-│ /api/v1/     │───►│ taskiq   │                       │ /api/v1/     │
-│ ingest       │    │ broker   │                       │ search       │
-└──────────────┘    └────┬─────┘                       │ /agent       │
-                         │                             │ /selfrag     │
-                         ▼                             │ /legacy/agent│
-                  ┌──────────────┐                     └──────┬───────┘
-                  │ Taskiq       │                            │
-                  │ worker       │                            │
-                  │ process_doc  │                            ▼
-                  └──────┬───────┘            ┌───────────────────────────┐
-                         │                    │ Retrieval stack:          │
-            ┌────────────┼────────────┐       │  Milvus  · Neo4j · FS     │
-            ▼            ▼            ▼       └────────────┬──────────────┘
-       ┌────────┐  ┌─────────┐  ┌─────────┐                │
-       │ Milvus │  │ Neo4j   │  │Postgres │                ▼
-       │chunks  │  │KG nodes │  │job state│        ┌──────────────┐
-       │embedded│  │+typed   │  │+source  │        │ LLM via      │
-       │vectors │  │rels     │  │ path    │        │ LiteLLM      │
-       └────────┘  └─────────┘  └─────────┘        │ (OpenAI /    │
-                                                   │  Ollama)     │
-                                                   └──────────────┘
-```
-
-Four storage backends, one shared LLM/embed gateway (LiteLLM),
-two long-lived processes (API + taskiq worker).
-
----
-
-## 2. Storage components
-
-| Store | Role | Connection | Wipe target |
-|---|---|---|---|
-| **Milvus** | Vector index over chunks. One record per chunk: `id, text, embedding, metadata`. The `text` is the **original-language** chunk; embeddings are produced by the multilingual `text-embedding-3-small` (1536-dim). | `MILVUS_HOST:MILVUS_PORT` (default `localhost:19530`); collection `MILVUS_COLLECTION` (default `kb_llamaindex`). | Drop collection. |
-| **Neo4j** | Property graph: `:__Entity__:<EntityType>` nodes (typed), `:Chunk` nodes (linked to entities via `:MENTIONS`), semantic relations between entities (`:CAUSATION`, `:RISK_FACTOR`, ...). Entity names + descriptions stored **in Russian** post-merge. | `NEO4J_URI` (default `bolt://localhost:7687`). | `MATCH (n) DETACH DELETE n` + drop non-constraint indexes. |
-| **Postgres** | Job-status table `documents(id, path, department, doc_type, status, error, summary, created_at, updated_at)`. Maps `doc_id` UUID → on-disk source path → upload metadata. | `POSTGRES_*` env block. | `TRUNCATE documents`. |
-| **RabbitMQ** | taskiq's broker. One queue: `process_document`. | `RABBITMQ_URL` (default `amqp://guest:guest@localhost:5672/`). | Force-recreate container + remove `rabbitmq_data` volume. |
-| **Filesystem** (`API_UPLOAD_DIR`) | Raw uploaded files. Used by `read_full_document` tool to surface the original text to the ReAct agent. | `API_UPLOAD_DIR` (default `/tmp/kb-uploads`). | `rm -rf $API_UPLOAD_DIR`. |
-| **LiteLLM proxy** | Single entry point for LLM + embedding calls. Routes to OpenAI by default (`gpt-4o-mini`, `text-embedding-3-small`). Container env reads `OPENAI_API_KEY` from host `.env`. | `LITELLM_BASE_URL` (default `http://localhost:4000`). | Container restart (stateless). |
-
-Reset all of them at once: `uv run python -m scripts.wipe_db --yes`
-(see `scripts/wipe_db.py`).
-
----
-
-## 3. Ingestion data flow (per document)
-
-```
-Document file
-    │
-    ▼  POST /api/v1/ingest  (multipart upload)
-┌──────────────────────────────────────────────────┐
-│ src/api/routes/ingest.py:upload_document         │
-│   1. write file → ${API_UPLOAD_DIR}/{uuid}_{name}│
-│   2. INSERT documents(status='pending')          │
-│   3. process_document.kiq(doc_id, path)          │
-└────────────────────┬─────────────────────────────┘
-                     │ taskiq → RabbitMQ
-                     ▼
-┌──────────────────────────────────────────────────┐
-│ src/ingestion/tasks.py:process_document          │
-│  → UPDATE documents.status = 'processing'        │
-└────────────────────┬─────────────────────────────┘
-                     ▼
-┌──────────────────────────────────────────────────┐
-│ src/ingestion/pipeline.py:build_ingestion_pipeline│
-│  Transformations (run by IngestionPipeline.arun):│
-│                                                  │
-│  1. SimpleDirectoryReader.load_data()            │
-│       → Document objects                          │
-│                                                  │
-│  2. SentenceSplitter(chunk_size=512, overlap=50) │
-│       → list[TextNode] (original-language text)  │
-│                                                  │
-│  3. IdentifierCanonicalizationTransform          │
-│       per chunk:                                 │
-│       • extract_identifiers(text) — regex sweep  │
-│         + checksum-validated detectors for 19    │
-│         types across three groups:               │
-│           business:  PhoneNumber, Email, INN,    │
-│                      OGRN, BIC, SNILS,           │
-│                      ContractNumber,             │
-│                      PostalAddress,              │
-│                      DocumentDate, Amount.       │
-│           digital:   URL, Domain, TelegramHandle,│
-│                      VKProfile, TwitterHandle,   │
-│                      InstagramHandle,            │
-│                      LinkedInProfile,            │
-│                      YouTubeChannel,             │
-│                      GitHubProfile, UUID.        │
-│           device:    IMEI (Luhn), MACAddress,    │
-│                      LicensePlate (RU pattern    │
-│                      + context-anchored generic),│
-│                      VIN (mod-11).               │
-│         Overlap resolver favours specialised     │
-│         types over generic (URL > Domain etc.).  │
-│       • node.metadata['canonical_identifiers']   │
-│         ← list[dict]  (canonical+original+span)  │
-│       • node.text += "\\nКанонические идентификато│
-│         ры: ..."  (augment block — feeds the LLM │
-│         extractor in-band)                       │
-│                                                  │
-│  4. TranslateToRussianTransform  (NEW)           │
-│       per chunk:                                 │
-│       • _looks_russian(text)? → skip (no LLM)    │
-│       • else: LLM call with TRANSLATE_PROMPT     │
-│         (preserves proper nouns / IDs /          │
-│          inline-code / drug names)               │
-│       • node.metadata['translated_text'] ← RU   │
-│       • node.text is UNCHANGED                  │
-└────────────────────┬─────────────────────────────┘
-                     │ list[TextNode]
-                     ▼
-┌──────────────────────────────────────────────────┐
-│ Vector indexing                                  │
-│   src/retrieval/vector_index.py:index_nodes      │
-│   → MilvusVectorStore.upsert(nodes)              │
-│     stores original-language text + embedding    │
-└────────────────────┬─────────────────────────────┘
-                     ▼
-┌──────────────────────────────────────────────────┐
-│ Graph build (best-effort, wrapped in try/except) │
-│                                                  │
-│  Step A — canonical identifier nodes             │
-│   src/ingestion/identifier_transform.py          │
-│   :inject_canonical_entities                     │
-│       reads canonical_identifiers metadata,      │
-│       upserts EntityNode(label='Email', ...) etc │
-│       to Neo4j with snippet±80chars description  │
-│                                                  │
-│  Step B — LightRAG-style extraction              │
-│   src/graph/lightrag_extract.py:LightRAGExtractor│
-│       per chunk: ONE LLM call reading            │
-│         node.metadata['translated_text'] (RU)    │
-│       prompt outputs entity<|#|>name<|#|>type<|#|>│
-│         description and relation<|#|>...<|#|>... │
-│       node.metadata[KG_NODES_KEY] ← EntityNode[] │
-│       node.metadata[KG_RELATIONS_KEY] ← Relation[]│
-│                                                  │
-│  Step C — cross-chunk merge                      │
-│   src/graph/merge.py:merge_kg_extraction         │
-│       aggregates per name; concat (<8 mentions,  │
-│       <12k chars) OR LightRAG summarize-LLM call.│
-│       Same for relations (undirected pair key).  │
-│                                                  │
-│  Step D — PropertyGraphIndex(NoOpKGExtractor)    │
-│       writes :Chunk nodes (ORIGINAL text),       │
-│       creates :Chunk-[:MENTIONS]→:__Entity__,    │
-│       embeds entities inline for graph search.   │
-│       Pops the per-chunk metadata.               │
-│                                                  │
-│  Step E — graph_store.upsert_nodes/upsert_relations│
-│       Overwrites per-chunk descriptions with     │
-│       cross-chunk merged versions.               │
-└────────────────────┬─────────────────────────────┘
-                     ▼
-┌──────────────────────────────────────────────────┐
-│ UPDATE documents.status = 'completed' (or        │
-│ 'failed' + error message on any uncaught raise)  │
-└──────────────────────────────────────────────────┘
-```
-
-### Why graph work is best-effort
-
-If Neo4j is unreachable OR the LLM extraction fails on a chunk,
-the worker swallows the exception and continues.  The vector
-index (Milvus) is still populated; `/api/v1/search` will work,
-just without the graph layer.  This is intentional — graph is
-**augmentation**, not blocking.  Error visible in logs and the
-`documents.error` field.
-
-### Re-ingest cost (1 MB English corpus, ~514 chunks)
-
-| Step | LLM calls |
+| Doc | Covers |
 |---|---|
-| Translate to Russian | ~514 |
-| LightRAG extract | ~514 |
-| Cross-chunk merge summary (≥8 occurrences) | ~100-150 |
-| Entity description (embedding only, not LLM) | ~2 500 embeddings |
-| **Total LLM chat calls** | **~1 200** |
-| Wall time on gpt-4o-mini | ~15-25 minutes |
+| [`INGEST.md`](INGEST.md) | Ingest pipeline — activities, queues, claim-check staging, degradation |
+| [`SEARCH-FLOW.md`](SEARCH-FLOW.md) / [`SEARCH.md`](SEARCH.md) | Four search modes + deterministic retrieval pipeline + GraphRAG map-reduce |
+| [`QUEUES.md`](QUEUES.md) | Temporal task queues + per-queue concurrency caps |
+| [`FEATURES.md`](FEATURES.md) | Every feature: what / why / how + the controlling env var |
+| [`MODELS.md`](MODELS.md) | Per-role model guidance + swap procedure |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Docker stack + ops |
+| [`runbook/`](runbook/) | Operator playbooks (mcp, search-usage, multimodel, analytics, wikibase, wiki-editor, er-native-vector-knn) |
 
-Set `INGESTION_TRANSLATE_TO_RUSSIAN=false` to drop ~514 calls
-(graph stays in source language).
-
----
-
-## 4. Query data flow (`/api/v1/search/{local,global,drift,auto}`)
-
-Architecture detail in `docs/SEARCH.md`; usage + tuning in
-`docs/runbook/search-usage.md`.  All four modes share
-`SearchRequest`/`SearchResponse` and run as Temporal workflows.  The
-legacy ReAct/Self-RAG routes (`/search`, `/agent`, `/selfrag`,
-`/legacy/agent`) and the monolithic `SearchWorkflow` were REMOVED in the
-R7b cutover.
-
-```
-POST /api/v1/search/local ──► SearchOrchestratorWorkflow (plan-execute):
-  plan_subquestions (small)
-    → fan-out N× SubQueryRetrievalWorkflow in parallel, each running
-        vector_search + graph_search + find_entity_by_name (+ auto-seeded
-        bounded graph_walk)
-    → merge/dedup by chunk_id
-    → coverage gate (one extra sub-question on a named gap)
-    → rerank (bge cross-encoder, top-N)
-    → synthesize_answer (large tier, single call)
-  ⇒ SearchResponse { answer, mode, sources[], documents[], latency_ms }
-
-POST /api/v1/search/global ──► GlobalSearchWorkflow: map-reduce over the
-  GDS-Leiden community summaries (small-tier MAP per community → large REDUCE).
-
-POST /api/v1/search/drift  ──► local pass, then global expansion seeded with
-  the local sources (documents[] = union of both).
-
-POST /api/v1/search/auto   ──► route_query (small) classifies → dispatches to
-  local / global / drift; fail-safe → local.
-
-POST /api/v1/admin/communities/rebuild ──► offline CommunityBuildWorkflow
-  (GDS Leiden + per-community summaries) on the kb-graph-build queue.
-
-GET  /api/v1/documents/{doc_id} ──► stream the original uploaded file from MinIO.
-```
-
-### Russian-only output
-
-The `synthesize_answer` activity
-(`src/workflow/activities/synthesize_answer.py`) wraps the query with a
-Russian-output instruction before synthesis, so the answer language
-matches the graph normalisation regardless of source-language chunks.
+> Diagram: [`diagrams/system_architecture.svg`](diagrams/system_architecture.svg)
+> (source [`diagrams/system_architecture.d2`](diagrams/system_architecture.d2)).
+> Per-flow diagrams live next to their docs (`diagrams/ingest_flow.*`,
+> `diagrams/search_modes.*`, `diagrams/kb_search_flow.*`).
 
 ---
 
-## 5. Layer responsibilities
+## 1. Components at a glance
 
-| Layer | Module | Responsibility |
+Two long-lived processes plus a stack of stateful backends:
+
+- **API** (`src/api/`) — FastAPI on `:8000`. Thin HTTP surface
+  (`/search/*`, `/ingest`, `/documents/{id}`, `/admin/*`), auth via
+  `X-API-Key`. Routes validate, submit Temporal workflows, and stream
+  results — business logic lives in the workflow/activity/graph
+  modules, not the routes.
+- **Temporal worker** (`src/workflow/worker.py`) — hosts the workflow
+  definitions and all activities across several `Worker` pools (one per
+  task queue) in a single process. Durable execution: automatic
+  retries, heartbeats, idempotent activities, replay-safe code.
+- **MCP servers** (`src/mcp/`) — two optional surfaces (stdio + HTTP/SSE)
+  that expose search to external LLM clients (OpenWebUI / Claude
+  Desktop / Cursor): **MCP-1** `:9001` (`kb_search`, submits the search
+  workflow) and **MCP-2** `:9002` (6 atomic in-process retrieval tools).
+  See [`runbook/mcp.md`](runbook/mcp.md).
+
+Cross-cutting:
+
+- **LiteLLM proxy** `:4000` — the single model gateway. All chat and
+  embedding calls route through it (per-role models: extraction / judge
+  / search / synthesis; multilingual embeddings).
+- **LLMPool** (`src/retrieval/llm_pool.py`) — a per-process concurrency
+  governor that sits *above* Temporal's queue caps: a per-tier ceiling
+  (small = GPU capacity, large = API budget) plus per-role lanes,
+  acquired lane-first then tier-global. Temporal caps are set generous
+  so the pool is the real arbiter of concurrent LLM calls.
+
+---
+
+## 2. Data stores — what each one holds
+
+| Store | Holds | Connection (default) |
 |---|---|---|
-| **API** | `src/api/main.py`, `src/api/routes/*.py` | HTTP surface, auth via `X-API-Key`, request validation. Routes are thin — business logic lives in retrieval modules. |
-| **DI** | `src/di/providers.py` | Long-lived singletons. Two containers: API and worker. See section 6. |
-| **Ingestion** | `src/ingestion/{pipeline,identifier_transform,translate_transform,embeddings,run}.py` | Parse → chunk → identifier-canon → translate-to-RU → vector index + KG. Orchestrated by Temporal (`DocumentIngestWorkflow`). |
-| **Retrieval** | `src/retrieval/{vector_index,hybrid,atomic_tools,reranker,query_planner,llm,llm_semaphore,hf_offline,_common}.py` | Retrieval primitives (vector/graph atomic tools), bge reranker, query planner, LiteLLM tiers. Self-contained — no API dependencies. |
-| **Graph** | `src/graph/{schema,store,index,retriever,communities,entity_resolution,canonical_linker,lightrag_extract,lightrag_parse,lightrag_prompts,merge}.py` | Entity/relation taxonomy, LightRAG extraction + parser, cross-chunk merge, entity resolution, GDS-Leiden communities, Neo4j wiring. |
-| **Storage** | `src/storage/{postgres,chunk_repository,minio}.py` | Document-status table; doc-id keyed access to chunks (Milvus) + original files (MinIO). |
-| **Observability** | `src/observability/trace.py` | Per-request `Trace` bound via ContextVar. `record_event(...)` collects tool/llm/refinement events. |
-| **Models** | `src/models/search.py` | Pydantic shapes shared API ↔ services. |
+| **Milvus** | Chunk vector index — one record per chunk (`id, text, embedding, metadata`). `text` is the **original-language** chunk; embeddings come from the multilingual embed model via LiteLLM. ANN index is **HNSW** (`MILVUS_INDEX_TYPE`, `FLAT` for exact). | `MILVUS_HOST:MILVUS_PORT` (`localhost:19530`); collection `MILVUS_COLLECTION` |
+| **Neo4j** | Property graph **and** two native indexes in one store: `:__Entity__:<Type>` nodes + typed relations (names/descriptions **in Russian** post-merge), `:Chunk` nodes linked via `(:Chunk)-[:MENTIONS]->(:__Entity__)`, a **native vector index** over entity embeddings (`graph_search` kNN; plus `er_vec` for native-vector ER), a **fulltext index** on `__Entity__.name` (`find_entity_by_name`), and `:Community` hierarchy + reports (`community_report_vec`) for global search. | `NEO4J_URI` (`bolt://localhost:7687`) |
+| **Postgres** | `documents` job/status table (doc_id → status → metadata) and `ingest_metrics` (per-activity durations + per-role model tags for analytics). | `POSTGRES_*` |
+| **MinIO** | Uploaded source files (served back by `GET /documents/{id}`) **and** claim-check staging blobs — heavy ingest state (parsed nodes, KG, merged entities) pickled and passed between activities by URI. | `MINIO_*` (console `:9001`, S3 API `:9000`) |
+| **Wikibase / MediaWiki** | The curated **canonical anchor**: a self-hosted Wikibase Item per entity (`push_wikibase`, opt-in) + per-entity MediaWiki article pages written by the continuous wiki editor. WDQS provides the SPARQL endpoint. | `wikibase` / `wdqs` containers |
+
+Supporting infra: **etcd** + **MinIO** back Milvus; **wikibase-mysql**
+(MariaDB) backs Wikibase; **temporal** (+ **temporal-ui** `:8080`) is
+the durable-execution backend; **Prometheus** + **Grafana** are
+observability. See [`DEPLOYMENT.md`](DEPLOYMENT.md) / `docker-compose.yml`.
+
+Reset everything: `uv run python -m scripts.wipe_db --yes`.
 
 ---
 
-## 6. Dependency Injection
+## 3. Ingest path
 
-`src/di/providers.py` uses Dishka.  Two containers:
+`POST /ingest` uploads the file to MinIO, inserts a `pending` row in
+Postgres, snapshots the per-role model names, and starts the durable
+**`DocumentIngestWorkflow`** (queue `kb-ingest`). The workflow runs a
+fixed activity sequence; heavy state travels as **MinIO blobs by URI**
+(claim-check) so only small contracts ride Temporal payloads.
 
-### `CommonProvider` (both API + worker)
+Two halves, deliberately separated:
 
-* `postgres: AsyncPostgres` — connection-per-call thin wrapper.
-* `llm: LLM` — `OpenAILike` pointing at LiteLLM proxy.
-* `embed_model: BaseEmbedding` — same proxy, embedding endpoint.
+- **Vector half** — `fetch_source` → `parse_and_chunk` (split →
+  deterministic identifier canonicalization → optional translate-to-RU)
+  → `index_vector` (embed → Milvus). If this fails, ingest fails
+  (`mark_failed`).
+- **Graph half** — `inject_canonical` (identifier entities into Neo4j)
+  → `extract_kg` (LightRAG, one LLM call/chunk, queue `kb-ingest-llm`)
+  → **`GraphBuildWorkflow` child** (queue `kb-ingest-merge`):
+  `merge_and_resolve` (cross-chunk merge → phone consolidation →
+  entity resolution) → `build_property_graph` (upsert to Neo4j).
 
-### `ApiProvider` (API only)
+**Degradation:** if the graph half raises/times out, the parent catches
+it and sets `graph_status = "vector_only"` — the document is still
+vector-searchable, the graph is just skipped (and `push_wikibase` with
+it). Graph is augmentation, not a blocker.
 
-* `retriever: RetrieverProtocol` — `VectorIndexRetriever` over the
-  Milvus index, `similarity_top_k=10`.
-* `judge: JudgeProtocol` — `LLMJudge` for the legacy agentic loop.
-* `synthesizer: BaseSynthesizer | SynthesizerProtocol` — LlamaIndex
-  `COMPACT` synthesizer.
-* `chunk_repository: ChunkRepository` (NEW) — wraps Milvus + Postgres
-  for the agent's `get_chunks_by_doc_id` / `read_full_document` tools.
-* `graph_retriever: GraphRetrieverProtocol | None` — attaches to the
-  already-populated Neo4j store via PropertyGraphIndex.  Falls back
-  to `None` if Neo4j is unreachable; all agent paths handle that
-  natively.
+Best-effort tails: `mark_entities_dirty` (flag entities for the wiki
+editor) and `push_wikibase` (project into the Wikibase anchor, only if
+the graph completed), then `finalize` writes the final status +
+`ingest_metrics`.
 
-`build_api_container()` / `build_worker_container()` produce these.
+Full activity table, sequence diagram, staging contracts → [`INGEST.md`](INGEST.md).
+
+---
+
+## 4. Search path
+
+`POST /search/{local,global,drift,auto}` — all four are durable Temporal
+workflows submitted from `src/api/routes/search_v2.py`, sharing one
+`SearchRequest` / `SearchResponse` shape (including client-managed
+`history` for multi-turn).
+
+| Mode | Workflow | Shape |
+|---|---|---|
+| `local` | `SearchOrchestratorWorkflow` | plan sub-questions → fan-out parallel `SubQueryRetrievalWorkflow` → merge/dedup → coverage gate → bge rerank → large-tier synthesis |
+| `global` | `GlobalSearchWorkflow` | GraphRAG map-reduce over community reports (MAP small-tier per community → REDUCE large-tier once) |
+| `drift` | `DriftSearchWorkflow` | local pass, then global expansion seeded with the local sources; degrades to the local answer if global fails |
+| `auto` | `AutoSearchWorkflow` | `route_query` classifies → dispatches local/global/drift (fail-safe → local) |
+
+Key properties:
+
+- **Deterministic retrieval, not a ReAct loop.** Each sub-question runs
+  a fixed tool sequence — `vector_search` (Milvus) → `graph_search`
+  (Neo4j native-vector entity kNN + LLM synonyms) → `find_entity_by_name`
+  (Neo4j fulltext) → `graph_walk` (bounded N-hop, dual-seeded from both
+  the top graph_search and fulltext entity). Results merge + dedup by
+  `chunk_id`. (The older Self-RAG / ReAct path was **removed** in the
+  R7b cutover.)
+- **Conversation history** — when `history` is present, a
+  `contextualize_query` activity rewrites the follow-up into a
+  standalone question once at the start of the workflow.
+- **Hierarchical communities** — global/drift select over a Leiden
+  **hierarchy** of `:Community` nodes with structured reports, via
+  lexical / semantic-kNN / hierarchy-descent selection. Communities are
+  built **offline** by `CommunityBuildWorkflow` (queue `kb-graph-build`,
+  admin-triggered), fully decoupled from the query hot path.
+- **Russian-only output** — `synthesize_answer` wraps the query with a
+  Russian-output instruction so the answer language matches the graph
+  normalisation regardless of source-language chunks.
+
+Modes, retrieval tools, community selection → [`SEARCH-FLOW.md`](SEARCH-FLOW.md)
+and [`SEARCH.md`](SEARCH.md).
+
+---
+
+## 5. Durable execution & queues
+
+The worker hosts one `Worker` pool per task queue so GPU / LLM pressure
+on one workload can't starve another (head-of-line blocking). Queues:
+
+| Queue | Hosts | Cap (default) |
+|---|---|---|
+| `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding activities | 4 |
+| `kb-ingest-llm` | `extract_kg` only (extract lane) | 18 |
+| `kb-ingest-merge` | `GraphBuildWorkflow` + merge/build (merge lane) | 14 |
+| `kb-search-small` | search workflows + plan/retrieve/coverage/rerank/route/map activities | 4 |
+| `kb-search-large` | `synthesize_answer` only (large-tier final synthesis) | 2 |
+| `kb-graph-build` | `CommunityBuildWorkflow` (offline GDS-Leiden communities) | 2 |
+| `kb-wiki` | `WikiSweepWorkflow` (continuous per-entity MediaWiki editor) | 4 |
+
+Temporal's per-queue caps bound how many activities *schedule*; the
+per-process **LLMPool** then bounds how many LLM calls actually run
+concurrently (tier ceiling + role lanes). Caps are kept ≥ the pool's
+lane ceilings so the pool arbitrates first. Full rationale + the
+`TEMPORAL_*_ACTIVITY_CONCURRENCY` knobs → [`QUEUES.md`](QUEUES.md).
+
+---
+
+## 6. Knowledge anchor & wiki editor
+
+Beyond the RAG stores, entities flow into a curated identity layer:
+
+- **Wikibase populator** (`push_wikibase`, opt-in `WIKIBASE_ENABLED`) —
+  ingest mints/patches a Wikibase Item per entity keyed on
+  `wikibase_qid`, folding identifier-type entities as external-id
+  statements; queryable via WDQS SPARQL.
+- **Continuous wiki editor** (`WikiSweepWorkflow`, queue `kb-wiki`,
+  opt-in `WIKI_ENABLED`) — ingest marks touched entities `wiki_dirty`;
+  a scheduled sweep rewrites a bot-managed MediaWiki article section
+  per entity **from graph facts only** (anti-drift, cited), preserving
+  human edits, skipping unchanged entities via a subgraph hash.
+
+→ [`runbook/wikibase.md`](runbook/wikibase.md),
+[`runbook/wiki-editor.md`](runbook/wiki-editor.md), [`FEATURES.md`](FEATURES.md#3-knowledge-anchors).
 
 ---
 
 ## 7. Observability
 
-Every request bound to a search endpoint is wrapped in a
-`trace_request(endpoint, query)` context manager from
-`src/observability/trace.py`:
+- **Temporal UI** `:8080` — workflow/activity timelines, retries,
+  failures.
+- **Prometheus** + **Grafana** — the worker exports Temporal SDK metrics
+  via a Prometheus exporter (`src/workflow/worker.py::_build_runtime`,
+  gated on `METRICS_ENABLED`); Grafana dashboards (Ingest Overview,
+  Version compare, Run drill-down) read those plus the Postgres
+  `ingest_metrics` table.
+- **`ingest_metrics`** — per-activity durations + per-role model tags
+  (snapshotted at submit), so dashboards attribute each step to the
+  exact model that ran it even after a model swap.
+- **Answer-quality eval** — `tests/eval/` grades endpoint responses
+  (fact/entity recall, citation precision, hallucination bound)
+  deterministically and offline.
 
-* `record_event("tool_call", payload={"tool_name": "..."})` —
-  every retriever / graph / chunk-repo / synthesizer call.
-* `record_event("llm_call", payload={"kind": "reasoning"})` —
-  every ReAct or reflective LLM call.
-* `record_event("refinement_round", ...)` — per Self-RAG iteration.
-* `record_timed(name, ...)` — times a block, attaches duration.
-
-`Trace.summary()` aggregates totals + tool breakdown — logged at
-request end via loguru.  Contextvar-scoped so concurrent requests
-stay isolated and async tasks inherit the trace automatically.
-
-The R9 answer-quality eval (`tests/eval/answer_quality.py` +
-`run_answer_eval.py`) is deterministic and offline — grades
-endpoint responses by substring fact recall, entity recall,
-citation precision, hallucination upper bound, and uncertainty
-honesty.  Optional `--medical-sample N` flag (from
-`tests/eval/medical_fixture.py`) adds N items from a 2 062-Q
-medical benchmark.
+→ [`runbook/analytics.md`](runbook/analytics.md).
 
 ---
 
 ## 8. Configuration
 
-All settings flow through `src/config.py` (pydantic-settings)
-which reads `.env`.  Per-subsystem namespaces:
-
-| Prefix | Drives |
-|---|---|
-| `API_` | host/port, log level, upload dir, X-API-Key allow-list |
-| `MILVUS_` | host/port, collection name, timeout, vector dim (must match embed model) |
-| `NEO4J_` | URI, auth, database |
-| `POSTGRES_` | DSN bits |
-| `RABBITMQ_` | URL, timeout |
-| `LITELLM_` | base_url, api_key, llm_model, embedding_model, embedding_dim, timeout, retries |
-| `INGESTION_` | chunk size/overlap, cache_dir, **translate_to_russian**, **translation_concurrency** |
-| `AGENT_` | max_iterations, max_refinements, top_k, enable_legacy_agent |
-| `OPENAI_API_KEY` | propagated into the LiteLLM container |
-
-Model swap procedure → `docs/MODELS.md`.
+All settings flow through `src/config.py` (pydantic-settings, reads
+`.env`), namespaced per subsystem: `API_`, `MILVUS_`, `NEO4J_`,
+`POSTGRES_`, `MINIO_`, `LITELLM_`, `TEMPORAL_`, `INGESTION_`, `AGENT_`,
+`LLM_POOL_`, `WIKIBASE_` / `WIKI_`, `METRICS_`. New-feature toggles
+(native-vector ER, conversation history, dual walk-seed, hierarchical
+communities, Milvus index type) are listed in
+[`FEATURES.md`](FEATURES.md#config-quick-reference-new-feature-env-vars);
+the model-swap procedure is in [`MODELS.md`](MODELS.md).
 
 ---
 
-## 9. What's NOT in the architecture (yet)
+## 9. Not yet wired
 
-* Hybrid retriever (BM25 + vector RRF) is implemented in
-  `src.retrieval.hybrid` but not wired into DI — production BM25
-  needs a separate docstore decision.
-* Periodic graph deduplication / cross-document alias-merge
-  (different Russian renderings of the same concept) — not yet.
-* Multi-tenant data isolation — `department` field flows through
-  metadata but no enforcement at retrieve time.
-* Caching of agent tool results across requests.
-* Streaming responses (SSE) on the search endpoints.
-* Document-level summary (the `documents.summary` Postgres column
-  is reserved but unused).
+- Hybrid retriever (BM25 + vector RRF) exists in
+  `src/retrieval/hybrid.py` but isn't in the live retrieval path.
+- Multi-tenant data isolation — `department` flows through metadata but
+  isn't enforced at retrieve time.
+- A configured Temporal **Schedule** for community/wiki rebuilds (today
+  they're admin-triggered).

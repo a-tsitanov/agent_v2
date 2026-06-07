@@ -7,7 +7,17 @@
 удалены в R7b cutover.)
 
 Все запросы: заголовок `X-API-Key`, тело `{"query": "...", "top_k": 10}`,
-ответ `{query, answer, mode, sources[], latency_ms}`.
+ответ `{query, answer, mode, sources[], documents[], latency_ms}`. Поле
+`documents[]` — это `{doc_id, url}` ссылки на скачивание оригиналов
+(`GET /api/v1/documents/{doc_id}`, см. §«Скачивание источника» ниже); `sources[]`
+несёт чанки `{doc_id, chunk_id, content, score}`.
+
+Поля тела, которые **реально потребляются** воркфлоу: `query`, `top_k`,
+`history` (см. §«История диалога»). Остальные поля `SearchRequest`
+(`mode`, `department`, `doc_type_filter`, `created_after/before`,
+`response_type`, `include_references`, `user_id`) приняты для обратной
+совместимости, но текущими plan-execute / GraphRAG-флоу **игнорируются** —
+не полагайтесь на них для фильтрации.
 
 ## Выбор режима + параметры (стрелка = эффект при увеличении)
 
@@ -22,6 +32,32 @@
 - `TEMPORAL_LARGE_ACTIVITY_CONCURRENCY` (2) — одновременные синтезы; низкий → при многих запросах синтезы встают в очередь (head-of-line).
 - `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) — параллельные сессии на small-очереди.
 - `AGENT_LLM_MAX_CONCURRENT` (8) — общий семафор LLM-вызовов (защита GPU/прокси).
+
+### История диалога (`history`)
+Многоходовой диалог: клиент сам ведёт историю и шлёт её в каждом запросе.
+```json
+{
+  "query": "А какие у него побочные эффекты?",
+  "top_k": 10,
+  "history": [
+    {"role": "user", "content": "Что известно про препарат Цисплатин?"},
+    {"role": "assistant", "content": "Цисплатин — это…"}
+  ]
+}
+```
+- `history` — список `{role, content}` (`role` = `user` | `assistant`). Пусто → одиночный запрос без контекстуализации.
+- Прокидывается в local- и global-флоу (`_local_params` / `_global_params` →
+  `ConversationTurnDict`). Контекстуализация (переписывание текущего вопроса с
+  учётом истории) включается флагом `AGENT_CONVERSATION_HISTORY_ENABLED`; если он
+  выключен — `history` принимается, но игнорируется.
+- История **client-managed**: сервер её не хранит между запросами.
+
+### ⚠️ Граф-глубина / hops — это НЕ параметры HTTP-запроса
+Per-call knobs `graph_search.depth` и `find_neighbours.hops` существуют только в
+**MCP-инструментах** (`src/mcp/tools_server.py`), не в HTTP `/search/*`. В HTTP-API
+глубина similarity-обхода графа задаётся **конфигом** `AGENT_GRAPH_SEARCH_PATH_DEPTH`
+(default 1, clamp 1–3 — см. `src/config.py` / `src/graph/retriever.py`), а не полем
+тела запроса. Тело `SearchRequest` поля глубины/hops не содержит.
 
 ### ⚠️ Правило перезапуска
 Все `AGENT_*` / `TEMPORAL_*` / `LITELLM_*` / `HF_*` читаются **на submit-time**
@@ -67,9 +103,48 @@ curl -s -X POST localhost:8000/api/v1/search/auto \
   "sources": [
     {"doc_id": "D-123", "chunk_id": "…", "content": "…", "score": 0.87}
   ],
+  "documents": [
+    {"doc_id": "D-123", "url": "/api/v1/documents/D-123"}
+  ],
   "latency_ms": 4213
 }
 ```
+
+## Скачивание источника (`documents[]` → оригинал)
+Каждый `doc_id` из `sources[]` / `documents[]` можно скачать как исходный файл:
+
+```bash
+# documents[].url уже относительный: "/api/v1/documents/<doc_id>"
+curl -s -OJ localhost:8000/api/v1/documents/<doc_id> -H "X-API-Key: $KEY"
+```
+
+`GET /api/v1/documents/{doc_id}` стримит оригинал из MinIO (URI берётся из
+`documents.path` в Postgres) с `Content-Disposition: attachment` и корректным
+`filename*` (RFC 6266). Legacy-документы с локальным путём (до MinIO) отдаются
+с диска, если файл ещё на месте. Коды: `401` (нет/битый ключ), `404` (нет
+документа или источник недоступен), `503` (MinIO недоступен).
+
+## Wiki-rebuild (отдельный admin-триггер, не путать с communities)
+`POST /api/v1/admin/communities/rebuild` (выше) строит граф-сообщества для
+`global`/`drift`. Это **другой** триггер, чем wiki-editor:
+
+> ⚠️ Путь wiki-rebuild — `/admin/wiki/rebuild` **без** префикса `/api/v1`. В отличие
+> от search/ingest/documents, `admin.router` подключён в `src/api/main.py` без
+> `/api/v1` и сам несёт `prefix="/admin/wiki"`. (Эндпоинт сейчас **не** требует
+> `X-API-Key` — на нём нет `require_api_key`-зависимости в коде.)
+
+```bash
+# Прогнать wiki-sweep по «грязным» сущностям:
+curl -s -X POST localhost:8000/admin/wiki/rebuild
+# Пометить ВСЕ сущности грязными и пересобрать статьи целиком:
+curl -s -X POST 'localhost:8000/admin/wiki/rebuild?all=true'
+# → {"status":"started","workflow_id":"wiki-sweep-manual"}  | {"status":"disabled"} если WIKI_ENABLED=false
+```
+
+`?all=true` сначала ставит `wiki_dirty=true` на каждый `:__Entity__` в Neo4j,
+затем запускает `WikiSweepWorkflow` на очереди `kb-wiki`. Без флага пересобираются
+только уже помеченные грязными сущности. При `WIKI_ENABLED=false` возвращает
+`{"status":"disabled"}` и ничего не делает.
 
 Подсказки по подбору режима:
 - запрос #1 (один пациент) на `/global` даст размытый обзор — берите `local`;

@@ -7,9 +7,28 @@
 
 ---
 
+> **⚠️ Обновлено (LLM-pool consolidation).** Этот runbook описывал
+> исходный multimodel-спринт, где роль выбирала **модель** напрямую
+> через `LITELLM_{EXTRACTION,JUDGE,SEARCH}_MODEL`. С тех пор две вещи
+> поменялись и описаны здесь как source of truth:
+> 1. **Модель-селекция теперь tier-based.** Операторы держат **две**
+>    модели (`LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE`); роль
+>    маппится на tier через `LITELLM_ROLE_TIERS`. Старых per-role
+>    *model* env-vars больше нет. Ролей теперь **семь** (extraction,
+>    judge, search, route, plan, retrieve, synthesis). См.
+>    [`../MODELS.md`](../MODELS.md).
+> 2. **Concurrency LLM-вызовов теперь принадлежит `LLMPool`**
+>    (per-process, `src/retrieval/llm_pool.py`): tier-ceiling +
+>    per-role lane. Temporal queue-caps теперь только isolation. См.
+>    [§ 3.5](#35-llmpool--concurrency-owner). Старый
+>    `AGENT_LLM_MAX_CONCURRENT` — мёртв.
+>
+> Механика **snapshot-at-submit → per-row `ingest_metrics.model`**
+> (ради чего спринт делался) — без изменений, всё ниже в §6–§7 верно.
+
 ## 1. Overview — что изменилось
 
-До спринта проект использовал **одну глобальную LLM** для всех LLM-вызовов: extract_kg, ER-judge, агент, Self-RAG synth, переводчик. После спринта добавлены три независимые роли — `extraction`, `judge`, `search`. Каждая может указать свою модель через env-переменную; если оставить пустой — fallback на `LITELLM_LLM_MODEL`.
+До спринта проект использовал **одну глобальную LLM** для всех LLM-вызовов: extract_kg, ER-judge, агент, Self-RAG synth, переводчик. Multimodel ввёл независимые роли, у каждой своя модель. **Сегодня** роль выбирает не модель напрямую, а **tier** (`small`/`large`), и tier указывает на одну из двух физических моделей (`LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE`). Дефолт: всё `small`, кроме `synthesis` → `large`.
 
 Параллельно вынесли тяжёлую graph-часть workflow (`merge_and_resolve` + `build_property_graph`) в отдельный **child Temporal workflow** `GraphBuildWorkflow`. Это дало три практических профита, описанных в [§ 4](#4-graphbuildworkflow--зачем-child-workflow).
 
@@ -18,7 +37,7 @@
 **Связь с другими runbook'ами:**
 - [`analytics.md`](analytics.md) — Grafana-дашборды, как читать `ingest_metrics`, version_tag-механика
 - [`wikibase.md`](wikibase.md) — Wikibase-population (parallel feature, не пересекается)
-- [`../MODELS.md`](../MODELS.md) — verseguidance по выбору модели per role
+- [`../MODELS.md`](../MODELS.md) — guidance по ролям, tier-map и LLMPool
 
 ---
 
@@ -26,86 +45,100 @@
 
 | Термин | Что значит |
 |---|---|
-| **Role** | Назначение LLM-вызова: `extraction` / `judge` / `search`. Не модель, а *роль*. |
-| **Per-role factory** | `build_extraction_llm()` / `build_judge_llm()` / `build_search_llm()` в `src/retrieval/llm.py:56-65`. |
+| **Role** | Назначение LLM-вызова. Семь: `extraction` / `judge` / `search` / `route` / `plan` / `retrieve` / `synthesis` (`src/config.py:LLMRole`). Не модель, а *роль*. |
+| **Tier** | Физический «слот»: `small` (GPU/local, high-volume) или `large` (synthesis). Роль → tier → одна из двух моделей (`LITELLM_MODEL_SMALL/LARGE`). |
+| **Pool accessor** | `get_llm_pool().get(role)` (`src/retrieval/llm_pool.py`) — возвращает ОДИН shared, concurrency-gated `BoundedLLM` на роль. Заменил прямые `build_*_llm()` фабрики на call-site'ах. |
+| **LLMPool** | Per-process owner LLM-concurrency: tier-ceiling + per-role lane, lane-first → tier-global. См. [§ 3.5](#35-llmpool--concurrency-owner). |
 | **Parent workflow** | `DocumentIngestWorkflow` — основной flow, запускается с `POST /api/v1/ingest`. ID-формат: `ingest-{doc_id}`. |
 | **Child workflow** | `GraphBuildWorkflow` — содержит `merge_and_resolve` + `build_property_graph`. ID-формат: `graph-{doc_id}`. |
 | **vector_only fallback** | Когда graph-часть упала (LLM down, ER timeout) — parent ловит ошибку, помечает `graph_status="vector_only"`, документ остаётся доступен для vector-поиска, KG не строится. |
-| **Snapshot моделей** | API в момент `/ingest` снимает текущие значения `LITELLM_*_MODEL` и кладёт их в `IngestParams` — поэтому смена env между ingest'ами отражается только на новых документах. |
-| **`models_per_role`** | dict `{"extraction": "...", "judge": "...", "search": "..."}` который extractor получает в момент finalize, чтобы заполнить `model` колонку. |
+| **Snapshot моделей** | API в момент `/ingest` снимает резолв-результат per-role моделей (`cfg.model_for(role)`) и кладёт в `IngestParams` — смена env между ingest'ами отражается только на новых документах. |
+| **`models_per_role`** | dict `{role: model}` который extractor получает в момент finalize, чтобы заполнить `model` колонку. |
 
 ---
 
 ## 3. Per-role LLM configuration
 
-### 3.1 Env-переменные
+### 3.1 Env-переменные (две модели + tier-map)
 
-| Env var | Default | Используется в |
-|---|---|---|
-| `LITELLM_LLM_MODEL` | `gpt-4o-mini` | Глобальный fallback. Если per-role env не задана — используется эта. |
-| `LITELLM_EXTRACTION_MODEL` | `""` (fallback) | `extract_kg`, `parse_and_chunk` (translator), CLI `python -m src.ingestion.run` |
-| `LITELLM_JUDGE_MODEL` | `""` (fallback) | `merge_and_resolve` — ER LLM-judge + cross-chunk merge summary |
-| `LITELLM_SEARCH_MODEL` | `""` (fallback) | search-side LLM (graph synonym retrieval, MCP-2 atomic tools) |
+Роль выбирает не модель, а **tier**; tier указывает на одну из **двух** моделей.
 
-Полная таблица в [`docs/MODELS.md` § "Per-role LLMs"](../MODELS.md#per-role-llms).
+| Env var | Поле | Default | Назначение |
+|---|---|---|---|
+| `LITELLM_MODEL_SMALL` | `model_small` | `gpt-4o-mini` | small tier — все high-volume роли |
+| `LITELLM_MODEL_LARGE` | `model_large` | `gpt-4o-mini` | large tier — только `synthesis` |
+| `LITELLM_ROLE_TIERS` | `role_tiers` | см. `_DEFAULT_ROLE_TIERS` | JSON-override, **merge** на дефолты: `{"plan":"large"}` поднимет только `plan` |
+| `LITELLM_LLM_MODEL` | `llm_model` | `""` | DEPRECATED alias для no-role `build_llm()`; пусто ⇒ `model_small` |
 
-### 3.2 Где определены поля в config
+> Старых `LITELLM_EXTRACTION_MODEL` / `LITELLM_JUDGE_MODEL` /
+> `LITELLM_SEARCH_MODEL` **больше нет**. Чтобы посадить роль на другую
+> модель — подними её tier (`LITELLM_ROLE_TIERS`) и задай нужную
+> `LITELLM_MODEL_SMALL/LARGE`.
 
-[`src/config.py:117-140`](../../src/config.py):
+Полная таблица ролей и tier-карта — в [`docs/MODELS.md`](../MODELS.md#roles-and-the-role--tier-map).
+
+### 3.2 Где определено в config
+
+[`src/config.py`](../../src/config.py), `LiteLLMSettings`:
 
 ```python
-llm_model: str = "qwen3:8b"
-# Per-role overrides — empty ("") means "use ``llm_model``".  Keeps
-# single-model deployments simple; cap into a per-role model when
-# the operator wants the cheap/fast model for high-volume judge
-# calls while keeping a stronger model for extraction or the
-# user-facing answer agent.
-extraction_model: str = ""
-judge_model: str = ""
-search_model: str = ""
+model_small: str = "gpt-4o-mini"
+model_large: str = "gpt-4o-mini"
+role_tiers: dict[str, LLMTier] = Field(default_factory=lambda: dict(_DEFAULT_ROLE_TIERS))
+
+def tier_for(self, role: LLMRole) -> LLMTier:
+    """Resolve ``role`` to a physical tier.  Unknown roles → small."""
+    return self.role_tiers.get(role, "small")
 
 def model_for(self, role: LLMRole) -> str:
-    """Return the configured model name for ``role`` with fallback
-    to ``llm_model`` when the role-specific field is empty."""
-    override = {
-        "extraction": self.extraction_model,
-        "judge":      self.judge_model,
-        "search":     self.search_model,
-    }[role]
-    return override or self.llm_model
+    """Resolve ``role`` → tier → one of the two physical models."""
+    return self.model_large if self.tier_for(role) == "large" else self.model_small
 ```
 
-`LLMRole` экспортируется на module-level: `Literal["extraction", "judge", "search"]` ([`src/config.py:20`](../../src/config.py)).
+`LLMRole` (`src/config.py`): `Literal["extraction","judge","search","route","plan","retrieve","synthesis"]`. Дефолтная tier-карта `_DEFAULT_ROLE_TIERS` — всё `small`, кроме `synthesis: large`.
 
-### 3.3 Factory wrapper'ы
+### 3.3 Factory + pool
 
-[`src/retrieval/llm.py:43-65`](../../src/retrieval/llm.py):
-
-```python
-def build_llm(role: LLMRole | None = None) -> LLM:
-    """role=None ⇒ legacy fallback to settings.litellm.llm_model.
-    role="..."  ⇒ uses model_for(role)."""
-    cfg = settings.litellm
-    model = cfg.model_for(role) if role else cfg.llm_model
-    return _build(model)
-
-
-def build_extraction_llm() -> LLM: return build_llm("extraction")
-def build_judge_llm()      -> LLM: return build_llm("judge")
-def build_search_llm()     -> LLM: return build_llm("search")
-```
-
-`build_llm()` без аргумента сохранён намеренно: это legacy entry-point для diag-скриптов (`scripts/diag_kg*.py`), которые ничего не знают про роли.
+[`src/retrieval/llm.py`](../../src/retrieval/llm.py) держит `build_llm(role)` и тонкие фабрики (`build_extraction_llm` / `build_judge_llm` / `build_search_llm` / `build_synthesis_llm`). Но **production call-site'ы их напрямую не зовут** — они идут через `get_llm_pool().get(role)` (`src/retrieval/llm_pool.py`), который под капотом один раз делает `build_llm(role)` и оборачивает в gated `BoundedLLM`. `build_llm()` без аргумента сохранён только для diag-скриптов.
 
 ### 3.4 Какой callsite на какую роль маппится
 
-| Файл:строка | Вызов | Role | Почему |
-|---|---|---|---|
-| [`src/workflow/activities/extract_kg.py:92`](../../src/workflow/activities/extract_kg.py) | `build_extraction_llm()` | extraction | KG triple extraction — нужна "глубина чтения" |
-| [`src/workflow/activities/parse_and_chunk.py:40`](../../src/workflow/activities/parse_and_chunk.py) | `build_extraction_llm()` | extraction | Опциональный translator — тоже full-chunk reading |
-| [`src/workflow/activities/merge_and_resolve.py:98`](../../src/workflow/activities/merge_and_resolve.py) | `build_judge_llm()` | judge | ER pair-wise judge + cross-chunk merge summary, высокий call-volume |
-| [`src/di/providers.py:50-58`](../../src/di/providers.py) | `build_search_llm()` | search | DI-injected → все search-routes; latency-sensitive |
-| [`src/ingestion/run.py:56-63`](../../src/ingestion/run.py) | `build_extraction_llm()` | extraction | CLI translator |
+| Файл | Вызов | Role |
+|---|---|---|
+| [`src/workflow/activities/extract_kg.py:92`](../../src/workflow/activities/extract_kg.py) | `get_llm_pool().get("extraction")` | extraction |
+| [`src/workflow/activities/parse_and_chunk.py:40`](../../src/workflow/activities/parse_and_chunk.py) | `get_llm_pool().get("extraction")` | extraction |
+| [`src/ingestion/run.py:64`](../../src/ingestion/run.py) | `get_llm_pool().get("extraction")` | extraction |
+| [`src/workflow/activities/merge_and_resolve.py:98`](../../src/workflow/activities/merge_and_resolve.py) | `get_llm_pool().get("judge")` | judge |
+| [`src/di/providers.py:43`](../../src/di/providers.py) | `get_llm_pool().get("search")` | search |
+| [`src/mcp/tools_server.py:90`](../../src/mcp/tools_server.py) | `get_llm_pool().get("search")` | search |
+| [`src/workflow/_search_plan_deps.py:21`](../../src/workflow/_search_plan_deps.py) | `get_llm_pool().get("plan")` | plan |
+| [`src/workflow/_search_deps.py:100,123`](../../src/workflow/_search_deps.py) | `get_llm_pool().get("search")` | search |
+| [`src/workflow/_search_deps.py:151`](../../src/workflow/_search_deps.py) | `get_llm_pool().get("synthesis")` | synthesis |
+| [`src/workflow/wiki/wiki_sweep.py:63`](../../src/workflow/wiki/wiki_sweep.py) | `get_llm_pool().get("synthesis")` | synthesis |
+
+### 3.5 LLMPool — concurrency owner
+
+`LLMPool` (`src/retrieval/llm_pool.py`, один на процесс, `get_llm_pool()`) — **новый единственный владелец** LLM-concurrency. Два уровня гейтов, acquired **lane-first → tier-global**:
+
+* **tier-ceiling** — global semaphore на физический tier: `small` = реальная GPU-ёмкость (`LLM_POOL_TIER_SMALL_TOTAL`, def **25**), `large` = API-budget (`LLM_POOL_TIER_LARGE_TOTAL`, def **8**).
+* **per-role lane** — потолок на роль (`LLM_POOL_LANE_CAPS`). Lanes намеренно **over-subscribe** tier-total: одна роль может забить GPU, но не больше своего lane-cap.
+
+Дефолтные lane-caps: extraction 18, judge 14, search 14, plan 4, route 2, retrieve 4, synthesis 8. `LLM_POOL_JUDGE_FLOOR` (def 7) — резерв для merge/judge под extraction-флудом; инвариант `extraction_ceiling ≤ tier_small_total − judge_floor` (18 ≤ 25−7).
+
+**Связь с Temporal.** Temporal queue-cap (напр. `TEMPORAL_LLM_ACTIVITY_CONCURRENCY=18`) определяет сколько активностей *планируется* параллельно; сколько из них реально дёрнут LLM — решает pool. Поэтому 18 запланированных `extract_kg` ≠ 18 одновременных GPU-вызовов. Temporal-капы выставлены **≥** соответствующего lane-cap, чтобы pool связывал первым (см. комментарии в `TemporalSettings`).
+
+> **Мёртвый knob:** `AGENT_LLM_MAX_CONCURRENT` (`AgentSettings.llm_max_concurrent`) больше **не читается** production-путями — его роль забрал LLMPool. Поле оставлено только чтобы env с ним не падал.
+
+Тюнинг:
+
+```env
+LLM_POOL_TIER_SMALL_TOTAL=25
+LLM_POOL_TIER_LARGE_TOTAL=8
+LLM_POOL_LANE_CAPS={"extraction":12,"judge":10,"search":10,"plan":4,"route":2,"retrieve":4,"synthesis":8}
+LLM_POOL_JUDGE_FLOOR=7
+```
+
+Live-occupancy: `get_llm_pool().stats()` → per-lane/per-tier `cap`/`in_use`/`available`.
 
 ---
 
@@ -241,6 +274,15 @@ llm_worker = Worker(
 ```
 
 `build_property_graph` зарегистрирован в обоих пулах (см. [`src/workflow/activities/__init__.py`](../../src/workflow/activities/__init__.py)) чтобы child мог её клеймить локально без cross-queue dispatch.
+
+> **Обновлено:** комментарий «GPU-cap (concurrency=1)» в сниппете
+> отражает старое состояние. Сейчас `llm_activity_concurrency=18`
+> (и merge вынесен на свою очередь `kb-ingest-merge`,
+> `merge_activity_concurrency=14`). Эти Temporal-капы больше **не**
+> сериализуют GPU — реальную concurrency держит LLMPool (tier+lane,
+> [§ 3.5](#35-llmpool--concurrency-owner)); Temporal-капы лишь
+> isolation и выставлены ≥ соответствующих lane-cap, чтобы pool
+> связывал первым.
 
 ---
 
@@ -430,7 +472,7 @@ SELECT activity_name, model, version_tag, duration_ms
  ORDER BY started_at;
 ```
 
-Пример (с `LITELLM_JUDGE_MODEL=gpt-4o-2024-08-06` override):
+Пример (с `LITELLM_ROLE_TIERS={"judge":"large"}` + `LITELLM_MODEL_LARGE=gpt-4o`):
 
 ```
 activity_name        | model              | version_tag    | duration_ms
@@ -440,12 +482,12 @@ parse_and_chunk      | gpt-4o-mini        | mm-judge-swap  |         100
 index_vector         |                    | mm-judge-swap  |         619
 inject_canonical     |                    | mm-judge-swap  |         141
 extract_kg           | gpt-4o-mini        | mm-judge-swap  |        5462
-merge_and_resolve    | gpt-4o-2024-08-06  | mm-judge-swap  |         487
+merge_and_resolve    | gpt-4o             | mm-judge-swap  |         487
 build_property_graph |                    | mm-judge-swap  |         460
 push_wikibase        |                    | mm-judge-swap  |           3
 ```
 
-Видно: extraction (`extract_kg`, `parse_and_chunk`) → gpt-4o-mini; judge (`merge_and_resolve`) → gpt-4o-2024-08-06; всё non-LLM → NULL.
+Видно: extraction (`extract_kg`, `parse_and_chunk`) → small (gpt-4o-mini); judge (`merge_and_resolve`) → large (gpt-4o); всё non-LLM → NULL.
 
 ---
 
@@ -526,7 +568,7 @@ async def _load_existing_canonicals(
 stored_items = await _load_existing_canonicals(graph_store)
 ```
 
-Затем `stored_items` сливаются с новыми из текущего документа в one big list, после чего KNN-cosine + judge pipeline решает кто duplicate чего. Если `Иван Иванов (stored)` и `Иванов И.И. (new)` дали cosine 0.92 + same-script — auto-merge. Если cosine 0.7 — borderline → LLM-judge с моделью из `LITELLM_JUDGE_MODEL`.
+Затем `stored_items` сливаются с новыми из текущего документа в one big list, после чего KNN-cosine + judge pipeline решает кто duplicate чего. Если `Иван Иванов (stored)` и `Иванов И.И. (new)` дали cosine 0.92 + same-script — auto-merge. Если cosine 0.7 — borderline → LLM-judge с моделью роли `judge` (по дефолту small tier = `LITELLM_MODEL_SMALL`).
 
 ### 8.4 Что увидишь в worker-логе
 
@@ -571,12 +613,16 @@ curl -F file=@docs/bruno/samples/sample.txt \
 
 # Дождаться "workflow done" в /tmp/worker.log
 
-# 2. Сменить ОДНУ роль (judge) и перезапустить
+# 2. Сменить ОДНУ роль (judge → large tier) и перезапустить.
+#    Tier-based: поднимаем judge на large + даём large отдельную модель,
+#    чтобы в ingest_metrics было видно отличие от small (gpt-4o-mini).
 pkill -f "src.workflow.worker"; pkill -f "uvicorn.*8002"
 sleep 3
-LITELLM_JUDGE_MODEL=gpt-4o-2024-08-06 nohup .venv/bin/python -m src.workflow.worker > /tmp/worker.log 2>&1 &
-LITELLM_JUDGE_MODEL=gpt-4o-2024-08-06 nohup .venv/bin/uvicorn src.api.main:app --port 8002 > /tmp/api.log 2>&1 &
+export SWAP_ENV='LITELLM_ROLE_TIERS={"judge":"large"} LITELLM_MODEL_LARGE=gpt-4o'
+env $SWAP_ENV nohup .venv/bin/python -m src.workflow.worker > /tmp/worker.log 2>&1 &
+env $SWAP_ENV nohup .venv/bin/uvicorn src.api.main:app --port 8002 > /tmp/api.log 2>&1 &
 sleep 5
+# NB: убедись что gpt-4o зарегистрирован в docker/litellm_config.yaml (он есть в дефолтном configе).
 
 # 3. Submit batch B с новым judge
 curl -F file=@docs/bruno/samples/sample.txt \
@@ -596,10 +642,10 @@ SELECT activity_name, model, version_tag
 ```
 activity_name        | model              | version_tag
 ---------------------+--------------------+-------------
-extract_kg           | gpt-4o-mini        | smoke-A      ← extraction, не менялся
+extract_kg           | gpt-4o-mini        | smoke-A      ← extraction (small), не менялся
 extract_kg           | gpt-4o-mini        | smoke-B      ← тот же
-merge_and_resolve    | gpt-4o-mini        | smoke-A      ← judge default
-merge_and_resolve    | gpt-4o-2024-08-06  | smoke-B      ← judge swap!
+merge_and_resolve    | gpt-4o-mini        | smoke-A      ← judge=small default
+merge_and_resolve    | gpt-4o             | smoke-B      ← judge→large swap!
 parse_and_chunk      | gpt-4o-mini        | smoke-A
 parse_and_chunk      | gpt-4o-mini        | smoke-B
 fetch_source         |                    | smoke-A      ← NULL (no LLM)
@@ -665,7 +711,9 @@ SELECT DISTINCT version_tag FROM ingest_metrics ORDER BY version_tag;
 |---|---|---|
 | **`500` от LiteLLM "can't compare num_retry and None" + "model not found"** | `LITELLM_*_MODEL` env указывает на модель, **не зарегистрированную** в LiteLLM proxy (нет в `docker/litellm_config.yaml` или в DB-store если `store_model_in_db: true`).  Внутренний бажный path в litellm сравнивает `retries < router.num_retries` где router-level `num_retries=None` → `TypeError`. | (1) Проверить boot-логи API/worker'а: должна быть строка `LiteLLM model validation FAILED ... missing=<role>='<name>' ... Available models: [...]` — там готовый список доступных + два пути fix.  (2) Зарегистрировать модель: dev → дополнить `docker/litellm_config.yaml` `model_list` + `docker compose restart litellm`; prod (DB-store) → добавить через LiteLLM Admin UI или `POST /model/new`.  (3) Band-aid: `general_settings.num_retries: 0` в proxy-config (уже выставлено в `litellm_settings.num_retries: 0` в нашем `docker/litellm_config.yaml`).  Strict-mode валидатор: `LITELLM_VALIDATE_MODELS_STRICT=true` чтобы worker падал на старте а не warning'ом. |
 | `ingest_metrics.model = NULL` для `extract_kg` строки | API сабмитил **без** snapshot'а (старый процесс) или env пустой и `llm_model` тоже | `psql -c "SELECT version_tag FROM ingest_metrics ..."` — если `unspecified` → старый процесс. Перезапустить API из multimodel worktree |
-| `merge_and_resolve.model = gpt-4o-mini` хотя сменил `LITELLM_JUDGE_MODEL` | API не перезапущен после env-change (snapshot снимается в момент submit) | `pkill -f uvicorn` + restart API. Сабмит ДО рестарта получит старую модель — это by design (snapshot at submit time) |
+| `merge_and_resolve.model = gpt-4o-mini` хотя поднял judge на large (`LITELLM_ROLE_TIERS`/`LITELLM_MODEL_LARGE`) | API не перезапущен после env-change (snapshot снимается в момент submit) | `pkill -f uvicorn` + restart API. Сабмит ДО рестарта получит старую модель — это by design (snapshot at submit time) |
+| `merge_and_resolve.model` всё ещё small, env применён | `LITELLM_ROLE_TIERS` — JSON-string; pydantic мёржит его на дефолты. Опечатка в JSON ⇒ парс падает/игнор | Проверь синтаксис: `LITELLM_ROLE_TIERS='{"judge":"large"}'` (кавычки!). Роль должна быть из `LLMRole`, tier ∈ {small,large} |
+| Lane `…` saturated — caller waiting (warning в логе) | Роль упёрлась в свой LLMPool lane-cap; новые вызовы ждут | Норма под нагрузкой. Если хронически — подними `LLM_POOL_LANE_CAPS` для роли (и tier-total, если упёрлись в него). См. [§ 3.5](#35-llmpool--concurrency-owner) |
 | Two distinct workflow IDs `ingest-X` и `graph-X` для одного ingest'а | Нормально — child workflow живёт отдельной execution | Это not bug. См. [§ 4.2](#42-три-практических-профита) |
 | `graph_status="vector_only"` после ingest'а | Child workflow failed (LLM down, ER timeout, Neo4j unreachable) | Открой `graph-{doc_id}` в Temporal UI — там видна activity которая упала + её stack. Это **best-effort** — документ доступен для vector-поиска |
 | Worker занят на старых workflow'ах из других worktree'ов | Несколько worker'ов из разных worktree подключены к одному Temporal cluster и конкурируют за task queue | `lsof -p <pid>` → `cwd` показывает worktree. Убей `kill <pid>` тот что не нужен |
@@ -682,8 +730,8 @@ SELECT DISTINCT version_tag FROM ingest_metrics ORDER BY version_tag;
 
 ### 12.2 Архитектурные документы
 - [`docs/MODELS.md`](../MODELS.md) — per-role model guidance, escalation path
-- [`docs/architecture.html`](../architecture.html) — визуальная карта (5 sections)
-- [`docs/architecture.d2`](../architecture.d2) / [`docs/architecture.svg`](../architecture.svg) — D2 source + рендер
+- [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) — top-level system map
+- [`docs/diagrams/system_architecture.svg`](../diagrams/system_architecture.svg) / [`docs/diagrams/system_architecture.d2`](../diagrams/system_architecture.d2) — визуальная карта (рендер + D2 source)
 
 ### 12.3 Specs
 - `docs/superpowers/specs/2026-05-15-ingest-temporal-workflow-design.md` — original Temporal workflow design
@@ -697,18 +745,32 @@ SELECT DISTINCT version_tag FROM ingest_metrics ORDER BY version_tag;
 
 ### 12.5 Ключевые env vars (общий список)
 ```env
-LITELLM_LLM_MODEL=gpt-4o-mini           # global fallback for all roles
-LITELLM_EXTRACTION_MODEL=               # role override (empty = fallback)
-LITELLM_JUDGE_MODEL=
-LITELLM_SEARCH_MODEL=
+# Model selection — две модели + tier-map (НЕ per-role model env-vars!)
+LITELLM_BASE_URL=http://localhost:4000  # LiteLLM proxy
+LITELLM_MODEL_SMALL=gpt-4o-mini         # small tier (high-volume roles)
+LITELLM_MODEL_LARGE=gpt-4o-mini         # large tier (synthesis only)
+LITELLM_ROLE_TIERS={"plan":"large"}     # JSON, merged onto defaults; escalate a role
+LITELLM_LLM_MODEL=                       # DEPRECATED no-role alias (empty ⇒ small)
+LITELLM_EMBEDDING_MODEL=nomic-embed-text # not a role; dim must match MILVUS_DIM
+LITELLM_EMBEDDING_DIM=768
 LITELLM_FUNCTION_CALLING=true           # disable for non-tool-calling models
+
+# LLMPool — owns LLM concurrency (per-process tier ceiling + per-role lane)
+LLM_POOL_TIER_SMALL_TOTAL=25            # real GPU/backend concurrent capacity
+LLM_POOL_TIER_LARGE_TOTAL=8             # API budget
+LLM_POOL_JUDGE_FLOOR=7                  # reserved floor so merge never starves
+LLM_POOL_LANE_CAPS={"extraction":18,"judge":14,"search":14,"plan":4,"route":2,"retrieve":4,"synthesis":8}
+# AGENT_LLM_MAX_CONCURRENT — DEAD, superseded by LLMPool (kept only so envs don't error)
 
 # Analytics layer (from analytics-grafana sprint)
 ANALYTICS_VERSION_TAG=unspecified       # default if X-Version-Tag header missing
 ANALYTICS_ENV_NAME=dev-local            # propagated to ingest_metrics.env
 
-# Temporal queues (unchanged)
+# Temporal queues — caps are isolation-only now (LLMPool owns real concurrency);
+# each must be >= the matching LLMPool lane ceiling so the pool binds first.
 TEMPORAL_TASK_QUEUE=kb-ingest
 TEMPORAL_LLM_TASK_QUEUE=kb-ingest-llm
-TEMPORAL_LLM_ACTIVITY_CONCURRENCY=1     # GPU serialization cap
+TEMPORAL_LLM_ACTIVITY_CONCURRENCY=18    # was a GPU serialization cap (=1); now isolation
+TEMPORAL_MERGE_TASK_QUEUE=kb-ingest-merge
+TEMPORAL_MERGE_ACTIVITY_CONCURRENCY=14
 ```

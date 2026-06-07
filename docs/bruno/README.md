@@ -33,8 +33,11 @@ docs/bruno/
 │   ├── Global Search.bru            # POST /api/v1/search/global
 │   ├── Drift Search.bru             # POST /api/v1/search/drift
 │   └── Auto Search.bru              # POST /api/v1/search/auto
+├── Documents/
+│   └── Download Source.bru          # GET /api/v1/documents/{doc_id}
 ├── Admin/
-│   └── Rebuild Communities.bru      # POST /api/v1/admin/communities/rebuild
+│   ├── Rebuild Communities.bru      # POST /api/v1/admin/communities/rebuild
+│   └── Wiki Rebuild.bru             # POST /admin/wiki/rebuild (NO /api/v1, no auth)
 └── README.md
 ```
 
@@ -56,7 +59,7 @@ listed in `API_KEYS`.
 
 ## Auth
 
-Every endpoint except `/health` requires the header
+Most endpoints require the header
 
 ```
 X-API-Key: {{apiKey}}
@@ -64,6 +67,12 @@ X-API-Key: {{apiKey}}
 
 Bruno renders this automatically because the requests pull the value
 from `vars` in the active environment.
+
+Exceptions (no `X-API-Key` in code):
+- `GET /health` — public liveness probe.
+- `POST /admin/wiki/rebuild` — has no `require_api_key` dependency
+  (and is mounted without the `/api/v1` prefix). Treat it as an
+  internal/operator endpoint.
 
 ## Typical flow
 
@@ -74,8 +83,13 @@ from `vars` in the active environment.
    above; poll until status is `completed` (or `vector_only`).
 4. **Search → Local** → query the corpus (default mode). Use **Auto**
    to let the router pick the mode.
-5. *(optional, for Global/Drift)* **Admin → Rebuild Communities** once,
+5. **Documents → Download Source** → set the `docId` request var to a
+   `doc_id` from a search response's `sources[]` / `documents[]` and
+   pull the original file (Bruno: *Response → Save Response*).
+6. *(optional, for Global/Drift)* **Admin → Rebuild Communities** once,
    then use **Global** / **Drift** for corpus-level questions.
+7. *(optional)* **Admin → Wiki Rebuild** to (re)generate per-entity
+   MediaWiki articles (`?all=true` rebuilds all; needs `WIKI_ENABLED`).
 
 ## Notes
 
@@ -89,9 +103,13 @@ from `vars` in the active environment.
 - **Global** and **Drift** map-reduce over community summaries — run
   **Admin → Rebuild Communities** first (needs Neo4j + GDS; the build is
   offline and runs for minutes).
-- All four search modes share the `SearchRequest` shape; only `query`
-  and `top_k` are consumed — the mode is chosen by the endpoint, not a
-  body field.
+- All four search modes share the `SearchRequest` shape; only `query`,
+  `top_k` and `history` (multi-turn — `[{role, content}]`) are consumed
+  — the mode is chosen by the endpoint, not a body field. Other fields
+  (`mode`, `department`, filters, …) are accepted but ignored.
+- The `SearchResponse` carries `documents[]` (`{doc_id, url}`) alongside
+  `sources[]`; each `url` is the relative `/api/v1/documents/{doc_id}`
+  download link served by **Documents → Download Source**.
 
 ## Updating the collection
 

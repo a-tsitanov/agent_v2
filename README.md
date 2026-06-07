@@ -106,8 +106,8 @@ export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
 | [`docs/runbook/wikibase.md`](docs/runbook/wikibase.md) | Wikibase population + SPARQL examples |
 | [`docs/runbook/wiki-editor.md`](docs/runbook/wiki-editor.md) | Continuous per-entity MediaWiki article editor from the Neo4j graph (dirty-mark + scheduled sweep, bot-section rewrite, anti-drift, citations) |
 | [`docs/MODELS.md`](docs/MODELS.md) | Per-role model guidance + escalation table |
-| [`docs/architecture.html`](docs/architecture.html) | Visual system map (5 sections — open in browser) |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Top-level reference (partially pre-Temporal — see banner) |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Top-level system map** — components, data stores, ingest vs search paths, durable execution, degradation, observability (links out to the deep docs) |
+| [`docs/diagrams/system_architecture.svg`](docs/diagrams/system_architecture.svg) | Rendered container-view diagram (source `docs/diagrams/system_architecture.d2`) |
 
 ## Directory layout
 

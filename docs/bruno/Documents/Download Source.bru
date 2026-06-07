@@ -1,0 +1,57 @@
+meta {
+  name: Download Source
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/documents/{{docId}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+vars:pre-request {
+  docId: 00000000-0000-0000-0000-000000000000
+}
+
+docs {
+  # GET /api/v1/documents/{doc_id}
+
+  Download the **original uploaded file** for an ingested document.
+  Streams the source straight from MinIO (the object URI is stored in
+  the Postgres `documents.path` column). `doc_id` is the same value the
+  search responses expose in `sources[].doc_id` and `documents[].doc_id`
+  (where `documents[].url` is already the relative
+  `/api/v1/documents/{doc_id}` link).
+
+  ## Path parameter
+  - **doc_id** — the document UUID from a search response (or the
+    `job_id` returned by `POST /api/v1/ingest`).
+
+  ## Headers
+  - **X-API-Key** *(required)*.
+
+  ## Response 200
+  Raw file bytes with:
+  - `Content-Disposition: attachment; filename="…"; filename*=UTF-8''…`
+    (RFC 6266 — original filename, UTF-8 preserved, ASCII fallback
+    sanitised).
+  - `Content-Length` set from the MinIO object size.
+  - `Content-Type` = the object's stored media type.
+
+  In Bruno, use **Response → Save Response** to write the body to disk.
+
+  ## Notes
+  - Legacy pre-MinIO docs (a non-`s3://` `documents.path`) are served
+    from local disk via `FileResponse` if the file still exists.
+
+  ## Error codes
+  - `401` — missing/invalid `X-API-Key`.
+  - `404` — unknown `doc_id`, or the source object is gone
+    (`NoSuchKey`) / a legacy local file no longer on disk.
+  - `503` — MinIO unreachable / transport error.
+}

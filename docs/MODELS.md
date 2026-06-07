@@ -1,50 +1,151 @@
 # Models
 
 The project runs LLM and embedding workloads via a **LiteLLM
-proxy** in front of a local **Ollama** instance.  All model
-references are configured through `LITELLM_*` env variables and
-the `model_list` in `docker/litellm_config.yaml`.
+proxy** (`docker compose` service `litellm`, default
+`LITELLM_BASE_URL=http://localhost:4000`).  The shipped
+`docker/litellm_config.yaml` proxies an **OpenAI** upstream
+(`gpt-4o-mini` / `gpt-4o` + `text-embedding-3-small`) and keeps a
+commented recipe for swapping the small tier back to a local
+**Ollama** model on `host.docker.internal:11434`.  All model
+references are configured through `LITELLM_*` env variables and the
+`model_list` in `docker/litellm_config.yaml`.
+
+> Two layers, two concerns — keep them separate:
+> 1. **WHICH model** runs each role → the two-tier config below
+>    (`LITELLM_MODEL_SMALL/LARGE` + `LITELLM_ROLE_TIERS`).
+> 2. **HOW MANY concurrent calls** each role/tier may make → the
+>    per-process **LLMPool** (`LLM_POOL_*`, see
+>    [LLMPool — concurrency gating](#llmpool--concurrency-gating)).
+>    The pool is now the single owner of LLM concurrency; Temporal
+>    queue caps are isolation-only.
 
 ## Two physical tiers — you manage exactly two model names
 
 Every logical workload ("role") maps to one of **two physical model
-tiers**.  Operators only ever set two model names:
+tiers**.  Operators only ever set two model names (`src/config.py`
+`LiteLLMSettings`):
 
-| Env var | Tier | Default | Character |
+| Env var | Field | Tier | Default | Character |
+|---|---|---|---|---|
+| `LITELLM_MODEL_SMALL` | `model_small` | `small` | `gpt-4o-mini` | High-volume roles — extraction, judge, search, route, plan, retrieve.  Swap to a local Ollama model for on-prem. |
+| `LITELLM_MODEL_LARGE` | `model_large` | `large` | `gpt-4o-mini` | Final user-facing answer synthesis only. |
+
+> **Default note:** both tiers default to `gpt-4o-mini` in
+> `src/config.py` (the shipped LiteLLM config is OpenAI-first).  To
+> run the small tier on a cheap local model, set
+> `LITELLM_MODEL_SMALL=gemma4:e4b` (or a qwen3 variant) **and**
+> register it in `docker/litellm_config.yaml` — see
+> [Swap the small tier](#escalation-path).
+
+| Other | Env var | Default | Why |
 |---|---|---|---|
-| `LITELLM_MODEL_SMALL` | `small` | `gemma4:e4b` | Local, cheap, fast.  Runs every high-volume role — extraction, judge, search, plan, route, retrieve, distill, coverage. |
-| `LITELLM_MODEL_LARGE` | `large` | `gpt-4o-mini` | Final user-facing answer synthesis only. |
+| Embedding | `LITELLM_EMBEDDING_MODEL` | `nomic-embed-text` (768-dim) | OpenAI default in the LiteLLM config is `text-embedding-3-small` (1536-dim).  `LITELLM_EMBEDDING_DIM` MUST match `MILVUS_DIM`. |
+| Reranker | `HF_RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | BGE cross-encoder; unified graph+vector rerank before synthesis (loaded from HF, not LiteLLM). |
 
-| Other | Model | Why |
-|---|---|---|
-| Embedding | `nomic-embed-text` (local) / `text-embedding-3-small` (OpenAI) | 768 / 1536-dim.  MUST match `MILVUS_DIM`. |
-| Reranker | not configured | Optional layer; would slot between retriever and synthesizer. |
+`LITELLM_EMBEDDING_MODEL` / `LITELLM_EMBEDDING_DIM` are NOT roles —
+embeddings go straight through the LiteLLM `embeddings` endpoint and
+are not gated by the LLMPool.  The config default (`nomic-embed-text`,
+768) and the shipped LiteLLM config default (`text-embedding-3-small`,
+1536) differ — pick one consistently and set `MILVUS_DIM` to match.
 
-## Role → tier map
+## Roles and the role → tier map
 
-Roles are mapped declaratively to tiers in
-`src/config.py:_DEFAULT_ROLE_TIERS`.  Resolution is
+There are **seven** logical roles
+(`src/config.py:LLMRole`).  Each maps declaratively to a tier in
+`_DEFAULT_ROLE_TIERS`.  Resolution is
 `role → tier → one of the two physical models`
-(`LiteLLMSettings.model_for`).  Default: **everything is `small`
-except `synthesis` which is `large`.**
+(`LiteLLMSettings.tier_for` → `model_for`).  Default: **everything is
+`small` except `synthesis` which is `large`.**
 
-| Role | Default tier | Used by |
+| Role | Default tier | Acquired by (call-site) | Used for |
+|---|---|---|---|
+| `extraction` | small | `get_llm_pool().get("extraction")` — `extract_kg.py`, `parse_and_chunk.py`, CLI `ingestion/run.py` | KG triple extraction + per-chunk translation |
+| `judge` | small | `merge_and_resolve.py` | ER borderline-pair adjudication + cross-chunk merge summary |
+| `search` | small | `di/providers.py`, `mcp/tools_server.py`, `_search_deps.py` | search-side reasoning (graph synonym retrieval, MCP tools) |
+| `route` | small | (registered; query routing / contextualization) | query routing |
+| `plan` | small | `_search_plan_deps.py` | multi-step sub-question planning |
+| `retrieve` | small | `_search_deps.py` | retrieval-side LLM calls |
+| `synthesis` | **large** | `_search_deps.py`, `wiki/wiki_sweep.py` | final user-facing answer synthesis + community reports + wiki articles |
+
+> The old `distill` / `coverage` roles are gone from `LLMRole`;
+> coverage-check and observation work now run under existing roles.
+
+Call-sites no longer build raw LLMs directly — they go through
+`get_llm_pool().get(role)` (`src/retrieval/llm_pool.py`), which returns
+a single shared, concurrency-gated `BoundedLLM` per role.  The pool
+internally calls `build_llm(role)` (`src/retrieval/llm.py`), which
+resolves through the tier map.  `build_llm()` with no role uses the
+small tier (or the deprecated `LITELLM_LLM_MODEL` alias if it is
+explicitly set — see below); it survives only for diag scripts.
+
+## LLMPool — concurrency gating
+
+`src/retrieval/llm_pool.py` defines `LLMPool`, one **per process**,
+accessed via `get_llm_pool()` (a lazy process-singleton).  It is the
+current source of truth for LLM concurrency.  Two hierarchical gate
+levels, acquired **lane-first then tier-global** (consistent order ⇒
+no deadlock):
+
+1. **Per-tier ceiling** — a global semaphore per physical tier:
+   * `small` = real GPU/backend concurrent-request capacity
+     (`LLM_POOL_TIER_SMALL_TOTAL`, default **25**).
+   * `large` = API budget (`LLM_POOL_TIER_LARGE_TOTAL`, default **8**).
+2. **Per-role lane** — a ceiling per role
+   (`LLM_POOL_LANE_CAPS`, a JSON map).  Lanes intentionally
+   **over-subscribe** the tier total (sum of small-tier ceilings >
+   `tier_small_total`) so one workload can fill the GPU while no
+   single role can monopolize it beyond its own ceiling.
+
+Default lane caps (`LLMPoolSettings.lane_caps`):
+
+| Role | Lane cap | Tier |
 |---|---|---|
-| `extraction` | small | `extract_kg`, `parse_and_chunk` (translator), CLI ingest |
-| `judge` | small | `merge_and_resolve` (cross-chunk merge + ER pair-wise yes/no) |
-| `search` | small | search-side LLM (graph synonym retrieval, MCP-2 tools); shared BoundedLLM semaphore |
-| `route` | small | query routing (search refactor) |
-| `plan` | small | multi-step planning (search refactor) |
-| `retrieve` | small | retrieval-side LLM calls (search refactor) |
-| `distill` | small | observation distillation (R11) |
-| `coverage` | small | pre-submit coverage check |
-| `synthesis` | **large** | final user-facing answer synthesis |
+| `extraction` | 18 | small |
+| `judge` | 14 | small |
+| `search` | 14 | small |
+| `plan` | 4 | small |
+| `route` | 2 | small |
+| `retrieve` | 4 | small |
+| `synthesis` | 8 | large |
 
-The factories in `src/retrieval/llm.py` (`build_extraction_llm`,
-`build_judge_llm`, `build_search_llm`, `build_synthesis_llm`) call
-`build_llm(role)`, which resolves through this map.  `build_llm()`
-with no role uses the small tier (or the deprecated `LITELLM_LLM_MODEL`
-alias if it is explicitly set — see below).
+`LLM_POOL_JUDGE_FLOOR` (default **7**) is a reserved floor for the
+merge/judge lane under an extraction flood; the sizing invariant
+`extraction_ceiling ≤ tier_small_total − judge_floor` (18 ≤ 25 − 7)
+guarantees merge never starves.
+
+How it relates to Temporal: a Temporal queue cap (e.g.
+`TEMPORAL_LLM_ACTIVITY_CONCURRENCY=18`) controls how many activities
+are *scheduled* concurrently, but the **pool** decides how many of
+those actually make an LLM call at once.  So 18 `extract_kg`
+activities can be in-flight while the pool admits only as many
+concurrent GPU calls as the extraction lane + small-tier ceiling
+allow.  The Temporal caps are deliberately set **≥** the matching pool
+lane ceiling so the pool binds first (see `TemporalSettings`
+comments).  This is per-process only — the true cross-process GPU
+ceiling belongs at the LiteLLM proxy and is out of scope.
+
+> **Deprecated:** `AGENT_LLM_MAX_CONCURRENT`
+> (`AgentSettings.llm_max_concurrent`) was the old single search-side
+> concurrency knob.  It is **dead** — no production path reads it; the
+> LLMPool replaced it.  The field is kept only so envs that still set
+> it don't error.  The standalone `BoundedLLM(max_concurrent=...)`
+> path likewise survives only for diag scripts.
+
+### Tuning concurrency
+
+```env
+# Raise/lower the real backend capacity per tier:
+LLM_POOL_TIER_SMALL_TOTAL=25     # GPU concurrent-request capacity
+LLM_POOL_TIER_LARGE_TOTAL=8      # API budget
+
+# Override the whole per-role lane map (JSON):
+LLM_POOL_LANE_CAPS={"extraction":12,"judge":10,"search":10,"plan":4,"route":2,"retrieve":4,"synthesis":8}
+
+LLM_POOL_JUDGE_FLOOR=7           # reserved floor so merge never starves
+```
+
+Inspect live occupancy via `get_llm_pool().stats()` (per-lane +
+per-tier `cap` / `in_use` / `available`).
 
 ## Escalating a single role
 
@@ -63,12 +164,30 @@ never have to re-declare the full map.  Unknown roles fall back to
 
 ### Deprecated `LITELLM_LLM_MODEL` alias
 
-`LITELLM_LLM_MODEL` is kept only as a deprecated alias so legacy
-`build_llm()` (no role) still resolves.  Leave it empty; it defaults
-to `""`, in which case the no-role path uses `LITELLM_MODEL_SMALL`.
-If explicitly set, it wins for the no-role path only — per-role
-resolution always uses the tier map.  Remove it once all callers pass
-a role.
+`LITELLM_LLM_MODEL` (`LiteLLMSettings.llm_model`) is kept only as a
+deprecated alias so legacy `build_llm()` (no role) still resolves.
+Leave it empty; it defaults to `""`, in which case the no-role path
+uses `LITELLM_MODEL_SMALL` (via `effective_base`).  If explicitly set,
+it wins for the no-role path only — per-role resolution always uses
+the tier map.  Remove it once all callers pass a role.
+
+> Historical note: there used to be per-role *model* env vars
+> (`LITELLM_EXTRACTION_MODEL` / `LITELLM_JUDGE_MODEL` /
+> `LITELLM_SEARCH_MODEL`).  Those are **gone** — role selection is now
+> tier-based (`LITELLM_ROLE_TIERS`), and there are only two model
+> names.  To put one role on a different model, escalate its tier and
+> set the corresponding `LITELLM_MODEL_*`.
+
+### Multimodel snapshot at /ingest time
+
+The per-role model resolution is **snapshotted at `POST /ingest`
+time** and threaded through the workflow (`IngestParams` →
+`FinalizeIn` → `ingest_metrics`), so each `ingest_metrics` row records
+the exact model that ran that activity — even if `LITELLM_MODEL_*` is
+swapped between submissions.  Activities resolve through the LLMPool at
+run time, but the *recorded* model comes from the submit-time
+snapshot.  Operational details (swap → restart → verify) are in
+[`docs/runbook/multimodel.md`](runbook/multimodel.md).
 
 ### Smoke verification
 
