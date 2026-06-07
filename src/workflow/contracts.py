@@ -534,11 +534,19 @@ class MapCommunitiesParams(_Frozen):
 
     ``level`` selects the community level to read; ``limit`` bounds how
     many summaries enter the (parallel) MAP step so a huge corpus doesn't
-    fan out unbounded."""
+    fan out unbounded.
+
+    ``selection`` picks the community-selection strategy: ``"lexical"``
+    (default — query/summary word-overlap, today's behaviour) or
+    ``"semantic"`` (kNN over ``c.report_vec`` via the
+    ``community_report_vec`` index, with lexical as the fail-open
+    fallback).  Unknown values are treated as lexical (v2 descent lands
+    later)."""
 
     query: str
     level: int = 0
     limit: int = 20
+    selection: str = "lexical"
 
 
 class MapCommunitiesResult(_Frozen):

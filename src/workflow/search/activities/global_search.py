@@ -47,6 +47,18 @@ RETURN c.id AS community_id, c.level AS level, c.summary AS summary,
 ORDER BY member_count DESC, community_id ASC
 """
 
+# Semantic selection (v1): kNN over the structured community report
+# vectors (``c.report_vec``, indexed as ``community_report_vec``).
+# ``queryNodes`` already returns nearest-first; ``ORDER BY score DESC`` is
+# belt-and-suspenders.  Skip empty/unsummarised communities so the MAP
+# step never fans out over a blank summary.
+_SELECT_SEMANTIC_CYPHER = """
+CALL db.index.vector.queryNodes('community_report_vec', $limit, $vec) YIELD node, score
+WHERE node.level = $level AND node.summary IS NOT NULL AND trim(node.summary) <> ''
+RETURN node.id AS community_id, node.level AS level, node.summary AS summary
+ORDER BY score DESC
+"""
+
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 _PARTIAL_SYSTEM = (
@@ -78,6 +90,50 @@ def _get_map_llm() -> Any:
     from src.retrieval.llm import build_llm
 
     return build_llm("retrieve")
+
+
+def _get_embed_model() -> Any:
+    """Embedding model for the semantic community selection (same model as
+    the report vectors were built with).  Indirected for monkeypatching
+    (mirrors ``community._get_embed_model``)."""
+    from src.ingestion.embeddings import build_embedding_model
+
+    return build_embedding_model()
+
+
+async def select_communities_semantic(
+    store: Any, query_vec: list[float], *, level: int, limit: int,
+) -> list[CommunitySummaryRef]:
+    """kNN over the community report vectors → ``CommunitySummaryRef``s for
+    ``level``, nearest-first, capped at ``limit`` (the queryNodes ``k``).
+
+    Same output shape as ``rank_summaries``.  Fail-open: returns ``[]`` on
+    ANY error so the caller can fall back to the lexical path."""
+    try:
+        rows = await asyncio.to_thread(
+            store.structured_query,
+            _SELECT_SEMANTIC_CYPHER,
+            {"vec": query_vec, "level": level, "limit": max(0, limit)},
+        )
+        rows = list(rows or [])
+    except Exception as exc:
+        activity.logger.warning("select_communities_semantic  err=%s", exc)
+        return []
+
+    refs: list[CommunitySummaryRef] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cid = row.get("community_id")
+        summary = (row.get("summary") or "").strip()
+        if cid is None or not summary:
+            continue
+        refs.append(CommunitySummaryRef(
+            community_id=str(cid),
+            level=int(row.get("level") or 0),
+            summary=summary,
+        ))
+    return refs[: max(0, limit)]
 
 
 def _tokens(text: str) -> set[str]:
@@ -122,14 +178,11 @@ def is_relevant_partial(text: str) -> bool:
     return bool(cleaned) and cleaned != "нет"
 
 
-@activity.defn
-async def map_communities(params: MapCommunitiesParams) -> MapCommunitiesResult:
-    """Fetch + rank the community summaries to map over.  Fail-safe →
-    empty list on any store error."""
-    activity.heartbeat({"stage": "map_communities", "level": params.level})
-    store = _get_store()
-    if store is None:
-        return MapCommunitiesResult(communities=[])
+async def _map_communities_lexical(
+    store: Any, params: MapCommunitiesParams,
+) -> MapCommunitiesResult:
+    """LEXICAL path: read stored summaries + rank by query word-overlap.
+    Fail-safe → empty list on any store error."""
     try:
         rows = await asyncio.to_thread(
             store.structured_query,
@@ -143,10 +196,46 @@ async def map_communities(params: MapCommunitiesParams) -> MapCommunitiesResult:
 
     refs = rank_summaries(rows, query=params.query, limit=params.limit)
     activity.logger.info(
-        "map_communities  level=%d  read=%d  selected=%d",
+        "map_communities  selection=lexical  level=%d  read=%d  selected=%d",
         params.level, len(rows), len(refs),
     )
     return MapCommunitiesResult(communities=refs)
+
+
+@activity.defn
+async def map_communities(params: MapCommunitiesParams) -> MapCommunitiesResult:
+    """Select the community summaries to map over.
+
+    Strategy switch on ``params.selection``: ``"semantic"`` does a kNN over
+    the report vectors (falling back to lexical on empty/error), anything
+    else is the lexical word-overlap path.  Fail-safe → empty list on any
+    store error (never raises through the Temporal boundary)."""
+    activity.heartbeat({"stage": "map_communities", "level": params.level})
+    store = _get_store()
+    if store is None:
+        return MapCommunitiesResult(communities=[])
+
+    if params.selection == "semantic":
+        try:
+            query_vec = await _get_embed_model().aget_text_embedding(params.query)
+            refs = await select_communities_semantic(
+                store, query_vec, level=params.level, limit=params.limit,
+            )
+            if refs:
+                activity.logger.info(
+                    "map_communities  selection=semantic  level=%d  selected=%d",
+                    params.level, len(refs),
+                )
+                return MapCommunitiesResult(communities=refs)
+            activity.logger.info(
+                "map_communities  selection=semantic empty → lexical fallback",
+            )
+        except Exception as exc:
+            activity.logger.warning(
+                "map_communities  semantic err=%s → lexical fallback", exc,
+            )
+
+    return await _map_communities_lexical(store, params)
 
 
 @activity.defn
@@ -185,4 +274,5 @@ __all__ = [
     "map_communities",
     "map_community_partial",
     "rank_summaries",
+    "select_communities_semantic",
 ]
