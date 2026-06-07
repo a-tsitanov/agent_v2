@@ -280,7 +280,7 @@ uv run pytest tests/test_workflow/test_search_workflow.py -v
 
 ## 10. Cross-references
 
-- **Search subsystem deep-dive**: [`search.md`](search.md)
+- **Search subsystem deep-dive**: [`search-usage.md`](search-usage.md)
 - **Per-role LLM (search role)**: [`multimodel.md`](multimodel.md)
 - **`atomic_tools.py` reference**: `src/retrieval/atomic_tools.py` (290 строк, 7 функций + dispatch)
 - **`SearchWorkflow`**: `src/workflow/search_workflow.py`

@@ -513,7 +513,7 @@ The report itself is parsed tolerantly (`_parse_report`): strips a ```json fence
 
 # Part 3 — Search & Retrieval
 
-A from-scratch reference for the retrieval techniques that turn a user question into a grounded answer in `kb-llamaindex`. Each concept is explained from zero, then tied to the exact code that implements it. For the end-to-end narrative and diagrams, see [`docs/SEARCH.md`](../SEARCH.md) (deep reference) and [`docs/SEARCH-FLOW.md`](../SEARCH-FLOW.md) (flow + diagrams) — this section deliberately does **not** duplicate those.
+A from-scratch reference for the retrieval techniques that turn a user question into a grounded answer in `kb-llamaindex`. Each concept is explained from zero, then tied to the exact code that implements it. For the end-to-end narrative and diagrams, see [`docs/SEARCH.md`](SEARCH.md) (deep reference) and [`docs/SEARCH-FLOW.md`](SEARCH-FLOW.md) (flow + diagrams) — this section deliberately does **not** duplicate those.
 
 > All config knobs below live on `AgentSettings` in `src/config.py` with the `AGENT_` env prefix (e.g. `graph_walk_enabled` → `AGENT_GRAPH_WALK_ENABLED`). They are resolved at **submit time** in `src/api/routes/search_v2.py` (`_local_params` / `_global_params`) and baked into the workflow input, so a config change can't desync a running (replaying) workflow.
 
