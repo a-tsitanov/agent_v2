@@ -202,3 +202,118 @@ async def test_detect_hierarchy_materialises_levels_and_parents():
     _c, parent_params = next((c, p) for c, p in store.calls if "PARENT_OF" in c)
     assert parent_params.get("parent_id") == "1"
     assert parent_params.get("level") == 1
+
+
+# --- Phase 2b: incremental report carry-over -----------------------------
+
+# Distinctive substring of _READ_OLD_REPORTS_CYPHER, used by the fake store
+# to recognise the "read prior reports before prune" query.
+_OLD_REPORTS_MARKER = "c.members_hash IS NOT NULL AND c.report IS NOT NULL"
+
+
+class _FakeStoreWithOldReports(_FakeStore):
+    """Like ``_FakeStore`` but ALSO returns canned rows for the
+    ``_READ_OLD_REPORTS_CYPHER`` read (matched on a distinctive substring)."""
+
+    def __init__(self, stream_rows, old_report_rows, *, raise_on=None):
+        super().__init__(stream_rows, raise_on=raise_on)
+        self._old_report_rows = old_report_rows
+
+    def structured_query(self, cypher, param_map=None):
+        self.calls.append((cypher, param_map or {}))
+        if self._raise_on and self._raise_on in cypher:
+            raise RuntimeError("boom")
+        if _OLD_REPORTS_MARKER in cypher:
+            return self._old_report_rows
+        if "communityId" in cypher and cypher.strip().upper().startswith(("CALL", "MATCH")):
+            if "gds.leiden.stream" in cypher or "RETURN" in cypher and "communityId" in cypher:
+                return self._stream_rows
+        return []
+
+
+@pytest.mark.asyncio
+async def test_read_old_reports_maps_level_and_hash():
+    """``_read_old_reports`` returns ``{(level, members_hash): {...}}`` from
+    the prior build's ``:Community`` nodes."""
+    from src.graph.communities import _read_old_reports
+
+    old_rows = [
+        {"level": 0, "h": "hash-A", "report": '{"title":"A"}',
+         "title": "A", "summary": "sum A", "report_vec": [0.1, 0.2]},
+        {"level": 1, "h": "hash-B", "report": '{"title":"B"}',
+         "title": "B", "summary": "sum B", "report_vec": None},
+        {"level": 0, "h": None, "report": "x"},  # no hash → skipped
+    ]
+    store = _FakeStoreWithOldReports([], old_rows)
+    old = await _read_old_reports(store)
+
+    assert set(old) == {(0, "hash-A"), (1, "hash-B")}
+    assert old[(0, "hash-A")]["report"] == '{"title":"A"}'
+    assert old[(0, "hash-A")]["title"] == "A"
+    assert old[(0, "hash-A")]["summary"] == "sum A"
+    assert old[(0, "hash-A")]["report_vec"] == [0.1, 0.2]
+
+
+@pytest.mark.asyncio
+async def test_read_old_reports_none_store_returns_empty():
+    from src.graph.communities import _read_old_reports
+    assert await _read_old_reports(None) == {}
+
+
+@pytest.mark.asyncio
+async def test_detect_hierarchy_carries_unchanged_report():
+    """A community whose ``(level, members_hash)`` matches a prior build's
+    report keeps that report (``needs_report=False`` + report carried into
+    the MERGE); a community whose hash is NOT in the old map stays
+    ``needs_report=True`` with no carried report."""
+    from src.graph.communities import detect_hierarchy, members_hash
+
+    # 3 nodes, 2 levels.  level-0 coarse community "1" = {a,b,c};
+    # level-1 finer "10"={a,b}, "11"={c}.
+    rows = [
+        {"name": "a", "ids": [10, 1]},
+        {"name": "b", "ids": [10, 1]},
+        {"name": "c", "ids": [11, 1]},
+    ]
+    # Carry-over only for the level-0 community (members a,b,c).
+    l0_hash = members_hash(["a", "b", "c"])
+    old_rows = [
+        {"level": 0, "h": l0_hash, "report": '{"title":"L0"}',
+         "title": "L0", "summary": "sum L0", "report_vec": [0.3]},
+        # A stale (level,hash) that is NOT among the detected ones — ignored.
+        {"level": 1, "h": "stale-hash", "report": '{"x":1}',
+         "title": "x", "summary": "y", "report_vec": None},
+    ]
+    store = _FakeStoreWithOldReports(rows, old_rows)
+    comms = await detect_hierarchy(store, max_levels=10, min_size=1)
+
+    by = {(c.level, c.community_id): c for c in comms}
+    # level-0 community carried its report → not flagged for re-summarisation.
+    assert by[(0, "1")].needs_report is False
+    # level-1 communities had no matching prior report → still need one.
+    assert by[(1, "10")].needs_report is True
+    assert by[(1, "11")].needs_report is True
+
+    # The old-reports read happened BEFORE the prune-all wipe.
+    cyphers = [c for c, _ in store.calls]
+    read_idx = next(i for i, c in enumerate(cyphers) if _OLD_REPORTS_MARKER in c)
+    prune_idx = next(i for i, c in enumerate(cyphers)
+                     if "DETACH DELETE" in c and "MATCH (c:Community)" in c)
+    assert read_idx < prune_idx
+
+    # The level-0 MERGE carries the report; the level-1 MERGEs do not.
+    l0_merge = next(p for c, p in store.calls
+                    if "MERGE (c:Community" in c and "IN_COMMUNITY" in c)
+    assert l0_merge.get("carry_report") == '{"title":"L0"}'
+    assert l0_merge.get("carry_title") == "L0"
+    assert l0_merge.get("carry_summary") == "sum L0"
+    assert l0_merge.get("carry_report_vec") == [0.3]
+
+    l1_merges = [p for c, p in store.calls
+                 if "MERGE (c:Community" in c and "PARENT_OF" in c]
+    assert l1_merges  # sanity
+    for p in l1_merges:
+        assert p.get("carry_report") is None
+        assert p.get("carry_title") is None
+        assert p.get("carry_summary") is None
+        assert p.get("carry_report_vec") is None

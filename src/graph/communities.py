@@ -124,6 +124,16 @@ MATCH (c:Community)
 DETACH DELETE c
 """
 
+# Read the PRIOR build's reports BEFORE the prune-all wipe so a community
+# whose (level, members_hash) is unchanged can carry its report over instead
+# of being re-summarised.  Only nodes that actually have a report are read.
+_READ_OLD_REPORTS_CYPHER = """
+MATCH (c:Community)
+WHERE c.members_hash IS NOT NULL AND c.report IS NOT NULL
+RETURN c.level AS level, c.members_hash AS h, c.report AS report,
+       c.title AS title, c.summary AS summary, c.report_vec AS report_vec
+"""
+
 # Constraint backing the :Community MERGE (idempotent, prevents dupes).
 _COMMUNITY_CONSTRAINT = (
     "CREATE CONSTRAINT community_key IF NOT EXISTS "
@@ -138,6 +148,10 @@ _MERGE_COMMUNITY_CYPHER = """
 MERGE (c:Community {id: $community_id, level: $level})
 SET c.member_count = $member_count, c.members_hash = $members_hash,
     c.updated = timestamp()
+FOREACH (_ IN CASE WHEN $carry_report IS NULL THEN [] ELSE [1] END |
+    SET c.report = $carry_report, c.title = $carry_title,
+        c.summary = $carry_summary, c.report_vec = $carry_report_vec,
+        c.summarized_at = timestamp())
 WITH c
 OPTIONAL MATCH (c)<-[old:IN_COMMUNITY]-(:__Entity__)
 DELETE old
@@ -159,6 +173,10 @@ _MERGE_SUBCOMMUNITY_CYPHER = """
 MERGE (c:Community {id: $community_id, level: $level})
 SET c.member_count = $member_count, c.members_hash = $members_hash,
     c.updated = timestamp()
+FOREACH (_ IN CASE WHEN $carry_report IS NULL THEN [] ELSE [1] END |
+    SET c.report = $carry_report, c.title = $carry_title,
+        c.summary = $carry_summary, c.report_vec = $carry_report_vec,
+        c.summarized_at = timestamp())
 WITH c
 MATCH (p:Community {id: $parent_id, level: $level - 1})
 MERGE (p)-[:PARENT_OF]->(c)
@@ -174,6 +192,29 @@ def _run_query(store: Any, cypher: str, params: dict | None = None) -> list[dict
     """
     rows = store.structured_query(cypher, param_map=params or {})
     return list(rows or [])
+
+
+async def _read_old_reports(store: Any | None) -> dict[tuple[int, str], dict]:
+    """{(level, members_hash) -> {report,title,summary,report_vec}} from the
+    PRIOR build, read BEFORE prune so unchanged communities keep their
+    report.  Best-effort: [] / {} on None store or any error (logged)."""
+    if store is None:
+        return {}
+    try:
+        rows = await asyncio.to_thread(_run_query, store, _READ_OLD_REPORTS_CYPHER)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("communities: read old reports failed: {e}", e=exc)
+        return {}
+    out: dict[tuple[int, str], dict] = {}
+    for r in rows or []:
+        h = r.get("h")
+        if h is None:
+            continue
+        out[(int(r.get("level") or 0), h)] = {
+            "report": r.get("report"), "title": r.get("title"),
+            "summary": r.get("summary"), "report_vec": r.get("report_vec"),
+        }
+    return out
 
 
 def members_hash(members: list[str]) -> str:
@@ -356,6 +397,11 @@ async def detect_communities(
                     "member_count": comm.member_count,
                     "members_hash": comm.members_hash,
                     "members": comm.members,
+                    # No carry-over on the single-level path; the MERGE's
+                    # FOREACH no-ops when $carry_report is NULL.  Params still
+                    # required so the parameterised query doesn't error.
+                    "carry_report": None, "carry_title": None,
+                    "carry_summary": None, "carry_report_vec": None,
                 },
             )
     except Exception as exc:  # noqa: BLE001
@@ -416,6 +462,43 @@ async def detect_hierarchy(
         n=len(communities), L=n_levels, m=min_size, r=len(rows),
     )
 
+    # Read the PRIOR build's reports BEFORE we prune so a community whose
+    # (level, members_hash) is unchanged carries its report over (no
+    # re-summarisation).  Best-effort: {} on any error.
+    old_reports = await _read_old_reports(store)
+
+    # Carry forward unchanged reports: a community whose (level, members_hash)
+    # matches a prior report keeps it (needs_report=False); the (possibly
+    # model_copied) refs are returned so the build-workflow sees the right
+    # needs_report flags.  Pre-compute the per-community carry param block.
+    carried_refs: list[CommunityRef] = []
+    carry_params: list[dict] = []
+    n_carried = 0
+    for comm in communities:
+        carried = old_reports.get((comm.level, comm.members_hash))
+        if carried and carried.get("report"):
+            comm = comm.model_copy(update={"needs_report": False})
+            params = {
+                "carry_report": carried.get("report"),
+                "carry_title": carried.get("title"),
+                "carry_summary": carried.get("summary"),
+                "carry_report_vec": carried.get("report_vec"),
+            }
+            n_carried += 1
+        else:
+            params = {
+                "carry_report": None, "carry_title": None,
+                "carry_summary": None, "carry_report_vec": None,
+            }
+        carried_refs.append(comm)
+        carry_params.append(params)
+    communities = carried_refs
+    if n_carried:
+        logger.info(
+            "communities: carried over {n} unchanged report(s) (skipping re-summarise)",
+            n=n_carried,
+        )
+
     # Persist the hierarchy.  Communities are sorted coarsest-first, so a
     # level-k node's level-(k-1) parent is always written before it.
     try:
@@ -424,7 +507,7 @@ async def detect_hierarchy(
         await asyncio.to_thread(ensure_community_indexes, store)
         # Prune EVERY prior :Community (depth/ids can change between runs).
         await asyncio.to_thread(_run_query, store, _PRUNE_ALL_CYPHER)
-        for comm in communities:
+        for comm, carry in zip(communities, carry_params):
             if comm.level == 0:
                 # Coarsest: entity IN_COMMUNITY links (identical to today).
                 await asyncio.to_thread(
@@ -435,6 +518,7 @@ async def detect_hierarchy(
                         "member_count": comm.member_count,
                         "members_hash": comm.members_hash,
                         "members": comm.members,
+                        **carry,
                     },
                 )
             else:
@@ -447,6 +531,7 @@ async def detect_hierarchy(
                         "member_count": comm.member_count,
                         "members_hash": comm.members_hash,
                         "parent_id": comm.parent_id,
+                        **carry,
                     },
                 )
     except Exception as exc:  # noqa: BLE001
