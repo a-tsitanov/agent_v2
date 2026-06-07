@@ -40,7 +40,7 @@ _SUBGRAPH_CYPHER = """
 MATCH (e:__Entity__ {name: $name})
 OPTIONAL MATCH (e)-[r]-(m:__Entity__)
 WITH e, r, m, coalesce(m.mention_count, 0) AS mc
-ORDER BY mc DESC
+ORDER BY mc DESC, m.name
 WITH e, collect(CASE WHEN m IS NULL THEN NULL ELSE {
     rl: type(r),
     dir: CASE WHEN startNode(r) = e THEN 'out' ELSE 'in' END,
