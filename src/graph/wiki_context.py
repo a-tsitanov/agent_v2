@@ -1,10 +1,12 @@
 """Read an entity's 1-hop subgraph from Neo4j and hash it for change
-detection. The hash covers only graph FACTS (name/label/description +
-relations) — NOT the QID, page title, or citations — so the article is
-regenerated exactly when the facts change."""
+detection. The hash covers graph FACTS (name/label/description +
+relations) AND the entity's source-document id set — so a NEW source
+document also regenerates the article — but NOT the QID, page title, or
+citation text, so the article is regenerated exactly when those change."""
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 # (rel_label, direction "out"|"in", neighbor_name, neighbor_label, rel_description)
@@ -21,7 +23,7 @@ class EntityContext:
     relations: list[Relation] = field(default_factory=list)
 
 
-def subgraph_hash(ctx: EntityContext, source_doc_ids=()) -> str:
+def subgraph_hash(ctx: EntityContext, source_doc_ids: Iterable[str] = ()) -> str:
     """Stable sha256 over the entity's facts AND its source-document set.
     Order-independent on relations and doc ids; independent of qid/page_title.
     Folding doc ids in means a NEW source document (which adds a download
@@ -56,7 +58,8 @@ RETURN e.name AS name,
 
 _CITATIONS_CYPHER = """
 MATCH (c:Chunk)-[:MENTIONS]->(e:__Entity__ {name: $name})
-WITH c.doc_id AS doc_id, collect(c)[0] AS c
+WITH c.doc_id AS doc_id, c ORDER BY c.text
+WITH doc_id, collect(c)[0] AS c
 RETURN coalesce(c.text, '') AS text, doc_id
 ORDER BY doc_id LIMIT $k
 """

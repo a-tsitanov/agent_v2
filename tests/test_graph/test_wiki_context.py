@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from src.graph.wiki_context import EntityContext, read_citations, read_entity_subgraph, subgraph_hash
+from src.graph.wiki_context import EntityContext, read_citations, read_entity_subgraph, read_source_docs, subgraph_hash
 
 
 def _ctx(**kw):
@@ -64,9 +64,6 @@ def test_read_citations_returns_text_docid_pairs():
     ]
     cites = read_citations(store, "ООО Альфа", k=5)
     assert cites == [("ООО Альфа заключила…", "d1"), ("…контакт +7495…", "d2")]
-
-
-from src.graph.wiki_context import read_source_docs
 
 
 def test_hash_folds_source_doc_ids():
