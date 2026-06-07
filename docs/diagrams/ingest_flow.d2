@@ -57,7 +57,7 @@ wf: "DocumentIngestWorkflow   (IngestParams → IngestResult)   queue: kb-ingest
   graphhalf: "GRAPH HALF  (best-effort · except ⇒ graph_status=vector_only)" {
     style: { stroke: "#10b981" }
     inject: "4 · inject_canonical\npre-write canonical id entities" { class: graph }
-    extract: "5 · extract_kg\nLLM KG extraction per chunk (LightRAG)\nqueue: kb-ingest-llm · GPU·1\n→ staging kg.pkl" { class: llm }
+    extract: "5 · extract_kg\nLLM KG extraction per chunk (LightRAG)\nqueue: kb-ingest-llm · LLMPool-gated\n→ staging kg.pkl" { class: llm }
     gbw: "GraphBuildWorkflow  (child · queue: kb-ingest-merge)" {
       style: { stroke: "#10b981" }
       merge: "6a · merge_and_resolve\nLightRAG dedup → phone consolidation(E.164)\n→ entity-resolution (judge LLM, opt)\n→ staging merged.pkl" { class: llm }
@@ -67,12 +67,13 @@ wf: "DocumentIngestWorkflow   (IngestParams → IngestResult)   queue: kb-ingest
     inject -> extract -> gbw
   }
 
-  wiki: "7 · push_wikibase  (best-effort)\nonly if graph_status=completed" { class: graph }
-  final: "8 · finalize\nstatus=completed | vector_only\ndelete staging · write ingest_metrics" { class: vec }
-  failed: "9 · mark_failed\nstatus=failed + error\n(only on vector-half failure)" { class: fail }
+  markdirty: "7 · mark_entities_dirty  (best-effort)\nflag merged entities for the wiki editor\n(only if WIKI_ENABLED)" { class: graph }
+  wiki: "8 · push_wikibase  (best-effort)\nonly if graph_status=completed" { class: graph }
+  final: "9 · finalize\nstatus=completed | vector_only\ndelete staging · write ingest_metrics" { class: vec }
+  failed: "10 · mark_failed\nstatus=failed + error\n(only on vector-half failure)" { class: fail }
 
   vechalf -> graphhalf: "vector ok"
-  graphhalf -> wiki -> final
+  graphhalf -> markdirty -> wiki -> final
   vechalf -> failed: "vector half throws" { style.stroke: "#dc2626"; style.stroke-dash: 4 }
 }
 
@@ -88,6 +89,7 @@ wf.graphhalf.inject -> stores.neo4j { class: thin }
 wf.graphhalf.extract -> stores.minio_stg { class: thin }
 wf.graphhalf.gbw.merge -> stores.minio_stg { class: thin }
 wf.graphhalf.gbw.build -> stores.neo4j { class: thin }
+wf.markdirty -> stores.neo4j: "wiki_dirty" { class: thin }
 wf.wiki -> stores.wikibase { class: thin }
 wf.final -> stores.pg { class: thin }
 wf.failed -> stores.pg { class: thin }
@@ -95,10 +97,10 @@ wf.failed -> stores.pg { class: thin }
 # ── offline (NOT per-document) ──
 offline: "CommunityBuildWorkflow   (OFFLINE · admin/schedule · queue: kb-graph-build)" {
   class: offline
-  detect: "detect_communities\nNeo4j GDS Leiden (min_size=3)" { class: offline }
-  summ: "summarize_community\nfan-out (×, parallel) · small LLM" { class: offline }
+  detect: "detect_communities / detect_hierarchy\nGDS Leiden (min_size=3);\nAGENT_COMMUNITY_MAX_LEVELS>1 ⇒ multi-level\n:Community + PARENT_OF + members_hash" { class: offline }
+  summ: "report build (bottom-up, finest-first)\nstructured {title,summary,findings} + report_vec\nincremental carry-over · only changed" { class: offline }
   detect -> summ
 }
-offline.summ -> stores.neo4j: ":Community.summary" { style.stroke: "#ca8a04"; style.stroke-dash: 3 }
+offline.summ -> stores.neo4j: "reports + report_vec" { style.stroke: "#ca8a04"; style.stroke-dash: 3 }
 
-notes: "Queues & concurrency\n• kb-ingest (IO/embed/Neo4j) — conc 4\n• kb-ingest-llm (extract_kg) — conc 1 · GPU\n• kb-ingest-merge (merge + graph build) — conc 1\n• retries: FAST (≤60s) for IO ; HEAVY (≤30min) for LLM\n• models: extraction/judge = small tier\n• status: pending→processing→completed|vector_only|failed\n• version_tag (X-Version-Tag) → ingest_metrics" { class: note }
+notes: "Queues & concurrency\n• kb-ingest (IO/embed/Neo4j) — conc 4\n• kb-ingest-llm (extract_kg) — conc 18\n• kb-ingest-merge (merge + graph build) — conc 14\n• actual LLM concurrency gated by per-process LLMPool (tier + role lanes)\n• retries: FAST (≤60s) for IO ; HEAVY (≤30min) for LLM\n• models: extraction/judge = small tier (snapshot per-role)\n• status: pending→processing→completed|vector_only|failed\n• version_tag (X-Version-Tag) → ingest_metrics" { class: note }

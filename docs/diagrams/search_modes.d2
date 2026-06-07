@@ -11,17 +11,19 @@ classes: {
   note:  { shape: page; style: { fill: "#fff7ed"; stroke: "#ea580c"; font-size: 13 } }
 }
 
-surface: "Entry surfaces (same params)\nMCP-1: kb_search / _global / _drift / _auto\nFastAPI: /api/v1/search/{local,global,drift,auto}\nqueue: kb-search-small" { class: entry }
+surface: "Entry surfaces (same params + history)\nMCP-1: kb_search / _global / _drift / _auto\nFastAPI: /api/v1/search/{local,global,drift,auto}\nqueue: kb-search-small\n— contextualize_query rewrites follow-up\n  to standalone Q when history present (opt-in)" { class: entry }
 
-local: "SearchOrchestratorWorkflow  (mode=local)\nplan → parallel sub-Q retrieve → merge\n→ coverage → rerank → synthesize" { class: wf }
+local: "SearchOrchestratorWorkflow  (mode=local)\ncontextualize → plan → parallel sub-Q retrieve\n(vector · graph_search · find_entity · graph_walk DUAL-SEED)\n→ coverage → rerank → synthesize" { class: wf }
 
-global: "GlobalSearchWorkflow  (mode=global)\nGraphRAG map-reduce over :Community summaries\nmap_communities → MAP (parallel) → REDUCE → synth\nparams: max_communities, map_parallelism" { class: wf }
+global: "GlobalSearchWorkflow  (mode=global)\nGraphRAG map-reduce over :Community REPORTS\nSELECT (lexical | semantic kNN | hierarchy descent)\n→ MAP (parallel) → REDUCE → synth\nparams: max_communities, map_parallelism" { class: wf }
 
 drift: "DriftSearchWorkflow  (mode=drift)" {
   class: wf
+  d0: "0 · contextualize ONCE\n(then children get history cleared)" { class: step }
   d1: "1 · run local (child)" { class: step }
   d2: "2 · global with drift_mode=True\nseeded by local sources" { class: large }
-  d1 -> d2: "local.sources as drift_seed"
+  d0 -> d1 -> d2: "local.sources as drift_seed"
+  d2 -> d1: "global fails ⇒ degrade to local answer" { style.stroke: "#dc2626"; style.stroke-dash: 4 }
 }
 
 auto: "AutoSearchWorkflow  (mode=auto)" {

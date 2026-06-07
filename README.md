@@ -95,7 +95,10 @@ export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
 
 | Where to start | What you'll find |
 |---|---|
-| [`docs/runbook/README.md`](docs/runbook/README.md) | Index of operator runbooks (**mcp**, search, multimodel, analytics, wikibase, wiki-editor) |
+| [`docs/FEATURES.md`](docs/FEATURES.md) | **Every feature** — what/why/how + env, with a deep dive on the new scale/GraphRAG work (native-vector ER, conversation history, hierarchical communities + dynamic selection, dual walk-seed, drift fallback) |
+| [`docs/INGEST.md`](docs/INGEST.md) | **Ingest pipeline** — blocks/activities/queues/staging, with Mermaid + D2 diagrams (vector half + graph-build child + identifiers + multimodel) |
+| [`docs/SEARCH-FLOW.md`](docs/SEARCH-FLOW.md) | **Search flow** — local/global/drift/auto + retrieval tools + community selection, with Mermaid + D2 diagrams |
+| [`docs/runbook/README.md`](docs/runbook/README.md) | Index of operator runbooks (**mcp**, search, multimodel, analytics, wikibase, wiki-editor, er-native-vector-knn) |
 | [`docs/runbook/mcp.md`](docs/runbook/mcp.md) | Two MCP servers — MCP-1 `kb_search` (Temporal-backed, high-level) and MCP-2 atomic retrieval tools (in-process, GPU-protected via BoundedLLM semaphore).  Stdio + HTTP/SSE transports.  Configuring OpenWebUI / Claude Desktop / Cursor / Continue. |
 | [`docs/runbook/search.md`](docs/runbook/search.md) | Deep-dive into the search subsystem: `/search`, `/agent` (ReAct), `/selfrag` (reflective) + hybrid retriever + reranker + graph retriever + trace observability + tuning matrix. Self-contained with code excerpts. |
 | [`docs/runbook/multimodel.md`](docs/runbook/multimodel.md) | Per-role LLM (extraction/judge/search) + child workflow + per-activity model in `ingest_metrics`.  Detailed reading guide with code excerpts. |
