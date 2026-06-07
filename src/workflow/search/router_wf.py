@@ -26,7 +26,10 @@ from __future__ import annotations
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
+    from src.config import settings
     from src.workflow.contracts import (
+        ContextualizeParams,
+        ContextualizeResult,
         GlobalSearchParams,
         OrchestratorParams,
         RouteLabel,
@@ -88,6 +91,26 @@ class DriftSearchWorkflow:
     ) -> SearchOutcome:
         log = workflow.logger
         log.info("drift_search start  query=%s", local_params.query[:80])
+
+        # 0. Contextualise the follow-up against conversation history ONCE
+        #    here, then pass the rewritten standalone query to BOTH children
+        #    with history CLEARED so neither the local orchestrator nor the
+        #    global pass re-runs contextualisation.  Empty history ⇒ skipped
+        #    (back-compat — children run exactly as before).
+        if local_params.history and settings.agent.conversation_history_enabled:
+            ctx = await workflow.execute_activity(
+                "contextualize_query",
+                ContextualizeParams(
+                    query=local_params.query, history=list(local_params.history)),
+                start_to_close_timeout=LLM_START_TO_CLOSE,
+                schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+                retry_policy=FAST_RETRY,
+                result_type=ContextualizeResult,
+            )
+            local_params = local_params.model_copy(
+                update={"query": ctx.query, "history": []})
+            global_params = global_params.model_copy(
+                update={"query": ctx.query, "history": []})
 
         # 1. Local plan-execute pass (concrete chunk evidence) — REUSE the
         #    existing orchestrator unchanged as a child workflow.
