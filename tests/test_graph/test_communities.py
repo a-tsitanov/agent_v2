@@ -165,3 +165,40 @@ def test_group_by_levels_maps_dendrogram_and_parents():
     assert l1 == {"10": {"a","b"}, "11": {"c"}}
     # parent of finer 10/11 is coarser 1
     assert all(c.parent_id == "1" for c in levels if c.level == 1)
+
+
+@pytest.mark.asyncio
+async def test_detect_hierarchy_materialises_levels_and_parents():
+    """detect_hierarchy must prune-all before merging, write level-0
+    entity IN_COMMUNITY links, and wire level>0 PARENT_OF edges with the
+    parent written FIRST (the coarsest-first invariant the MATCH relies on)."""
+    from src.graph.communities import detect_hierarchy
+
+    # 3 nodes, 2 levels (finest..coarsest): a,b in finer 10; c in finer 11;
+    # all three in coarse community 1.
+    rows = [
+        {"name": "a", "ids": [10, 1]},
+        {"name": "b", "ids": [10, 1]},
+        {"name": "c", "ids": [11, 1]},
+    ]
+    store = _FakeStore(rows)
+    comms = await detect_hierarchy(store, max_levels=10, min_size=1)
+
+    assert {(c.level, c.community_id) for c in comms} == {(0, "1"), (1, "10"), (1, "11")}
+
+    cyphers = [c for c, _ in store.calls]
+    # prune-ALL precedes the first community MERGE
+    prune_idx = next(i for i, c in enumerate(cyphers)
+                     if "DETACH DELETE" in c and "MATCH (c:Community)" in c)
+    first_merge_idx = next(i for i, c in enumerate(cyphers) if "MERGE (c:Community" in c)
+    assert prune_idx < first_merge_idx
+
+    # level 0 = IN_COMMUNITY entity links; level>0 = PARENT_OF; parent first
+    in_comm_idx = next(i for i, c in enumerate(cyphers) if "IN_COMMUNITY" in c)
+    parent_idx = next(i for i, c in enumerate(cyphers) if "PARENT_OF" in c)
+    assert in_comm_idx < parent_idx   # coarsest-first: parent before child
+
+    # the PARENT_OF write carries the coarser parent id + the child level
+    _c, parent_params = next((c, p) for c, p in store.calls if "PARENT_OF" in c)
+    assert parent_params.get("parent_id") == "1"
+    assert parent_params.get("level") == 1

@@ -151,8 +151,10 @@ MERGE (e)-[:IN_COMMUNITY]->(c)
 # entity ``IN_COMMUNITY`` links at level > 0 — only level 0 carries those
 # (back-compat).  Instead we wire ``(parent:Community {level:$level-1})-
 # [:PARENT_OF]->(this)`` coarser→finer so the dendrogram is navigable.  The
-# parent (a level-$level-1 community) is MERGEd here too in case it has not
-# been written yet (ordering-independent), then de-dup the PARENT_OF edge.
+# parent is MATCHed (NOT merged): the caller writes communities
+# coarsest-first (``_group_by_levels`` sorts by level ascending), so the
+# level-$level-1 parent already exists by the time a level-$level child is
+# written — ordering-DEPENDENT by design.
 _MERGE_SUBCOMMUNITY_CYPHER = """
 MERGE (c:Community {id: $community_id, level: $level})
 SET c.member_count = $member_count, c.members_hash = $members_hash,
@@ -172,32 +174,6 @@ def _run_query(store: Any, cypher: str, params: dict | None = None) -> list[dict
     """
     rows = store.structured_query(cypher, param_map=params or {})
     return list(rows or [])
-
-
-def _group_by_community(
-    rows: list[dict], *, min_size: int, level: int,
-) -> list[CommunityRef]:
-    """Group ``{name, communityId}`` stream rows into ``CommunityRef``s,
-    dropping communities below ``min_size``.  Pure / unit-testable."""
-    buckets: dict[str, list[str]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = row.get("name")
-        cid = row.get("communityId")
-        if not name or cid is None:
-            continue
-        buckets.setdefault(str(cid), []).append(str(name))
-    out: list[CommunityRef] = []
-    for cid, members in buckets.items():
-        if len(members) < min_size:
-            continue
-        out.append(CommunityRef(
-            community_id=cid, level=level, members=sorted(members),
-        ))
-    # Deterministic ordering — largest first, then by id.
-    out.sort(key=lambda c: (-c.member_count, c.community_id))
-    return out
 
 
 def members_hash(members: list[str]) -> str:
@@ -254,6 +230,12 @@ def _group_by_levels(
             members_by_cid.setdefault(cid, []).append(name)
             if k > 0:
                 parent_by_cid[cid] = cids[k - 1]  # coarser level is the parent
+        # INVARIANT (Leiden nesting): a level-(k-1) community is the union of
+        # its level-k children, so member_count(parent) >= member_count(child).
+        # Hence `min_size` can never drop a parent while keeping a child →
+        # the level>0 `MATCH (parent)` in _MERGE_SUBCOMMUNITY_CYPHER never
+        # orphans. Holds only while intermediateCommunityIds stays strictly
+        # nested (GDS Leiden guarantees this).
         for cid, members in members_by_cid.items():
             if len(members) < min_size:
                 continue
