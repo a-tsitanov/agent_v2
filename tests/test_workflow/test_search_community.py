@@ -23,7 +23,10 @@ from src.workflow.contracts import (
 )
 from src.workflow.search.activities import community as community_mod
 from src.workflow.search.activities.community import summarize_community_activity
-from src.workflow.search.community_wf import build_summarize_specs
+from src.workflow.search.community_wf import (
+    build_summarize_specs,
+    group_specs_by_level,
+)
 
 
 class _FakeStore:
@@ -255,6 +258,54 @@ def test_build_summarize_specs_maps_each_community():
 
 def test_build_summarize_specs_empty():
     assert build_summarize_specs(DetectCommunitiesResult(communities=[])) == []
+
+
+def test_build_summarize_specs_skips_carried_over_reports():
+    # needs_report=False communities (carried over unchanged from a prior
+    # build) are skipped — only those needing a (re)summary emit specs.
+    detect = DetectCommunitiesResult(communities=[
+        CommunityRef(community_id="1", level=0, members=["A", "B", "C"],
+                     needs_report=True),
+        CommunityRef(community_id="2", level=0, members=["D", "E", "F"],
+                     needs_report=False),  # carried over → skip
+        CommunityRef(community_id="3", level=1, members=["G", "H"],
+                     needs_report=True),
+    ])
+    specs = build_summarize_specs(detect)
+    assert [s.community_id for s in specs] == ["1", "3"]
+
+
+# ── pure helper: level grouping (finest-first) ──────────────────────
+
+
+def test_group_specs_by_level_orders_finest_first():
+    specs = [
+        SummarizeCommunityParams(community_id="c0a", level=0, members=["a"]),
+        SummarizeCommunityParams(community_id="c1a", level=1, members=["b"]),
+        SummarizeCommunityParams(community_id="c2a", level=2, members=["c"]),
+        SummarizeCommunityParams(community_id="c1b", level=1, members=["d"]),
+        SummarizeCommunityParams(community_id="c0b", level=0, members=["e"]),
+    ]
+    groups = group_specs_by_level(specs)
+    # Finest (highest level number) first, coarsest (level 0) last.
+    assert [g[0].level for g in groups] == [2, 1, 0]
+    assert [s.community_id for s in groups[0]] == ["c2a"]
+    assert [s.community_id for s in groups[1]] == ["c1a", "c1b"]
+    assert [s.community_id for s in groups[2]] == ["c0a", "c0b"]
+
+
+def test_group_specs_by_level_single_level():
+    specs = [
+        SummarizeCommunityParams(community_id="1", level=0, members=["a"]),
+        SummarizeCommunityParams(community_id="2", level=0, members=["b"]),
+    ]
+    groups = group_specs_by_level(specs)
+    assert len(groups) == 1
+    assert [s.community_id for s in groups[0]] == ["1", "2"]
+
+
+def test_group_specs_by_level_empty():
+    assert group_specs_by_level([]) == []
 
 
 # ── pure helper: structured-report parser ───────────────────────────

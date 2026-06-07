@@ -443,11 +443,15 @@ class DetectCommunitiesParams(_Frozen):
 
     ``min_size`` drops communities below the threshold (noise); ``level``
     tags the written ``:Community`` nodes (single-level for R6, kept for a
-    future hierarchical pass).
+    future hierarchical pass).  ``max_levels`` selects detection mode:
+    ``1`` (default) == single-level/back-compat (``detect_communities``);
+    ``>1`` == materialise the dendrogram HIERARCHY (``detect_hierarchy``).
+    Phase 5 wires ``max_levels`` from config.
     """
 
     min_size: int = 3
     level: int = 0
+    max_levels: int = 1
 
 
 class DetectCommunitiesResult(_Frozen):

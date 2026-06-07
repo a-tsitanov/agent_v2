@@ -234,17 +234,53 @@ def _build_child_context(rows: list[dict]) -> str:
 async def detect_communities_activity(
     params: DetectCommunitiesParams,
 ) -> DetectCommunitiesResult:
-    """Run GDS Leiden detection + materialise ``:Community`` nodes."""
-    activity.heartbeat({"stage": "detect", "min_size": params.min_size})
-    from src.graph.communities import detect_communities
+    """Run GDS Leiden detection + materialise ``:Community`` nodes.
+
+    ``max_levels == 1`` (default) → single-level/back-compat
+    (``detect_communities``); ``max_levels > 1`` → the full dendrogram
+    HIERARCHY (``detect_hierarchy``).  After detection (either path) the
+    native report vector index is ensured ONCE here — detect runs before
+    any ``summarize_community_activity`` on the same ``kb-graph-build``
+    queue, so the per-community ensure is redundant (fail-open)."""
+    activity.heartbeat({
+        "stage": "detect",
+        "min_size": params.min_size,
+        "max_levels": params.max_levels,
+    })
 
     store = _get_store()
-    communities = await detect_communities(
-        store, min_size=params.min_size, level=params.level,
-    )
+    if params.max_levels > 1:
+        from src.graph.communities import detect_hierarchy
+
+        communities = await detect_hierarchy(
+            store, max_levels=params.max_levels, min_size=params.min_size,
+        )
+    else:
+        from src.graph.communities import detect_communities
+
+        communities = await detect_communities(
+            store, min_size=params.min_size, level=params.level,
+        )
+
+    # Ensure the report vector index ONCE (one-shot, before the summarize
+    # fan-out reads/writes report_vec).  Fail-open — a missing index only
+    # disables report-vector search, never the build.
+    if store is not None:
+        try:
+            from src.config import settings
+            from src.graph.index import ensure_community_report_vector_index
+
+            await asyncio.to_thread(
+                ensure_community_report_vector_index, store, settings.milvus.dim,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            activity.logger.warning(
+                "detect_communities_activity  report index ensure err=%s", exc,
+            )
+
     activity.logger.info(
-        "detect_communities_activity  detected=%d  min_size=%d",
-        len(communities), params.min_size,
+        "detect_communities_activity  detected=%d  min_size=%d  max_levels=%d",
+        len(communities), params.min_size, params.max_levels,
     )
     return DetectCommunitiesResult(communities=communities)
 
@@ -362,28 +398,10 @@ async def summarize_community_activity(
         )
 
     # 3. Embed title + summary (fail-open — None ⇒ persist without vec).
+    #    The report vector index is ensured ONCE in detect_communities_activity
+    #    (detect runs before any summarize on the same queue), so there's no
+    #    per-community ensure here.
     report_vec = await _embed_report(title, summary)
-
-    # 3b. Ensure the native report vector index exists (idempotent, fail-
-    #     open — mirrors how ER ensures its index before writing vectors).
-    #     NOTE: this runs per-community inside the bounded fan-out, so the
-    #     first build issues N concurrent (idempotent) CREATE VECTOR INDEX
-    #     calls.  Phase 3 should promote this to a single workflow-level
-    #     one-shot before the fan-out (like detect_communities does for
-    #     ensure_community_indexes); kept here so Phase-2a stands alone
-    #     (the index must be created somewhere for reports to be searchable).
-    if report_vec is not None:
-        try:
-            from src.graph.index import ensure_community_report_vector_index
-
-            await asyncio.to_thread(
-                ensure_community_report_vector_index, store, len(report_vec),
-            )
-        except Exception as exc:  # noqa: BLE001 — fail-open
-            activity.logger.warning(
-                "summarize_community_activity  cid=%s  index ensure err=%s",
-                params.community_id, exc,
-            )
 
     # 4. Persist the report (idempotent MERGE on id+level).
     persisted = False
