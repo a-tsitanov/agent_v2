@@ -232,6 +232,38 @@ def test_ensure_er_vector_index_ddl_and_failopen():
     assert ensure_er_vector_index(_Boom(), 768) is False
 
 
+def test_ensure_community_report_vector_index_ddl_and_failopen():
+    from src.graph.index import (
+        COMMUNITY_REPORT_VECTOR_INDEX_CYPHER,
+        ensure_community_report_vector_index,
+    )
+
+    assert (
+        "CREATE VECTOR INDEX community_report_vec IF NOT EXISTS"
+        in COMMUNITY_REPORT_VECTOR_INDEX_CYPHER
+    )
+    assert "FOR (c:Community) ON c.report_vec" in COMMUNITY_REPORT_VECTOR_INDEX_CYPHER
+    assert "`vector.dimensions`: $dim" in COMMUNITY_REPORT_VECTOR_INDEX_CYPHER
+    assert "'cosine'" in COMMUNITY_REPORT_VECTOR_INDEX_CYPHER
+
+    seen = {}
+
+    class _Store:
+        def structured_query(self, cypher, param_map=None):
+            seen["cypher"] = cypher
+            seen["param_map"] = param_map
+
+    assert ensure_community_report_vector_index(_Store(), 768) is True
+    assert seen["cypher"] == COMMUNITY_REPORT_VECTOR_INDEX_CYPHER
+    assert seen["param_map"] == {"dim": 768}
+
+    class _Boom:
+        def structured_query(self, cypher, param_map=None):
+            raise RuntimeError("no vector index support")
+
+    assert ensure_community_report_vector_index(_Boom(), 768) is False
+
+
 def test_ensure_community_indexes_ddl_and_failopen():
     from src.graph.index import (
         COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER,

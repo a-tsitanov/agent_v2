@@ -125,6 +125,36 @@ def ensure_er_vector_index(store, dim: int) -> bool:
         return False
 
 
+# Native vector index over `Community.report_vec` — backs the structured
+# community-report retrieval (Phase 2a of the hierarchical-communities
+# track).  Reports are embedded from `title + summary`; cosine to match
+# the project embedding model (mirrors `er_embedding_vec` on entities).
+COMMUNITY_REPORT_VECTOR_INDEX_CYPHER = (
+    "CREATE VECTOR INDEX community_report_vec IF NOT EXISTS "
+    "FOR (c:Community) ON c.report_vec "
+    "OPTIONS {indexConfig: {`vector.dimensions`: $dim, "
+    "`vector.similarity_function`: 'cosine'}}"
+)
+
+
+def ensure_community_report_vector_index(store, dim: int) -> bool:
+    """Idempotently create the community-report vector index on
+    ``Community.report_vec``.
+
+    Fail-open: logs and returns False on any error (e.g. a Neo4j version
+    without vector indexes), so the report-build path can persist reports
+    without the native index and fall back to lexical/summary search.
+    """
+    try:
+        store.structured_query(
+            COMMUNITY_REPORT_VECTOR_INDEX_CYPHER, param_map={"dim": int(dim)}
+        )
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_community_report_vector_index failed: {e}", e=exc)
+        return False
+
+
 # Range indexes for the community / global read paths.
 #   * community_level — backs `MATCH (c:Community {level: $level})`
 #     (global_search summary read).  NOT redundant with the
