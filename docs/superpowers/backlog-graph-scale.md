@@ -78,6 +78,23 @@ points and fallbacks:
 Include per-path sequence diagrams (Mermaid + D2) like `docs/INGEST.md`. Goal: a
 reader can follow any query to the exact code without reading the source first.
 
+## Config hygiene
+
+### Prune dead AgentSettings fields (NOT remove the class) — S
+`AgentSettings` is **not** legacy — it's read in ~28 sites across `src/` (ER,
+search, communities, conversation history, coverage, graph-walk knobs incl.
+`er_use_native_vector_knn`, `community_max_levels`, `conversation_history_enabled`).
+Do **not** remove the class. But two fields are genuinely dead (0 read sites
+outside `config.py`):
+- `llm_max_concurrent` — superseded by the per-process `LLMPool` (post LLM-pool
+  consolidation); the pool now owns LLM concurrency.
+- `observation_max_chars` — no readers.
+Drop those two (and audit `top_k` / `er_enabled` / `canonical_linker_enabled`,
+which ARE read but gate dormant/opt-in features). Optional: the name
+`AgentSettings` is a vestige of the earlier "agent" framing — a rename to
+`SearchSettings`/`RetrievalSettings` could be folded in, but that touches many
+call sites (`settings.agent.*`) so it's a separate, mechanical change.
+
 ## Notes
 - P1.2 hub-walk degree-cap: measured MILD (≤2× across hops 2–3) → not worth a fix unless a restored hub→hub→hub graph shows otherwise.
 - All "search feature" gaps are deltas vs systems we already resemble (extractor ported from LightRAG; local/global/drift naming from GraphRAG).
