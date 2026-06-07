@@ -534,3 +534,49 @@ async def test_cleanup_stored_losers_safe_on_failure():
     # Exactly one attempt (the APOC repoint) — no destructive fallback.
     assert len(calls) == 1
     assert "DETACH DELETE" not in calls[0]["query"] or "apoc.merge" in calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_singletons_get_er_vec_when_native_knn_enabled() -> None:
+    """With native kNN on, singletons also get the native `er_vec` list
+    (alongside the legacy `er_embedding` JSON) so the vector index can
+    find them."""
+    embed = _EmbeddingStub(table={"Unique Concept:": [0.1, 0.2, 0.3, 0.4]})
+    out_ents, _, _ = await resolve_entities(
+        [_ent("Unique Concept", desc="Solo.")], [], [],
+        llm=_ScriptedJudgeLLM(), embed_model=embed,
+        config=ERConfig(use_native_vector_knn=True),  # graph_store=None → no kNN load
+    )
+    props = out_ents[0].properties or {}
+    assert props.get("er_vec") == [0.1, 0.2, 0.3, 0.4]
+    assert json.loads(props.get("er_embedding")) == [0.1, 0.2, 0.3, 0.4]
+
+
+@pytest.mark.asyncio
+async def test_load_candidates_native_builds_deduped_items_from_knn() -> None:
+    from src.graph.entity_resolution import _Item, _load_candidates_native
+
+    knn_rows = [
+        {"name": "Stored A", "labels": ["__Entity__", "Person"],
+         "er_vec": [1.0, 0.0], "er_embedding": None,
+         "mention_count": 7, "description": "d"},
+        {"name": "Stored B", "labels": ["__Entity__", "Organization"],
+         "er_vec": None, "er_embedding": "[0.0, 1.0]",  # JSON fallback
+         "mention_count": 3, "description": ""},
+    ]
+
+    class _Store:
+        def structured_query(self, query, param_map=None):
+            return knn_rows if "queryNodes" in query else []  # else = index DDL
+
+    new = [_Item(name="New X", norm="new x", label="Person",
+                 description="", mention_count=1, source="new",
+                 embedding=[1.0, 0.0])]
+    out = await _load_candidates_native(_Store(), new, k=10, dim=2)
+
+    by_name = {it.name: it for it in out}
+    assert set(by_name) == {"Stored A", "Stored B"}
+    assert by_name["Stored A"].embedding == [1.0, 0.0]
+    assert by_name["Stored A"].source == "stored"
+    assert by_name["Stored B"].embedding == [0.0, 1.0]  # parsed from JSON
+    assert by_name["Stored B"].label == "Organization"

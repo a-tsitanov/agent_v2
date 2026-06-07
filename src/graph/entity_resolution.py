@@ -171,7 +171,25 @@ class ERConfig:
     and, once the graph exceeds this many canonicals, new mentions of a
     frequent entity could silently fail to match (→ duplicates).  Raise
     for larger graphs (memory ≈ window × embedding-dim × 4 bytes: 5k×768
-    ≈ 15 MB, 25k ≈ 75 MB); candidate-generation cost grows with it too."""
+    ≈ 15 MB, 25k ≈ 75 MB); candidate-generation cost grows with it too.
+
+    Ignored when ``use_native_vector_knn`` is on."""
+
+    use_native_vector_knn: bool = False
+    """Opt-in: replace the bounded ``incremental_window`` load + Python
+    brute-force candidate gen with a native Neo4j vector-index kNN per
+    new entity (``er_vec`` list property + ``er_embedding_vec`` index).
+    Removes the window ceiling entirely — measured on a synthetic 200k
+    graph the mention_count window reaches only ~2 % of true nearest
+    canonicals, native kNN ~96 % at ~6 ms/query (see
+    ``tests/eval/scale/bench_er_native``).  Requires the backfill
+    (``scripts/backfill_er_vector.py``) to have populated ``er_vec`` on
+    existing entities and built the index.  Default off — flip only after
+    backfill."""
+
+    vector_knn_k: int = 20
+    """Neighbours fetched per new entity from the ER vector index when
+    ``use_native_vector_knn`` is on (the per-entity candidate fan-out)."""
 
     verdict_cache_enabled: bool = True
     """When True AND an `er_store` is passed to `resolve_entities`,
@@ -927,6 +945,10 @@ async def _consolidate_cluster(
     }
     if er_review_needed:
         properties["er_review_needed"] = True
+    # Native vector kNN (opt-in): also store the embedding as a native
+    # list property so the ER vector index can find this canonical.
+    if cfg.use_native_vector_knn and canonical.embedding:
+        properties["er_vec"] = list(canonical.embedding)
 
     return EntityNode(
         name=canonical.name,
@@ -1188,6 +1210,82 @@ async def _load_existing_canonicals(
     return out
 
 
+async def _load_candidates_native(
+    graph_store: Any | None,
+    new_items: list[_Item],
+    *,
+    k: int,
+    dim: int,
+) -> list[_Item]:
+    """Native-vector-index alternative to ``_load_existing_canonicals``.
+
+    For each new entity, queries the ER vector index
+    (``er_embedding_vec`` over ``__Entity__.er_vec``) for its ``k``
+    nearest stored canonicals — across the WHOLE graph, no window — and
+    returns the deduplicated union as stored ``_Item``s.  Best-effort:
+    returns ``[]`` (→ within-batch ER only) when the store is missing or
+    every query errors (e.g. index not built yet — run the backfill).
+    """
+    if graph_store is None:
+        return []
+    # Idempotently ensure the index exists (no-op once built).
+    try:
+        from src.graph.index import ensure_er_vector_index
+
+        await asyncio.to_thread(ensure_er_vector_index, graph_store, dim)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ensure ER vector index failed: {e}", e=exc)
+
+    seen: dict[str, _Item] = {}
+    for it in new_items:
+        if not it.embedding:
+            continue
+        try:
+            rows = await asyncio.to_thread(
+                graph_store.structured_query,
+                """
+                CALL db.index.vector.queryNodes('er_embedding_vec', $k, $vec)
+                YIELD node
+                WHERE node.er_canonical_name IS NOT NULL
+                RETURN node.name AS name,
+                       labels(node) AS labels,
+                       node.er_vec AS er_vec,
+                       node.er_embedding AS er_embedding,
+                       coalesce(node.mention_count, 1) AS mention_count,
+                       coalesce(node.description, '') AS description
+                """,
+                param_map={"k": int(k), "vec": list(it.embedding)},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ER native kNN query failed: {e}", e=exc)
+            continue
+        for row in rows or []:
+            name = row.get("name") or ""
+            if not name or name in seen:
+                continue
+            emb = row.get("er_vec")
+            if not emb:  # fall back to the legacy JSON column
+                raw = row.get("er_embedding") or "[]"
+                try:
+                    emb = json.loads(raw) if isinstance(raw, str) else list(raw)
+                except json.JSONDecodeError:
+                    emb = []
+            if not emb:
+                continue
+            labels = [lab for lab in (row.get("labels") or [])
+                      if lab not in ("__Entity__", "__Node__")]
+            seen[name] = _Item(
+                name=name,
+                norm=_normalize_entity_name(name),
+                label=labels[0] if labels else "Other",
+                description=row.get("description") or "",
+                mention_count=int(row.get("mention_count") or 1),
+                source="stored",
+                embedding=list(emb),
+            )
+    return list(seen.values())
+
+
 # ── public entry point ─────────────────────────────────────────────
 
 
@@ -1264,15 +1362,27 @@ async def resolve_entities(
     if not new_items:
         return entities, relations, {}
 
-    # 2. Load existing canonicals (incremental ER).
-    stored_items = await _load_existing_canonicals(
-        graph_store, limit=cfg.incremental_window,
-    )
-
-    # 3. Embed new entities.  Stored ones already have embeddings.
+    # 2. Embed new entities first — needed for candidate cosines and,
+    #    when native kNN is on, to query the ER vector index.  Stored
+    #    items already carry embeddings.
     if not await _embed_entities(new_items, embed_model):
         logger.warning("ER skipped: embed model failed")
         return entities, relations, {}
+
+    # 3. Load the stored canonicals to compare against.  Native vector
+    #    kNN (opt-in) queries the ER vector index per new entity over the
+    #    WHOLE graph (no window ceiling); otherwise the bounded
+    #    mention_count window.
+    if cfg.use_native_vector_knn:
+        from src.config import settings as _settings
+
+        stored_items = await _load_candidates_native(
+            graph_store, new_items, k=cfg.vector_knn_k, dim=_settings.milvus.dim,
+        )
+    else:
+        stored_items = await _load_existing_canonicals(
+            graph_store, limit=cfg.incremental_window,
+        )
 
     all_items = new_items + stored_items
     items_by_norm: dict[str, _Item] = {it.norm: it for it in all_items}
@@ -1440,6 +1550,8 @@ async def resolve_entities(
             ent.properties = {}
         ent.properties.setdefault("er_canonical_name", ent.name)
         ent.properties["er_embedding"] = json.dumps(it.embedding)
+        if cfg.use_native_vector_knn and it.embedding:
+            ent.properties["er_vec"] = list(it.embedding)
 
     # Build output entity list.
     by_canonical_norm = {

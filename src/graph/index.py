@@ -99,6 +99,32 @@ def ensure_entity_lookup_indexes(store) -> bool:
     return ok
 
 
+# Native vector index over `__Entity__.er_vec` — backs the opt-in
+# entity-resolution kNN (`ERConfig.use_native_vector_knn`) that replaces
+# the bounded 5000-entity window with a per-entity nearest-neighbour
+# lookup across the whole graph.  Cosine to match the ER embeddings.
+ER_VECTOR_INDEX_CYPHER = (
+    "CREATE VECTOR INDEX er_embedding_vec IF NOT EXISTS "
+    "FOR (e:__Entity__) ON e.er_vec "
+    "OPTIONS {indexConfig: {`vector.dimensions`: $dim, "
+    "`vector.similarity_function`: 'cosine'}}"
+)
+
+
+def ensure_er_vector_index(store, dim: int) -> bool:
+    """Idempotently create the ER vector index on ``__Entity__.er_vec``.
+
+    Fail-open: logs and returns False on any error (e.g. a Neo4j version
+    without vector indexes), so the ER path can fall back to the window.
+    """
+    try:
+        store.structured_query(ER_VECTOR_INDEX_CYPHER, param_map={"dim": int(dim)})
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_er_vector_index failed: {e}", e=exc)
+        return False
+
+
 def _parse_triplets_strip_thinking(response: str, **kwargs):
     """Wrap the upstream parser with a `<think>...</think>` stripper.
 

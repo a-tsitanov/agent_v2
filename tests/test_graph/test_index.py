@@ -205,3 +205,28 @@ def test_build_property_graph_index_threads_llm(monkeypatch):
     )
     assert out == "idx"
     assert captured["llm"] is sentinel
+
+
+def test_ensure_er_vector_index_ddl_and_failopen():
+    from src.graph.index import ER_VECTOR_INDEX_CYPHER, ensure_er_vector_index
+
+    assert "CREATE VECTOR INDEX er_embedding_vec IF NOT EXISTS" in ER_VECTOR_INDEX_CYPHER
+    assert "ON e.er_vec" in ER_VECTOR_INDEX_CYPHER
+    assert "`vector.dimensions`: $dim" in ER_VECTOR_INDEX_CYPHER
+
+    seen = {}
+
+    class _Store:
+        def structured_query(self, cypher, param_map=None):
+            seen["cypher"] = cypher
+            seen["param_map"] = param_map
+
+    assert ensure_er_vector_index(_Store(), 768) is True
+    assert seen["cypher"] == ER_VECTOR_INDEX_CYPHER
+    assert seen["param_map"] == {"dim": 768}
+
+    class _Boom:
+        def structured_query(self, cypher, param_map=None):
+            raise RuntimeError("no vector index support")
+
+    assert ensure_er_vector_index(_Boom(), 768) is False
