@@ -41,15 +41,17 @@ def test_llm_activities_alias_is_union() -> None:
 
 
 def test_worker_module_wires_merge_queue() -> None:
-    """``import src.workflow.worker`` succeeds and the run wiring
+    """``import src.workflow.worker`` succeeds and the per-pool wiring
     references ``merge_task_queue`` + the merge activity split."""
     import inspect
 
     import src.workflow.worker as worker_mod
 
-    src = inspect.getsource(worker_mod._run)
+    src = inspect.getsource(worker_mod._build_worker)
     assert "merge_task_queue" in src
     assert "MERGE_ACTIVITIES" in src
     assert "EXTRACT_ACTIVITIES" in src
-    # GraphBuildWorkflow no longer hosts on the llm queue's worker.
-    assert "merge_worker" in src
+    # GraphBuildWorkflow hosts on the dedicated "merge" pool, not the llm one.
+    assert "GraphBuildWorkflow" in src
+    # "merge" is a first-class pool group with its own process.
+    assert "merge" in worker_mod.WORKER_GROUPS
