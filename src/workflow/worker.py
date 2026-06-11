@@ -109,19 +109,32 @@ def _metrics_host_base() -> tuple[str, int]:
 
 def _build_runtime(group: str) -> Runtime | None:
     """Process-wide Temporal Runtime with a Prometheus exporter on this
-    pool's own port.  ``None`` when metrics are disabled."""
+    pool's own port.  ``None`` when metrics are disabled.
+
+    Fail-soft: a bind failure (port already held by another pool / a stale
+    worker / the API) logs a warning and returns ``None`` so the pool runs
+    WITHOUT metrics — observability must never crash the worker itself.
+    """
     if not settings.metrics.enabled:
         return None
     host, base = _metrics_host_base()
     bind = f"{host}:{metrics_port_for(base, group)}"
-    logger.info("worker[{g}]  prometheus exporter  addr={a}", g=group, a=bind)
-    return Runtime(
-        telemetry=TelemetryConfig(
-            metrics=PrometheusConfig(
-                bind_address=bind, durations_as_seconds=True,
+    try:
+        runtime = Runtime(
+            telemetry=TelemetryConfig(
+                metrics=PrometheusConfig(
+                    bind_address=bind, durations_as_seconds=True,
+                ),
             ),
-        ),
-    )
+        )
+    except Exception as exc:  # noqa: BLE001 — metrics are best-effort
+        logger.warning(
+            "worker[{g}]  prometheus bind {a} failed ({e}) — "
+            "running WITHOUT metrics", g=group, a=bind, e=exc,
+        )
+        return None
+    logger.info("worker[{g}]  prometheus exporter  addr={a}", g=group, a=bind)
+    return runtime
 
 
 def _build_worker(client: Client, group: str) -> Worker:
@@ -206,6 +219,13 @@ def _child_main(group: str) -> None:
         asyncio.run(_run_one(group))
     except KeyboardInterrupt:
         pass
+    except Exception:
+        # Surface the real cause in the log stream — otherwise the
+        # launcher's "stopping siblings" buries it.
+        logger.opt(exception=True).error(
+            "worker[{g}]  crashed during startup/run", g=group,
+        )
+        raise
 
 
 def _run_launcher(groups: Sequence[str]) -> None:
