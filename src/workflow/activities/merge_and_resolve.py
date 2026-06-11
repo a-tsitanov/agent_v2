@@ -32,9 +32,14 @@ from src.graph.store import build_neo4j_graph_store
 from src.ingestion.embeddings import build_embedding_model
 from src.retrieval.llm_pool import get_llm_pool
 from src.workflow.contracts import DuplicateGroup, KGExtracted, Merged
+from src.workflow.heartbeat import heartbeat_every
 from src.workflow.staging import build_staging_store
 
 _HEARTBEAT_SAMPLE_CAP = 20
+# Pulse interval while merge_kg_extraction runs (per-entity judge calls,
+# no internal heartbeat).  Must stay well under the activity's
+# heartbeat_timeout (15m in graph_build.py).
+_HEARTBEAT_INTERVAL_S = 60.0
 
 
 def _premerge_groups(nodes) -> tuple[int, list[DuplicateGroup]]:
@@ -101,9 +106,13 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         "merge_and_resolve merging  chunks=%d  raw_entities=%d  duplicate_groups=%d",
         len(nodes), raw_entity_count, len(dup_groups),
     )
-    merged_entities, merged_relations = await merge_kg_extraction(
-        nodes, llm, language="Russian",
-    )
+    # merge_kg_extraction fans out per-entity/relation judge calls with no
+    # internal heartbeat; pulse on a timer so a saturated proxy can't trip
+    # the 15-min heartbeat_timeout mid-merge (-> cancel -> retry storm).
+    async with heartbeat_every(_HEARTBEAT_INTERVAL_S, {"stage": "merging"}):
+        merged_entities, merged_relations = await merge_kg_extraction(
+            nodes, llm, language="Russian",
+        )
     activity.heartbeat({
         "stage": "merged",
         "raw_entities": raw_entity_count,

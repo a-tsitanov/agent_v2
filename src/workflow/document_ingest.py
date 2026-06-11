@@ -188,7 +188,11 @@ class DocumentIngestWorkflow:
                     # Headroom for pool-wait before the first heartbeat
                     # (LLMPool may block on the lane under saturation).
                     heartbeat_timeout=timedelta(minutes=15),
-                    schedule_to_close_timeout=timedelta(hours=48),
+                    # No schedule_to_close wall: a transient proxy
+                    # saturation must never permanently fail ingest.
+                    # extract_kg now heartbeats throughout extractor.acall,
+                    # so an attempt can't silently die mid-work; retry until
+                    # success (infinite by attempts via _HEAVY_FOREVER).
                     retry_policy=_HEAVY_FOREVER,
                 )
                 log.info(

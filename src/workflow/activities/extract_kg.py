@@ -28,10 +28,15 @@ from src.workflow.contracts import (
     Parsed,
     RelationSample,
 )
+from src.workflow.heartbeat import heartbeat_every
 from src.workflow.staging import build_staging_store
 
 _HEARTBEAT_SAMPLE_CAP = 20
 _HEARTBEAT_LABEL_TOP = 10
+# Pulse interval while extractor.acall runs.  Must stay well under the
+# activity's heartbeat_timeout (15m in document_ingest.py) so a slow or
+# saturated LLM proxy can't trip a mid-extraction timeout.
+_HEARTBEAT_INTERVAL_S = 60.0
 
 
 def _summarise_kg(nodes) -> dict:
@@ -94,7 +99,15 @@ async def extract_kg(parsed: Parsed) -> KGExtracted:
     activity.logger.info("extract_kg invoking LLM extractor  chunks=%d", len(nodes))
     activity.heartbeat({"stage": "extracting", "chunks": len(nodes)})
 
-    nodes = await extractor.acall(nodes)
+    # extractor.acall fans out one LLM call per chunk with no internal
+    # heartbeat — under a saturated proxy the whole call can outrun the
+    # 15-min heartbeat_timeout, getting the activity cancelled + retried
+    # (a retry storm that amplifies the very saturation that caused it).
+    # Pulse on a timer so progressing-but-slow extraction stays alive.
+    async with heartbeat_every(
+        _HEARTBEAT_INTERVAL_S, {"stage": "extracting", "chunks": len(nodes)}
+    ):
+        nodes = await extractor.acall(nodes)
 
     summary = _summarise_kg(nodes)
     activity.logger.info(

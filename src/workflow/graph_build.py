@@ -69,7 +69,10 @@ class GraphBuildWorkflow:
             # Headroom for pool-wait before the first heartbeat
             # (LLMPool may block on the lane under saturation).
             heartbeat_timeout=timedelta(minutes=15),
-            schedule_to_close_timeout=timedelta(hours=24),
+            # No schedule_to_close wall: merge (LLM judge) must retry
+            # until success rather than permanently fail under a transient
+            # proxy saturation.  merge_and_resolve heartbeats throughout
+            # merge_kg_extraction, so an attempt can't silently die mid-work.
             retry_policy=_HEAVY_FOREVER,
         )
         log.info("← merge_and_resolve  uri=%s", merged.merged_entities_uri)
