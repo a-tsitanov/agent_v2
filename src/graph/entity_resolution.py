@@ -1432,7 +1432,8 @@ async def resolve_entities(
         cache: dict[str, bool] = {}
         if cfg.verdict_cache_enabled and er_store is not None:
             keys = [_verdict_key(a, b) for a, b in judge_input]
-            cache = _load_verdict_cache(er_store, keys)
+            # sync Neo4j read — off the loop.
+            cache = await asyncio.to_thread(_load_verdict_cache, er_store, keys)
         cached, uncached = _partition_cached(judge_input, cache)
         fresh = await _llm_judge_pairs(uncached, llm, cfg)
         vmap = {id(p): v for (p, v) in cached}
@@ -1440,7 +1441,9 @@ async def resolve_entities(
             vmap[id(p)] = v
         verdicts = [vmap[id(p)] for p in judge_input]
         if cfg.verdict_cache_enabled and er_store is not None:
-            _store_verdicts(
+            # sync Neo4j write — off the loop.
+            await asyncio.to_thread(
+                _store_verdicts,
                 er_store,
                 {_verdict_key(a, b): v for (a, b), v in zip(uncached, fresh)},
             )

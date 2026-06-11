@@ -8,6 +8,8 @@ the same pickle (re-read by the next activity) is unaffected.
 
 from __future__ import annotations
 
+import asyncio
+
 from loguru import logger
 from temporalio import activity
 
@@ -59,7 +61,7 @@ async def index_vector(parsed: Parsed) -> Indexed:
     activity.heartbeat({"stage": "init", "chunks": parsed.chunk_count})
 
     staging = build_staging_store()
-    nodes = staging.read_pickle(parsed.nodes_uri)
+    nodes = await asyncio.to_thread(staging.read_pickle, parsed.nodes_uri)
     activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
     embed_model = build_embedding_model()
@@ -70,7 +72,8 @@ async def index_vector(parsed: Parsed) -> Indexed:
     snaps = _snapshot_metadata(nodes, _MILVUS_DROP_KEYS)
     activity.logger.info("index_vector inserting  chunks=%d", len(nodes))
     try:
-        index_nodes(index, nodes)
+        # embed + Milvus insert are sync/blocking — off the loop.
+        await asyncio.to_thread(index_nodes, index, nodes)
     finally:
         _restore_metadata(nodes, snaps)
 

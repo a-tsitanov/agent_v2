@@ -13,6 +13,8 @@ Best-effort:
 
 from __future__ import annotations
 
+import asyncio
+
 from temporalio import activity
 
 from src.config import settings
@@ -35,13 +37,14 @@ async def push_wikibase(merged: Merged) -> WikibasePushed:
 
     try:
         staging = build_staging_store()
-        entities, relations, _nodes = staging.read_pickle(
-            merged.merged_entities_uri,
+        entities, relations, _nodes = await asyncio.to_thread(
+            staging.read_pickle, merged.merged_entities_uri,
         )
         graph_store = build_neo4j_graph_store()
 
-        base_class_qids = _load_base_classes(graph_store)
-        property_pids = _load_properties(graph_store)
+        # Neo4j bootstrap-cache reads are sync — off the loop.
+        base_class_qids = await asyncio.to_thread(_load_base_classes, graph_store)
+        property_pids = await asyncio.to_thread(_load_properties, graph_store)
         activity.heartbeat({
             "stage": "caches_loaded",
             "base_classes": len(base_class_qids),

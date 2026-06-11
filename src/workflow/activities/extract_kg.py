@@ -14,6 +14,7 @@ Surfaces what the extractor produced to Temporal UI:
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 
 from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
@@ -91,7 +92,7 @@ async def extract_kg(parsed: Parsed) -> KGExtracted:
     activity.heartbeat({"stage": "init", "chunks": parsed.chunk_count})
 
     staging = build_staging_store()
-    nodes = staging.read_pickle(parsed.nodes_uri)
+    nodes = await asyncio.to_thread(staging.read_pickle, parsed.nodes_uri)
     activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
     llm = get_llm_pool().get("extraction")
@@ -127,7 +128,9 @@ async def extract_kg(parsed: Parsed) -> KGExtracted:
         "relation_labels_top": summary["relation_labels_top"],
     })
 
-    uri = staging.write_pickle(parsed.ctx.workflow_run_id, "kg", nodes)
+    uri = await asyncio.to_thread(
+        staging.write_pickle, parsed.ctx.workflow_run_id, "kg", nodes,
+    )
     logger.info(
         "extract_kg done  doc={d}  chunks={n}  entities={e}  relations={r}  "
         "uri={u}",

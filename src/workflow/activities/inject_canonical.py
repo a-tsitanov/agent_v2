@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from loguru import logger
 from temporalio import activity
 
@@ -17,11 +19,12 @@ async def inject_canonical(parsed: Parsed) -> Injected:
     activity.heartbeat({"stage": "init"})
 
     staging = build_staging_store()
-    nodes = staging.read_pickle(parsed.nodes_uri)
+    nodes = await asyncio.to_thread(staging.read_pickle, parsed.nodes_uri)
     activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
     graph_store = build_neo4j_graph_store()
-    inject_canonical_entities(graph_store, nodes)
+    # Neo4j upsert is sync (blocking driver) — off the loop.
+    await asyncio.to_thread(inject_canonical_entities, graph_store, nodes)
     activity.heartbeat({"stage": "injected", "chunks": len(nodes)})
 
     logger.info(

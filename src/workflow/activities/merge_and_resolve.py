@@ -18,6 +18,7 @@ via heartbeats:
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 
 from llama_index.core.graph_stores.types import KG_NODES_KEY
@@ -90,7 +91,7 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     activity.heartbeat({"stage": "init"})
 
     staging = build_staging_store()
-    nodes = staging.read_pickle(kg.nodes_with_kg_uri)
+    nodes = await asyncio.to_thread(staging.read_pickle, kg.nodes_with_kg_uri)
     activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
     raw_entity_count, dup_groups = _premerge_groups(nodes)
@@ -122,8 +123,9 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     })
 
     pre_phone_count = len(merged_entities)
-    merged_entities, merged_relations, _phone_map = consolidate_phone_entities(
-        merged_entities, merged_relations, nodes,
+    # CPU-bound (libphonenumber parse over every entity) — off the loop.
+    merged_entities, merged_relations, _phone_map = await asyncio.to_thread(
+        consolidate_phone_entities, merged_entities, merged_relations, nodes,
     )
     activity.heartbeat({
         "stage": "phone_consolidated",
@@ -165,7 +167,8 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     else:
         activity.heartbeat({"stage": "er_skipped"})
 
-    uri = staging.write_pickle(
+    uri = await asyncio.to_thread(
+        staging.write_pickle,
         kg.parsed.ctx.workflow_run_id, "merged",
         (merged_entities, merged_relations, nodes),
     )

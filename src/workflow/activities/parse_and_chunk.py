@@ -8,6 +8,7 @@ is the list of LlamaIndex `BaseNode` objects, pickled to MinIO under
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from loguru import logger
@@ -44,7 +45,7 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
         translator_llm=llm,
     )
 
-    docs = read_documents(target.parent, recursive=False)
+    docs = await asyncio.to_thread(read_documents, target.parent, recursive=False)
     docs = [d for d in docs if d.metadata.get("file_path") == str(target)]
     if not docs:
         raise FileNotFoundError(f"file not in reader output: {target}")
@@ -63,7 +64,9 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
             _scrub(getattr(rel, "metadata", None))
 
     staging = build_staging_store()
-    uri = staging.write_pickle(ctx.workflow_run_id, "parsed", nodes)
+    uri = await asyncio.to_thread(
+        staging.write_pickle, ctx.workflow_run_id, "parsed", nodes,
+    )
     activity.heartbeat({"stage": "staged", "chunks": len(nodes), "uri": uri})
     logger.info(
         "parse_and_chunk done  doc={d}  chunks={n}  uri={u}",

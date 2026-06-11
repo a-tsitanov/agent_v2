@@ -1,6 +1,7 @@
 """WikiSweepWorkflow — select dirty entities, (re)write each article."""
 from __future__ import annotations
 
+import asyncio
 import enum
 from datetime import timedelta
 
@@ -33,7 +34,8 @@ def _tally(outcomes) -> dict[str, int]:
 async def select_dirty_entities(limit: int) -> list[str]:
     from src.graph.store import build_neo4j_graph_store
     from src.graph.wiki_dirty import select_dirty
-    return select_dirty(build_neo4j_graph_store(), limit)
+    # sync Neo4j — off the shared loop.
+    return await asyncio.to_thread(select_dirty, build_neo4j_graph_store(), limit)
 
 
 @activity.defn
@@ -47,19 +49,23 @@ async def write_entity_article(name: str) -> str:
     from src.workflow.wiki.article import render_bot_section, splice_bot_section
 
     store = build_neo4j_graph_store()
-    ctx = read_entity_subgraph(store, name, settings.wiki.max_relations)
-    docs = read_source_docs(store, name)
+    # All Neo4j reads/writes here use the sync driver — off the shared loop.
+    ctx = await asyncio.to_thread(
+        read_entity_subgraph, store, name, settings.wiki.max_relations)
+    docs = await asyncio.to_thread(read_source_docs, store, name)
     h = subgraph_hash(ctx, docs)
     # change-detection: skip if the facts + source set are unchanged since
     # the last write.
-    cur_hash_rows = store.structured_query(
+    cur_hash_rows = await asyncio.to_thread(
+        store.structured_query,
         "MATCH (e:__Entity__ {name:$n}) RETURN coalesce(e.wiki_hash,'') AS h",
         param_map={"n": name})
     if cur_hash_rows and cur_hash_rows[0]["h"] == h:
-        clear_dirty(store, name, h)
+        await asyncio.to_thread(clear_dirty, store, name, h)
         return ArticleOutcome.SKIPPED.value
 
-    cites = read_citations(store, name, settings.wiki.citations_top_k)
+    cites = await asyncio.to_thread(
+        read_citations, store, name, settings.wiki.citations_top_k)
     llm = get_llm_pool().get("synthesis")
     bot_md = await render_bot_section(
         ctx, cites, llm=llm, source_doc_ids=docs,
@@ -76,10 +82,11 @@ async def write_entity_article(name: str) -> str:
     except Exception as exc:  # noqa: BLE001 — sitelink is best-effort; page is already written
         activity.logger.warning("ensure_sitelink failed name=%s: %s", name, exc)
     # persist page title + hash + clear dirty
-    store.structured_query(
+    await asyncio.to_thread(
+        store.structured_query,
         "MATCH (e:__Entity__ {name:$n}) SET e.wiki_page_title=$t",
         param_map={"n": name, "t": title})
-    clear_dirty(store, name, h)
+    await asyncio.to_thread(clear_dirty, store, name, h)
     return ArticleOutcome.WRITTEN.value
 
 

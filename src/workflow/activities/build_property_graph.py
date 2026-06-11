@@ -53,7 +53,9 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
     activity.heartbeat({"stage": "init"})
 
     staging = build_staging_store()
-    entities, relations, nodes = staging.read_pickle(merged.merged_entities_uri)
+    entities, relations, nodes = await asyncio.to_thread(
+        staging.read_pickle, merged.merged_entities_uri,
+    )
     activity.heartbeat({
         "stage": "loaded",
         "entities": len(entities),
@@ -79,18 +81,19 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
     )
     activity.heartbeat({"stage": "index_built"})
 
+    # Neo4j upserts + index DDL are sync (blocking driver) — off the loop.
     if entities:
-        graph_store.upsert_nodes(entities)
+        await asyncio.to_thread(graph_store.upsert_nodes, entities)
         activity.heartbeat({"stage": "entities_upserted", "count": len(entities)})
     if relations:
-        graph_store.upsert_relations(relations)
+        await asyncio.to_thread(graph_store.upsert_relations, relations)
         activity.heartbeat({"stage": "relations_upserted", "count": len(relations)})
 
     from src.graph.index import (
         ensure_entity_fulltext_index, ensure_entity_lookup_indexes,
     )
-    ensure_entity_fulltext_index(graph_store)
-    ensure_entity_lookup_indexes(graph_store)
+    await asyncio.to_thread(ensure_entity_fulltext_index, graph_store)
+    await asyncio.to_thread(ensure_entity_lookup_indexes, graph_store)
     activity.heartbeat({"stage": "indexes_ensured"})
 
     logger.info(

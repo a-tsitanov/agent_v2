@@ -15,6 +15,8 @@ pure helper so it's unit-testable without loading the model.
 
 from __future__ import annotations
 
+import asyncio
+
 from temporalio import activity
 
 from src.workflow._search_deps import get_reranker
@@ -48,8 +50,11 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
 
     reranker = await get_reranker(params.top_n)
     nodes = [serialized_to_node(s) for s in pool]
-    # Same call shape as hybrid.py: postprocess_nodes(nodes, query_str=q).
-    reranked = reranker.postprocess_nodes(nodes, query_str=params.query)
+    # Cross-encoder inference is sync CPU/GPU — off the loop so it can't
+    # freeze concurrent search/ingest activities in the shared process.
+    reranked = await asyncio.to_thread(
+        reranker.postprocess_nodes, nodes, query_str=params.query,
+    )
 
     out = [node_to_serialized(n) for n in reranked]
     activity.logger.info(

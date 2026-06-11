@@ -2,6 +2,8 @@
 for wiki re-write. Best-effort: never raises out (caller ignores failures)."""
 from __future__ import annotations
 
+import asyncio
+
 from temporalio import activity
 
 from src.config import settings
@@ -22,6 +24,6 @@ async def mark_entities_dirty(payload: MarkDirtyIn) -> int:
     if not names:
         return 0
     store = build_neo4j_graph_store()
-    mark_dirty(store, names)
+    await asyncio.to_thread(mark_dirty, store, names)  # sync Neo4j — off loop
     activity.logger.info("mark_entities_dirty  count=%d", len(names))
     return len(names)

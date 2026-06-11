@@ -5,6 +5,7 @@ on-failure) — write Postgres terminal status + cleanup MinIO staging
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import uuid
 from pathlib import Path
@@ -43,10 +44,10 @@ async def finalize(payload: FinalizeIn) -> IngestResult:
     activity.heartbeat({"stage": "pg_status_written"})
 
     staging = build_staging_store()
-    staging.delete_prefix(payload.ctx.workflow_run_id)
+    await asyncio.to_thread(staging.delete_prefix, payload.ctx.workflow_run_id)
     activity.heartbeat({"stage": "staging_cleaned"})
 
-    _rmtree(payload.ctx.cleanup_dir)
+    await asyncio.to_thread(_rmtree, payload.ctx.cleanup_dir)
     activity.heartbeat({"stage": "local_cleaned"})
 
     await _persist_ingest_metrics(payload)
@@ -172,8 +173,8 @@ async def mark_failed(payload: MarkFailedIn) -> None:
 
     staging = build_staging_store()
     if payload.ctx:
-        staging.delete_prefix(payload.ctx.workflow_run_id)
-        _rmtree(payload.ctx.cleanup_dir)
+        await asyncio.to_thread(staging.delete_prefix, payload.ctx.workflow_run_id)
+        await asyncio.to_thread(_rmtree, payload.ctx.cleanup_dir)
         activity.heartbeat({"stage": "cleanup_done"})
     logger.warning(
         "mark_failed  doc={d}  error={e}", d=doc_id, e=payload.error,
