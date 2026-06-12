@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from llama_index.core.schema import TextNode
 
 from src.workflow.activities.index_vector import index_vector
 from src.workflow.contracts import Ctx, Parsed
@@ -16,9 +17,9 @@ from src.workflow.contracts import Ctx, Parsed
 
 @pytest.mark.asyncio
 async def test_indexes_and_returns_ids():
-    n1 = MagicMock(node_id="a")
+    n1 = TextNode(id_="a", text="hello")
     n1.metadata = {"canonical_identifiers": ["x"], "translated_text": "RU"}
-    n2 = MagicMock(node_id="b")
+    n2 = TextNode(id_="b", text="world")
     n2.metadata = {"canonical_identifiers": ["y"]}
 
     staging = MagicMock()
@@ -51,7 +52,7 @@ async def test_indexes_and_returns_ids():
 
 @pytest.mark.asyncio
 async def test_restores_metadata_after_insert():
-    n = MagicMock(node_id="a")
+    n = TextNode(id_="a", text="hello")
     n.metadata = {"canonical_identifiers": ["x"], "translated_text": "RU", "k": 1}
 
     staging = MagicMock()
