@@ -93,6 +93,9 @@ async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
     params = call.args[1]
     assert params.doc_id == job_id
     assert params.path == "s3://kb-uploads/abc/file.txt"
+    # Wiki flag is snapshotted here (outside the Temporal sandbox) so the
+    # workflow branches on params.wiki_enabled instead of reading .env.
+    assert params.wiki_enabled == settings.wiki.enabled
 
 
 @pytest.mark.asyncio

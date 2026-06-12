@@ -24,6 +24,17 @@ def test_ingest_params_roundtrip() -> None:
     assert IngestParams.model_validate_json(p.model_dump_json()) == p
 
 
+def test_ingest_params_carries_wiki_enabled() -> None:
+    # The wiki feature flag is snapshotted at submit time and crosses the
+    # Temporal boundary so the workflow never reads settings.wiki (which
+    # would hit .env from inside the sandbox — a determinism violation).
+    p = IngestParams(doc_id="d", path="/tmp/x", wiki_enabled=True)
+    assert p.wiki_enabled is True
+    assert IngestParams.model_validate_json(p.model_dump_json()) == p
+    # Default keeps older callers safe (feature off unless snapshotted on).
+    assert IngestParams(doc_id="d", path="/tmp/x").wiki_enabled is False
+
+
 def test_ctx_roundtrip() -> None:
     c = Ctx(
         doc_id="11111111-1111-1111-1111-111111111111",

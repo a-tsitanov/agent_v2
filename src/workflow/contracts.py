@@ -59,6 +59,13 @@ class IngestParams(_Frozen):
     judge_model: str = ""
     search_model: str = ""
     env: str = ""
+    # Wiki-editor feature flag, snapshotted at submit time.  The /ingest
+    # endpoint reads ``settings.wiki.enabled`` (which lazily constructs
+    # ``WikiSettings`` and reads ``.env``) *outside* the Temporal sandbox
+    # and ships the result here.  The workflow MUST branch on this field,
+    # never on ``settings.wiki`` — reading config from disk inside
+    # ``@workflow.run`` is a determinism violation and also non-replayable.
+    wiki_enabled: bool = False
 
 
 class Ctx(_Frozen):

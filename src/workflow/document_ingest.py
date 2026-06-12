@@ -223,7 +223,10 @@ class DocumentIngestWorkflow:
 
                 # Wiki editor (Project A): flag this doc's entities for
                 # article (re)write.  Best-effort — must not fail ingest.
-                if settings.wiki.enabled:
+                # Branch on the submit-time snapshot, NOT settings.wiki:
+                # reading config from disk inside the workflow sandbox is
+                # a determinism violation (WikiSettings reads .env).
+                if params.wiki_enabled:
                     try:
                         ent_names, endpoints = _wiki_dirty_targets(merged)
                         await workflow.execute_activity(
