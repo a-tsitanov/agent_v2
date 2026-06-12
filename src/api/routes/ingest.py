@@ -151,6 +151,11 @@ async def upload_document(
                 judge_model=judge_model,
                 search_model=search_model,
                 env=env_name,
+                # Snapshot the wiki flag here (outside the Temporal
+                # sandbox) so the workflow never reads settings.wiki —
+                # constructing WikiSettings touches .env, which is a
+                # determinism violation inside @workflow.run.
+                wiki_enabled=settings.wiki.enabled,
             ),
             id=f"ingest-{doc_id}",
             task_queue=settings.temporal.task_queue,
