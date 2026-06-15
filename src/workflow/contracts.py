@@ -303,6 +303,9 @@ class SynthesizeParams(_Frozen):
     # (``build_synthesis_llm``); legacy ReAct paths leave this False and
     # keep the small search-tier synthesizer for backward compatibility.
     use_synthesis_llm: bool = False
+    # Optional answer-shape template (named or inline); empty → default
+    # RU preamble.  Snapshotted from the request at submit.
+    answer_template: str = ""
 
 
 class ReflectiveCitationDict(_Frozen):
@@ -445,6 +448,8 @@ class OrchestratorParams(_Frozen):
     # AgentSettings at submit time (like coverage_check_enabled) so the
     # workflow never reads env at runtime (replay-safe).
     contextualize_enabled: bool = True
+    # Optional answer-shape template (named or inline); threaded to synth.
+    answer_template: str = ""
 
 
 class SearchOutcome(_Frozen):
@@ -655,3 +660,5 @@ class GlobalSearchParams(_Frozen):
     # today's behaviour), "semantic", or "descent". Threaded into
     # ``MapCommunitiesParams.selection`` inside the workflow.
     community_selection: str = "lexical"
+    # Optional answer-shape template (named or inline); threaded to synth.
+    answer_template: str = ""

@@ -53,6 +53,7 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
             for t in req.history
         ],
         contextualize_enabled=settings.agent.conversation_history_enabled,
+        answer_template=req.answer_template or "",
     )
 
 
@@ -70,6 +71,7 @@ def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSea
         ],
         contextualize_enabled=settings.agent.conversation_history_enabled,
         community_selection=settings.agent.community_dynamic_selection,
+        answer_template=req.answer_template or "",
     )
 
 
