@@ -670,6 +670,25 @@ class ClassifierSettings(BaseSettings):
     prompt_version: str = "v1"
 
 
+class IngestAdmissionSettings(BaseSettings):
+    """Document-level admission control (opt-in).  When enabled, /ingest
+    hands documents to a singleton ``IngestSchedulerWorkflow`` that runs
+    at most ``max_inflight`` documents at once, each to completion, FIFO —
+    so a document's tail (merge) isn't starved behind newer documents'
+    extract bursts.  Disabled → /ingest starts the workflow directly
+    (today's behaviour, unbounded concurrency)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="INGEST_ADMISSION_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = False
+    # K=1 = strict "finish before next start"; raise to overlap a
+    # document's I/O stages with another's GPU stage while bounding queue
+    # depth.
+    max_inflight: int = 1
+
+
 # ── composed top-level settings ──────────────────────────────────────
 
 
@@ -718,6 +737,10 @@ class Settings(BaseSettings):
     @cached_property
     def classifier(self) -> ClassifierSettings:
         return ClassifierSettings()
+
+    @cached_property
+    def ingest_admission(self) -> IngestAdmissionSettings:
+        return IngestAdmissionSettings()
 
     @cached_property
     def agent(self) -> AgentSettings:
