@@ -77,6 +77,9 @@ class _RelationAgg:
     descriptions: list[str] = field(default_factory=list)
     keywords: set[str] = field(default_factory=set)
     source_chunks: list[str] = field(default_factory=list)
+    polarity_votes: Counter = field(default_factory=Counter)
+    valid_froms: list[str] = field(default_factory=list)
+    valid_tos: list[str] = field(default_factory=list)
 
 
 def _id_to_name(nodes: list[BaseNode]) -> dict[str, str]:
@@ -237,6 +240,12 @@ async def merge_kg_extraction(
             agg.keywords.update(_split_keywords(
                 (rel.properties or {}).get("keywords", "")
             ))
+            props = rel.properties or {}
+            agg.polarity_votes[props.get("polarity") or "affirmed"] += 1
+            if props.get("valid_from"):
+                agg.valid_froms.append(props["valid_from"])
+            if props.get("valid_to"):
+                agg.valid_tos.append(props["valid_to"])
             agg.source_chunks.append(chunk_id)
 
     # ── 3. Materialise merged EntityNode list ────────────────────────
@@ -290,6 +299,13 @@ async def merge_kg_extraction(
         tags = sorted(agg.keywords)
         distinct_chunks = list(dict.fromkeys(agg.source_chunks))
         mention_count = len(distinct_chunks)
+        # Logical polarity by majority vote; temporal validity widened to
+        # the broadest observed window (earliest start, latest end).  Both
+        # default to affirmed / open when no occurrence carried them.
+        polarity = (agg.polarity_votes.most_common(1)[0][0]
+                    if agg.polarity_votes else "affirmed")
+        valid_from = min(agg.valid_froms) if agg.valid_froms else None
+        valid_to = max(agg.valid_tos) if agg.valid_tos else None
         merged_relations.append(Relation(
             label=label,
             source_id=src_id,
@@ -304,6 +320,11 @@ async def merge_kg_extraction(
                 # Discrete, per-element-filterable tags (vs the joined
                 # `keywords` string) for graph analysis / edge filtering.
                 "tags": tags,
+                # #7: logical polarity (affirmed/negated/uncertain) +
+                # temporal validity window (opaque ISO strings, or None).
+                "polarity": polarity,
+                "valid_from": valid_from,
+                "valid_to": valid_to,
                 "source_chunks": distinct_chunks,
                 "mention_count": mention_count,
             },
