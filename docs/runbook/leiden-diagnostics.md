@@ -54,3 +54,15 @@ CALL gds.graph.drop('diag');
 - `randomSeed: 19` makes runs deterministic.
 - Hierarchy depth is controlled by `AGENT_COMMUNITY_MAX_LEVELS` (1 = single
   level, today's default).
+
+## Tuning resolution & throughput
+
+- `TEMPORAL_COMMUNITY_LEIDEN_GAMMA` (default `1.0`) is the Leiden **resolution**.
+  Communities too coarse (a few giant blobs)? Raise it (`1.5`–`2.0`) for more,
+  smaller communities. Too fragmented (many tiny ones)? Lower it (`0.5`–`0.8`).
+  Re-run the rebuild after changing — detection is offline, off the query path.
+- `TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY` (default `4`) is GDS worker threads for
+  the Leiden run. Raise on a beefy Neo4j to speed large-graph rebuilds; keep
+  modest if the rebuild competes with live query traffic on the same instance.
+- Both are snapshotted into `DetectCommunitiesParams` at workflow-start (the
+  `/admin/.../rebuild` trigger), so the activity stays Temporal-deterministic.

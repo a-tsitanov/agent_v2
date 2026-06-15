@@ -497,11 +497,17 @@ class DetectCommunitiesParams(_Frozen):
     ``1`` (default) == single-level/back-compat (``detect_communities``);
     ``>1`` == materialise the dendrogram HIERARCHY (``detect_hierarchy``).
     Phase 5 wires ``max_levels`` from config.
+
+    ``gamma`` (Leiden resolution) and ``concurrency`` (GDS worker threads)
+    are snapshotted from config at workflow-start (the trigger route) and
+    carried here so the activity is deterministic — it never re-reads env.
     """
 
     min_size: int = 3
     level: int = 0
     max_levels: int = 1
+    gamma: float = 1.0
+    concurrency: int = 4
 
 
 class DetectCommunitiesResult(_Frozen):

@@ -254,12 +254,14 @@ async def detect_communities_activity(
 
         communities = await detect_hierarchy(
             store, max_levels=params.max_levels, min_size=params.min_size,
+            gamma=params.gamma, concurrency=params.concurrency,
         )
     else:
         from src.graph.communities import detect_communities
 
         communities = await detect_communities(
             store, min_size=params.min_size, level=params.level,
+            gamma=params.gamma, concurrency=params.concurrency,
         )
 
     # Ensure the report vector index ONCE (one-shot, before the summarize
