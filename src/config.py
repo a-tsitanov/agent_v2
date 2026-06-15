@@ -639,6 +639,37 @@ class AnalyticsSettings(BaseSettings):
     env_name: str = "dev-local"
 
 
+class ClassifierSettings(BaseSettings):
+    """Input document classifier — skips junk before it enters the
+    pipeline.  Opt-in (``enabled=False`` by default).
+
+    Two layers: cheap deterministic rules (extension / size) then an
+    optional LLM gate over a bounded preview.  A ``force=true`` flag on
+    /ingest bypasses the deterministic rules so an operator can push a
+    document the rules would skip.  Fail-soft everywhere: any classifier
+    error defaults to INGEST (false-skip is the costly error)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CLASSIFIER_", env_file=".env", extra="ignore",
+    )
+
+    enabled: bool = False
+    max_size_mb: float = 25.0
+    min_size_bytes: int = 1
+    skip_extensions: list[str] = Field(
+        default_factory=lambda: [
+            "exe", "dll", "bin", "zip", "tar", "gz", "7z",
+            "png", "jpg", "jpeg", "gif", "bmp", "svg",
+            "mp3", "mp4", "mov", "avi", "wav",
+        ]
+    )
+    preview_chars: int = 4000
+    llm_enabled: bool = True
+    # Bumped whenever the prompt changes; snapshotted into IngestParams at
+    # submit so a replay can't silently re-decide with a newer prompt.
+    prompt_version: str = "v1"
+
+
 # ── composed top-level settings ──────────────────────────────────────
 
 
@@ -683,6 +714,10 @@ class Settings(BaseSettings):
     @cached_property
     def ingestion(self) -> IngestionSettings:
         return IngestionSettings()
+
+    @cached_property
+    def classifier(self) -> ClassifierSettings:
+        return ClassifierSettings()
 
     @cached_property
     def agent(self) -> AgentSettings:
