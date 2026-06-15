@@ -44,6 +44,8 @@ from temporalio.workflow import ParentClosePolicy
 with workflow.unsafe.imports_passed_through():
     from src.config import settings
     from src.workflow.contracts import (
+        ClassifyIn,
+        ClassifyResult,
         Ctx,
         FinalizeIn,
         GraphBuilt,
@@ -56,6 +58,7 @@ with workflow.unsafe.imports_passed_through():
         MarkFailedIn,
         Merged,
         Parsed,
+        SkipIn,
         WikibasePushed,
     )
     from src.workflow.graph_build import GraphBuildWorkflow
@@ -124,6 +127,36 @@ class DocumentIngestWorkflow:
                 "← fetch_source  local=%s  cleanup_dir=%s",
                 ctx.local_path, ctx.cleanup_dir,
             )
+
+            # Input classifier (opt-in, snapshotted flag — never read
+            # settings.classifier here, that's a determinism violation).
+            # On skip → short-circuit to the `skipped` terminal status,
+            # no parse/index/graph.  ``force`` (also snapshotted) bypasses
+            # the deterministic rules inside the activity.
+            if params.classifier_enabled:
+                workflow.upsert_memo({"stage": "classify_document"})
+                log.info("→ classify_document  force=%s", params.force)
+                verdict = await workflow.execute_activity(
+                    "classify_document",
+                    ClassifyIn(ctx=ctx, force=params.force),
+                    result_type=ClassifyResult,
+                    start_to_close_timeout=timedelta(minutes=5),
+                    schedule_to_close_timeout=timedelta(hours=1),
+                    retry_policy=_FAST_FOREVER,
+                )
+                if not verdict.ingest:
+                    log.info("document skipped by classifier: %s", verdict.reason)
+                    workflow.upsert_memo({
+                        "stage": "skipped", "reason": verdict.reason,
+                    })
+                    return await workflow.execute_activity(
+                        "mark_skipped",
+                        SkipIn(ctx=ctx, reason=verdict.reason),
+                        result_type=IngestResult,
+                        start_to_close_timeout=timedelta(minutes=5),
+                        schedule_to_close_timeout=timedelta(hours=1),
+                        retry_policy=_FAST_FOREVER,
+                    )
 
             workflow.upsert_memo({"stage": "parse_and_chunk"})
             log.info("→ parse_and_chunk")

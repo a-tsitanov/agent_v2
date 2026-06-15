@@ -59,6 +59,7 @@ async def upload_document(
     pg: FromDishka[AsyncPostgres],
     file: UploadFile = File(...),
     department: str = Form(default=""),
+    force: bool = Form(default=False),
     x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
     if not file.filename:
@@ -156,6 +157,10 @@ async def upload_document(
                 # constructing WikiSettings touches .env, which is a
                 # determinism violation inside @workflow.run.
                 wiki_enabled=settings.wiki.enabled,
+                # Same determinism reasoning: snapshot the classifier flag
+                # here, ship the operator's force override.
+                classifier_enabled=settings.classifier.enabled,
+                force=force,
             ),
             id=f"ingest-{doc_id}",
             task_queue=settings.temporal.task_queue,

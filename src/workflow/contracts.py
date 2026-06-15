@@ -66,6 +66,12 @@ class IngestParams(_Frozen):
     # never on ``settings.wiki`` — reading config from disk inside
     # ``@workflow.run`` is a determinism violation and also non-replayable.
     wiki_enabled: bool = False
+    # Input-classifier feature flag, snapshotted at submit (like
+    # wiki_enabled) so the workflow body never reads settings.classifier
+    # (a determinism violation).  ``force`` lets an operator bypass the
+    # classifier's deterministic rules and ingest anyway.
+    classifier_enabled: bool = False
+    force: bool = False
 
 
 class Ctx(_Frozen):
@@ -73,6 +79,29 @@ class Ctx(_Frozen):
     local_path: str
     cleanup_dir: str | None
     workflow_run_id: str
+
+
+class ClassifyIn(_Frozen):
+    """Input to the ``classify_document`` activity."""
+
+    ctx: Ctx
+    force: bool = False
+
+
+class ClassifyResult(_Frozen):
+    """Verdict of the input classifier.  ``ingest=False`` short-circuits
+    the workflow to a ``skipped`` terminal status with ``reason``."""
+
+    ingest: bool = True
+    reason: str = ""
+    doc_type: str = ""
+
+
+class SkipIn(_Frozen):
+    """Input to the ``mark_skipped`` activity (classifier said skip)."""
+
+    ctx: Ctx
+    reason: str = ""
 
 
 class Parsed(_Frozen):

@@ -17,7 +17,12 @@ from src.observability.ingest_metrics_extractor import parse_activity_timings
 from src.storage.ingest_metrics import build_ingest_metrics_store
 from src.storage.postgres import AsyncPostgres
 from src.workflow.client import get_temporal_client
-from src.workflow.contracts import FinalizeIn, IngestResult, MarkFailedIn
+from src.workflow.contracts import (
+    FinalizeIn,
+    IngestResult,
+    MarkFailedIn,
+    SkipIn,
+)
 from src.workflow.staging import build_staging_store
 
 
@@ -157,6 +162,39 @@ async def _persist_ingest_metrics(payload: FinalizeIn) -> None:
         activity.logger.warning(
             "ingest_metrics persist failed (best-effort): %s", exc,
         )
+
+
+@activity.defn
+async def mark_skipped(payload: SkipIn) -> IngestResult:
+    """Classifier said skip: write the ``skipped`` terminal status +
+    reason and clean up staging / local download — no parse/index/graph."""
+    activity.logger.info(
+        "mark_skipped start  doc=%s  reason=%s",
+        payload.ctx.doc_id, payload.reason,
+    )
+    activity.heartbeat({"stage": "init", "doc_id": payload.ctx.doc_id})
+
+    pg = AsyncPostgres()
+    await pg.update_status(
+        uuid.UUID(payload.ctx.doc_id), status="skipped", error=payload.reason,
+    )
+
+    staging = build_staging_store()
+    await asyncio.to_thread(staging.delete_prefix, payload.ctx.workflow_run_id)
+    await asyncio.to_thread(_rmtree, payload.ctx.cleanup_dir)
+
+    logger.info(
+        "mark_skipped  doc={d}  reason={r}",
+        d=payload.ctx.doc_id, r=payload.reason,
+    )
+    return IngestResult(
+        doc_id=payload.ctx.doc_id,
+        chunk_count=0,
+        graph_status="skipped",
+        entities=0,
+        relations=0,
+        wikibase_status="skipped",
+    )
 
 
 @activity.defn

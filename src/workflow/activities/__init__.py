@@ -26,10 +26,11 @@ a single worker pool.
 """
 
 from src.workflow.activities.build_property_graph import build_property_graph
+from src.workflow.activities.classify_document import classify_document
 from src.workflow.activities.coverage_check import coverage_check
 from src.workflow.activities.extract_kg import extract_kg
 from src.workflow.activities.fetch_source import fetch_source
-from src.workflow.activities.finalize import finalize, mark_failed
+from src.workflow.activities.finalize import finalize, mark_failed, mark_skipped
 from src.workflow.activities.index_vector import index_vector
 from src.workflow.activities.inject_canonical import inject_canonical
 from src.workflow.activities.mark_dirty import mark_entities_dirty
@@ -59,6 +60,7 @@ LLM_ACTIVITIES = EXTRACT_ACTIVITIES + MERGE_ACTIVITIES
 
 MAIN_ACTIVITIES = [
     fetch_source,
+    classify_document,
     parse_and_chunk,
     index_vector,
     inject_canonical,
@@ -66,6 +68,7 @@ MAIN_ACTIVITIES = [
     push_wikibase,
     finalize,
     mark_failed,
+    mark_skipped,
     mark_entities_dirty,
 ]
 
@@ -90,6 +93,7 @@ __all__ = [
     "MERGE_ACTIVITIES",
     "SEARCH_ACTIVITIES",
     "build_property_graph",
+    "classify_document",
     "coverage_check",
     "extract_kg",
     "fetch_source",
@@ -98,6 +102,7 @@ __all__ = [
     "inject_canonical",
     "mark_entities_dirty",
     "mark_failed",
+    "mark_skipped",
     "merge_and_resolve",
     "parse_and_chunk",
     "push_wikibase",
