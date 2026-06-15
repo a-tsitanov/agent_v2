@@ -21,13 +21,16 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pymilvus import MilvusClient
 
 from src.config import settings
 from src.storage.postgres import AsyncPostgres
+
+if TYPE_CHECKING:
+    from src.storage.minio import MinioStorage
 
 
 # Hard cap on `read_full_document` output to avoid context blowup
@@ -57,6 +60,7 @@ class ChunkRepository:
         milvus_client: MilvusClient | None = None,
         collection: str | None = None,
         pg: AsyncPostgres | None = None,
+        minio: "MinioStorage | None" = None,
     ) -> None:
         self._collection = collection or settings.milvus.collection
         self._client = milvus_client or MilvusClient(
@@ -64,6 +68,9 @@ class ChunkRepository:
             timeout=settings.milvus.timeout_s,
         )
         self._pg = pg or AsyncPostgres()
+        # Lazily resolved on first s3:// read so tests / Milvus-only
+        # callers don't pay for a MinIO client + bucket bootstrap.
+        self._minio = minio
 
     # ── Milvus chunk fetch ──────────────────────────────────────────
 
@@ -158,6 +165,14 @@ class ChunkRepository:
         path_str = await self.aget_document_path(doc_id)
         if path_str is None:
             return None
+        # documents.path is normally an ``s3://`` URI (MinIO); legacy
+        # rows may hold a local filesystem path.  Mirror the download
+        # route (api/routes/documents.py) instead of stat-ing the URI
+        # as if it were a local file.
+        if path_str.startswith("s3://"):
+            return await asyncio.to_thread(
+                self._read_s3_capped, path_str, max_chars,
+            )
         path = Path(path_str)
         if not path.is_file():
             logger.warning(
@@ -166,6 +181,26 @@ class ChunkRepository:
             )
             return None
         return await asyncio.to_thread(_read_file_capped, path, max_chars)
+
+    def _read_s3_capped(self, s3_uri: str, max_chars: int) -> str | None:
+        """Download an ``s3://`` object to the local cache and read it,
+        capped.  Soft-fails to None (→ "document not found") on any
+        storage error, matching the tool contract."""
+        storage = self._minio
+        if storage is None:
+            from src.storage.minio import build_minio_storage
+
+            storage = self._minio = build_minio_storage()
+        try:
+            _, key = storage.parse_s3_uri(s3_uri)
+            local = Path(storage.download_dir) / key
+            storage.get_object_to_path(s3_uri, local)
+        except Exception as exc:  # noqa: BLE001 — soft-fail to not-found
+            logger.warning(
+                "read_document s3 fetch failed uri={u}: {e}", u=s3_uri, e=exc,
+            )
+            return None
+        return _read_file_capped(local, max_chars)
 
 
 def _escape(value: str) -> str:
