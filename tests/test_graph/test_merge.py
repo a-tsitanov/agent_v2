@@ -187,6 +187,42 @@ async def test_relation_merge_undirected_pair() -> None:
     assert "B is caused by A." in merged.properties["description"]
 
 
+@pytest.mark.asyncio
+async def test_relation_weight_reflects_mention_count() -> None:
+    """weight must encode tie strength (distinct co-occurrence count),
+    not the constant 1.0 from ParsedRelation — weighted Leiden + ranking
+    depend on it."""
+    a1 = _ent("A", "Concept", "a."); b1 = _ent("B", "Concept", "b.")
+    r1 = _rel(a1, b1, "REL", "A relates B.", keywords="supervises")
+    a2 = _ent("A", "Concept", "a2."); b2 = _ent("B", "Concept", "b2.")
+    r2 = _rel(a2, b2, "REL", "A relates B again.", keywords="supervises")
+    _, rels = await merge_kg_extraction(
+        [_chunk("c1", [a1, b1], [r1]), _chunk("c2", [a2, b2], [r2])],
+        _StubLLM(),
+    )
+    assert rels[0].properties["weight"] == 2.0
+    assert rels[0].properties["weight"] == float(
+        rels[0].properties["mention_count"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_relation_tags_are_discrete_keyword_list() -> None:
+    """tags = discrete, per-element-filterable keyword list (distinct
+    from the comma-joined `keywords` string)."""
+    a1 = _ent("A", "Concept", "a."); b1 = _ent("B", "Concept", "b.")
+    r1 = _rel(a1, b1, "REL", "d1", keywords="manages, supervises")
+    a2 = _ent("A", "Concept", "a2."); b2 = _ent("B", "Concept", "b2.")
+    r2 = _rel(b2, a2, "REL", "d2", keywords="supervises, mentors")
+    _, rels = await merge_kg_extraction(
+        [_chunk("c1", [a1, b1], [r1]), _chunk("c2", [a2, b2], [r2])],
+        _StubLLM(),
+    )
+    tags = rels[0].properties["tags"]
+    assert isinstance(tags, list)
+    assert tags == sorted(["manages", "supervises", "mentors"])
+
+
 # ── relation with missing endpoint dropped ───────────────────────────
 
 
