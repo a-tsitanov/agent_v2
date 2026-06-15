@@ -66,7 +66,7 @@
 | Хранилище | Что хранит | Подключение (по умолчанию) |
 |---|---|---|
 | **Milvus** | Векторный индекс чанков — одна запись на чанк (`id, text, embedding, metadata`). `text` — это чанк **на языке оригинала**; эмбеддинги получены из многоязычной embed-модели через LiteLLM. ANN-индекс — **HNSW** (`MILVUS_INDEX_TYPE`, `FLAT` для точного). | `MILVUS_HOST:MILVUS_PORT` (`localhost:19530`); коллекция `MILVUS_COLLECTION` |
-| **Neo4j** | Property-граф **и** два нативных индекса в одном хранилище: узлы `:__Entity__:<Type>` + типизированные связи (имена/описания **на русском** после слияния; связи несут осмысленный `weight` = счётчик co-occurrence + дискретные `tags`), узлы `:Chunk`, связанные через `(:Chunk)-[:MENTIONS]->(:__Entity__)`, **нативный векторный индекс** по эмбеддингам сущностей (`graph_search` kNN; плюс `er_vec` для ER на нативных векторах), **полнотекстовый индекс** по `__Entity__.name` (`find_entity_by_name`), а также иерархия `:Community` + отчёты (`community_report_vec`) для глобального поиска. | `NEO4J_URI` (`bolt://localhost:7687`) |
+| **Neo4j** | Property-граф **и** два нативных индекса в одном хранилище: узлы `:__Entity__:<Type>` + типизированные связи (имена/описания **на русском** после слияния; связи несут осмысленный `weight` = счётчик co-occurrence + дискретные `tags` + логическую полярность `polarity` (`affirmed`/`negated`/`uncertain`) + окно валидности `valid_from`/`valid_to`), узлы `:Chunk`, связанные через `(:Chunk)-[:MENTIONS]->(:__Entity__)`, **нативный векторный индекс** по эмбеддингам сущностей (`graph_search` kNN; плюс `er_vec` для ER на нативных векторах), **полнотекстовый индекс** по `__Entity__.name` (`find_entity_by_name`), а также иерархия `:Community` + отчёты (`community_report_vec`) для глобального поиска. | `NEO4J_URI` (`bolt://localhost:7687`) |
 | **Postgres** | Таблица заданий/статусов `documents` (doc_id → статус → метаданные) и `ingest_metrics` (длительности по каждой активности + теги моделей по ролям для аналитики). | `POSTGRES_*` |
 | **MinIO** | Загруженные исходные файлы (отдаются обратно через `GET /documents/{id}`) **и** staging-блобы по схеме claim-check — тяжёлое состояние приёма (распарсенные узлы, KG, слитые сущности), сериализованное через pickle и передаваемое между активностями по URI. | `MINIO_*` (консоль `:9001`, S3 API `:9000`) |
 | **Wikibase / MediaWiki** | Курируемый **канонический якорь**: self-hosted Wikibase Item на каждую сущность (`push_wikibase`, opt-in) + страницы статей MediaWiki на каждую сущность, создаваемые непрерывным редактором wiki. WDQS предоставляет SPARQL-эндпоинт. | контейнеры `wikibase` / `wdqs` |
@@ -180,10 +180,13 @@ Best-effort хвосты: `mark_entities_dirty` (помечает сущност
   пустое значение → шаблон по умолчанию.
 
 **Анализ графа (admin):** набор read-only эндпоинтов
-`/admin/graph/{stats,pagerank,components,shortest-path}`
+`/admin/graph/{stats,pagerank,personalized-pagerank,components,shortest-path}`
 (`src/graph/analysis.py`), опирающихся на GDS, даёт сводную статистику,
-PageRank, компоненты связности и кратчайшие пути по графу знаний — вне
-горячего пути запроса.
+PageRank (глобальный и **персонализированный/seed-смещённый**), компоненты
+связности и кратчайшие пути по графу знаний — вне горячего пути запроса. Те
+же функции продублированы как инструменты MCP-2 (`graph_pagerank`,
+`graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`,
+`graph_stats`) для внешних LLM-клиентов.
 
 Режимы, инструменты извлечения, отбор сообществ → [`SEARCH-FLOW.md`](SEARCH-FLOW.md)
 и [`SEARCH.md`](SEARCH.md).

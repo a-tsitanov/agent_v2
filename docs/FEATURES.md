@@ -21,7 +21,7 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 Опциональный гейт перед инжестом, отсеивающий мусорные документы: сначала детерминированные правила (расширение/размер), затем LLM-гейт по превью документа. `force=true` на `POST /ingest` обходит правила; отсеянные документы получают новый статус `skipped`. Fail-soft → при ошибке документ идёт в инжест. По умолчанию выключено (`CLASSIFIER_ENABLED`). — `ingestion/classifier.py`, `activities/classify_document.py`
 
 ### KG-экстракция LightRAG
-На каждый чанк — один LLM-вызов (`LightRAGExtractor`, портированный из HKUDS/LightRAG) выдаёт типизированные сущности (имя + тип + описание в 1–2 предложения) и связи (src + tgt + ключевые слова + описание) одним структурированным ответом. Многоязычный промпт; `/no_think` для qwen3. — `graph/lightrag_extract.py`, `graph/lightrag_prompts.py`, `activities/extract_kg.py`
+На каждый чанк — один LLM-вызов (`LightRAGExtractor`, портированный из HKUDS/LightRAG) выдаёт типизированные сущности (имя + тип + описание в 1–2 предложения) и связи (src + tgt + ключевые слова + описание + **полярность** + **временная валидность** — 7-польный кортеж) одним структурированным ответом. Многоязычный промпт; `/no_think` для qwen3. — `graph/lightrag_extract.py`, `graph/lightrag_prompts.py`, `activities/extract_kg.py`
 
 ### Entity Resolution (ER) 🆕(native-vector)
 Кросс-чанковая + кросс-документная дедупликация семантически равных сущностей («BCC» ≡ «Базальноклеточный рак»; «Иванов И.И.» ≡ «Иван Иванов»). Конвейер: слияние имён внутри батча → консолидация телефонов → **ER** (`resolve_entities`): генерация кандидатов (векторизованный косинус + перекрытие имён), LLM-судья для пограничных пар (с кэшем Neo4j `:ERVerdict`), кластеризация union-find, зажим гипер-хабов, выбор канонического. Метки типов-идентификаторов исключаются (у них детерминированная канонизация). См. [§ Native-vector ER](#native-vector-er-) о новом пути kNN. — `graph/entity_resolution.py`, `activities/merge_and_resolve.py`
@@ -34,6 +34,15 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 
 ### Взвешенные связи и теги 🆕
 Связи KG теперь несут осмысленный `weight` (= число различных совместных упоминаний, было константой 1.0), дискретные `tags` и агрегированные `mention_count`/`source_chunks`. Детекция сообществ Leiden теперь работает **взвешенно** по `r.weight`. — `graph/merge.py`, `graph/communities.py`
+
+### Полярность и временная валидность связей 🆕
+Каждая связь несёт **логическую полярность** `polarity` (`affirmed` / `negated` / `uncertain`) — так отрицания («Иванов **больше не** директор») и сомнения («предположительно владеет») не выглядят в графе как утверждённые факты — и **окно временной валидности** `valid_from` / `valid_to` (скалярные ISO-строки; вложенные map Neo4j в свойствах не хранит). Заполняет экстракция-LLM (default `affirmed` / пусто, когда текст молчит); merge агрегирует полярность мажоритарным голосом, а окно расширяет до самого широкого наблюдавшегося (`min valid_from`, `max valid_to`). — `graph/lightrag_parse.py`, `graph/lightrag_prompts.py`, `graph/merge.py`
+
+### Тюнинг детекции сообществ (Leiden) 🆕
+Разрешение Leiden и параллелизм GDS вынесены в ручки `TEMPORAL_COMMUNITY_LEIDEN_GAMMA` (>1 → больше мелких сообществ; <1 → меньше крупных) и `TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY`. Снимаются из конфига в `DetectCommunitiesParams` на старте воркфлоу (детерминизм Temporal). — `graph/communities.py`, [`runbook/leiden-diagnostics.md`](runbook/leiden-diagnostics.md)
+
+### Backfill `doc_id` на legacy-чанки 🆕
+`scripts/backfill_doc_id.py` доустанавливает `doc_id` чанкам, проиндексированным до того, как `index_vector` начал помечать ноды (иначе `get_chunks_by_doc_id` их не находит): сопоставляет `file_path` → `doc_id` по Postgres и переиндексирует обычным путём LlamaIndex, сохраняя текст и эмбеддинг. Dry-run по умолчанию. — `storage/backfill.py`, [`runbook/doc-id-backfill.md`](runbook/doc-id-backfill.md)
 
 ### Мультимодель и аналитика
 Имена моделей по ролям снимаются при сабмите и пишутся по каждой активности в таблицу Postgres `ingest_metrics` (длительности + теги версий), так что дашборды отражают точную модель, выполнявшую каждый шаг. — `runbook/multimodel.md`, `runbook/analytics.md`
