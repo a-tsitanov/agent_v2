@@ -93,6 +93,17 @@ class AsyncPostgres:
                 )
             await conn.commit()
 
+    async def list_id_path(self) -> list[tuple[str, str]]:
+        """Return `(doc_id, path)` for every registered document.
+
+        Used by the legacy `doc_id` backfill to map a chunk's stored
+        `file_path` back to its document id."""
+        async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT id, path FROM documents")
+                rows = await cur.fetchall()
+        return [(str(r[0]), r[1]) for r in rows]
+
     async def get(self, doc_id: uuid.UUID) -> DocumentRow | None:
         async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
