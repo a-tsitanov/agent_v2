@@ -39,3 +39,5 @@ docs/presentation/*.html
 # Git worktrees (non-hidden name so LlamaIndex SimpleDirectoryReader
 # doesn't skip fixtures under it as "hidden").
 worktrees/
+
+.claude/settings.local.json
