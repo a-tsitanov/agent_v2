@@ -14,6 +14,9 @@
 | [`wiki-editor.md`](wiki-editor.md) | Непрерывный редактор Wiki-статей из графа: dirty-mark + Schedule sweep, бот-секция, анти-дрейф, sitelink, gotcha'и | Включаешь wiki-фичу / меняешь `WIKI_*` |
 | [`er-native-vector-knn.md`](er-native-vector-knn.md) | Опциональный нативный векторный kNN для ER вместо окна 5000: backfill-скрипт → флаг `AGENT_ER_USE_NATIVE_VECTOR_KNN`, порядок включения, откат | Включаешь native-ER на большом графе (≫5000 сущностей) |
 | [`reresolve-graph.md`](reresolve-graph.md) | Пакетная консолидация: прогон ER по всему графу для слияния накопившихся дублей смысловых сущностей (`scripts/reresolve_graph.py`), сохранение типов связей, dry-run | Дедуп уже существующего графа без переингеста |
+| [`classifier.md`](classifier.md) | Входной классификатор документов (opt-in `CLASSIFIER_*`): правила + LLM-гейт, `force`-обход, статус `skipped`, fail-soft | Включаешь фильтрацию мусора на входе ингеста |
+| [`admission-control.md`](admission-control.md) | Допуск документов (opt-in `INGEST_ADMISSION_*`): синглтон `IngestSchedulerWorkflow`, ≤K в работе, FIFO, выбор K | Очередь забивается документами с первых стадий; хочешь «документ до конца, потом следующий» |
+| [`leiden-diagnostics.md`](leiden-diagnostics.md) | Почему Leiden «не находит сообществ» на 50k: различение GDS-ошибки / пустого графа / синглтонов; Cypher-диагностика (WCC, leiden.stats); взвешенный Leiden | Перестройка сообществ даёт 0; тюнинг `COMMUNITY_*` |
 
 ## Архитектурные документы (не runbook'и)
 
@@ -41,6 +44,7 @@
 
 | Спринт | Что добавилось | Runbook |
 |---|---|---|
+| `seven-tracks (2026-06-15)` | Входной классификатор + `force`; admission control (`IngestSchedulerWorkflow`); шаблоны ответа (`answer_template`); GDS-анализ `/admin/graph/*`; взвешенные связи + теги + weighted Leiden; прод `Dockerfile`+`docker-compose.prod.yml`; фикс загрузки doc по id | [`classifier.md`](classifier.md) · [`admission-control.md`](admission-control.md) · [`leiden-diagnostics.md`](leiden-diagnostics.md) |
 | `feature/wiki-editor` | MediaWiki-статьи на сущность из графа (dirty-mark + Schedule sweep, переписывание бот-секции, анти-дрейф) | [`wiki-editor.md`](wiki-editor.md) |
 | `feature/wikibase-population` | Активность push в Wikibase, базовые классы, сворачивание идентификаторов | [`wikibase.md`](wikibase.md) |
 | `feature/analytics-grafana` | Prometheus + Grafana + `ingest_metrics` + version_tag | [`analytics.md`](analytics.md) |

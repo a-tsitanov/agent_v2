@@ -57,6 +57,15 @@ uv run python -m scripts.setup_db      # init PG schema + Milvus ping
 # Ingest a directory
 uv run python -m src.ingestion.run ./tests/test_ingestion/fixtures/
 
+# Optional ingest gates (both opt-in, off by default):
+#  - Classifier (CLASSIFIER_ENABLED): a classify_document step between
+#    fetch and parse drops junk via deterministic rules + an LLM gate;
+#    dropped docs end in a `skipped` status.  force=true on /ingest
+#    bypasses the rules and forces the document through.
+#  - Admission control (INGEST_ADMISSION_ENABLED,
+#    INGEST_ADMISSION_MAX_INFLIGHT): a singleton scheduler admits at most
+#    K documents at once, each run to completion FIFO.
+
 # Serve API + worker
 uv run uvicorn src.api.main:app --port 8000 &
 uv run taskiq worker src.ingestion.tasks:broker --workers 1 &
@@ -65,6 +74,13 @@ uv run taskiq worker src.ingestion.tasks:broker --workers 1 &
 curl -X POST localhost:8000/api/v1/search \
   -H "X-API-Key: dev-local-key" -H "Content-Type: application/json" \
   -d '{"query": "..."}'
+
+# Answer templates: shape the synthesized answer with a named template
+# (prompts/answer_templates/<name>.md) or an inline string; empty -> default.
+#   -d '{"query": "...", "answer_template": "executive-summary"}'
+
+# Read-only graph analysis (GDS-backed) admin endpoints:
+#   GET /admin/graph/stats | /pagerank | /components | /shortest-path
 
 # Tests
 uv run pytest -q
@@ -80,6 +96,16 @@ export LITELLM_EXTRACTION_MODEL=qwen3:8b   # extract_kg + translator
 export LITELLM_SEARCH_MODEL=qwen3:8b       # /agent /selfrag
 # (restart worker + API to pick up env)
 # ingest_metrics rows now carry the per-activity model — see docs/MODELS.md.
+```
+
+### Production deployment
+
+```bash
+# Whole app (API + worker) + backends + redis in one compose,
+# EXCLUDING litellm/ollama — point at an external LiteLLM:
+export LITELLM_BASE_URL=https://litellm.internal:4000
+docker compose -f docker-compose.prod.yml up -d
+# Wikibase is opt-in behind a profile: add --profile wikibase.
 ```
 
 ### Observability

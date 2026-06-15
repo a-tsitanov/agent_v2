@@ -9,6 +9,8 @@
 
 `POST /ingest` загружает файл в **MinIO**, записывает строку в статусе pending в **Postgres**, делает снимок имён моделей по ролям и запускает долговечный воркфлоу **`DocumentIngestWorkflow`** на очереди `kb-ingest`. Воркфлоу выполняет фиксированную последовательность активностей, передавая тяжёлое состояние (распарсенные ноды, KG-ноды, объединённые сущности) между ними как **MinIO-блобы по URI** (claim-check) — в полезной нагрузке Temporal путешествуют только небольшие контракты. **Векторная половина** (parse → embed → Milvus) и **графовая половина** (extract KG → merge/ER → Neo4j) разделены, так что медленная или упавшая сборка графа деградирует до `graph_status="vector_only"` вместо потери всего инжеста.
 
+Опционально включаются два механизма (оба opt-in, по умолчанию выключены): **классификатор входных документов** (`CLASSIFIER_ENABLED`) — шаг между `fetch_source` и `parse_and_chunk`, который может коротко замкнуть воркфлоу в терминальный статус `skipped`, не запуская парсинг/индексацию/граф; и **допуск документов** (`INGEST_ADMISSION_ENABLED`) — когда включён, `/ingest` не запускает `DocumentIngestWorkflow` напрямую, а отправляет документ в синглтон-планировщик `IngestSchedulerWorkflow`, который ограничивает число одновременно обрабатываемых документов (см. [Допуск документов](#допуск-документов-admission-control)).
+
 ## Поток (верхний уровень)
 
 ```mermaid
@@ -16,7 +18,9 @@ flowchart TD
     A["POST /ingest<br/>upload→MinIO, insert pending→Postgres,<br/>snapshot per-role models"] --> WF["DocumentIngestWorkflow<br/>(queue: kb-ingest)"]
 
     WF --> S1["1. fetch_source<br/>download/cache; status=processing"]
-    S1 --> S2["2. parse_and_chunk<br/>read→split→identifier-canon→(translate)<br/>→ parsed.pkl"]
+    S1 --> CLS{"classify_document<br/>(опц., CLASSIFIER_ENABLED)<br/>rules + LLM-гейт по превью"}
+    CLS -- "ingest (или fail-soft)" --> S2["2. parse_and_chunk<br/>read→split→identifier-canon→(translate)<br/>→ parsed.pkl"]
+    CLS -- "skip (force обходит rules)" --> SK["mark_skipped<br/>status=skipped + причина,<br/>чистка staging, без parse/index/graph"]
     S2 --> S3["3. index_vector<br/>embed + insert → Milvus"]
     S2 --> S4["4. inject_canonical<br/>upsert identifier entities → Neo4j"]
     S2 --> S5["5. extract_kg<br/>LightRAG: entities+relations per chunk<br/>(queue: kb-ingest-llm) → kg.pkl"]
@@ -81,6 +85,7 @@ sequenceDiagram
 | # | Активность | Очередь | Что делает | Вход → Выход | Файл |
 |---|---|---|---|---|---|
 | 1 | `fetch_source` | kb-ingest | Идемпотентная загрузка из MinIO (кэширует локально); Postgres → `processing` | `IngestParams` → `Ctx` | `activities/fetch_source.py` |
+| 1.5 | `classify_document` | kb-ingest | **Opt-in** (`CLASSIFIER_ENABLED`, по умолч. false). Два слоя: (a) детерминированные правила — расширение / размер / пустой файл (`classifier.py::apply_rules`), которые обходит флаг `force`; (b) LLM-гейт по ограниченному превью файла (`classify_with_llm`, `astructured_predict`, small-уровень). Любая ошибка → fail-soft в ingest (ложный skip дороже). При skip воркфлоу замыкается на `mark_skipped` | `Ctx` → решение ingest/skip | `activities/classify_document.py`, `ingestion/classifier.py` |
 | 2 | `parse_and_chunk` | kb-ingest | Чтение → разбиение (`chunk_size`/`overlap`) → **канонизация идентификаторов** (телефоны→E.164, ИНН/ОГРН…) → опциональный перевод; вычистка метаданных перевода; pickle нод | `Ctx` → `Parsed` (`nodes_uri`) | `activities/parse_and_chunk.py` |
 | 3 | `index_vector` | kb-ingest | Срезает метаданные сверх лимита Milvus → embed → вставка в **Milvus**; восстанавливает метаданные на нодах в памяти | `Parsed` → `Indexed` | `activities/index_vector.py` |
 | 4 | `inject_canonical` | kb-ingest | Upsert одной `:__Entity__` на каждый `(type, canonical)` идентификатор в **Neo4j** ДО LLM-экстракции (чтобы дословные упоминания от LLM всё равно дедуплицировались) | `Parsed` → `Injected` | `activities/inject_canonical.py` |
@@ -90,6 +95,7 @@ sequenceDiagram
 | 7 | `mark_entities_dirty` | kb-ingest | Best-effort: помечает имена объединённых сущностей для непрерывного wiki-редактора (Project A) | `MarkDirtyIn` → count | `activities/mark_dirty.py` |
 | 8 | `push_wikibase` | kb-ingest | Best-effort (только если граф `completed`): проецирует сущности/связи в локальный якорь Wikibase | `Merged` → `WikibasePushed` | `activities/push_wikibase.py` |
 | 9 | `finalize` | kb-ingest | Финальный статус в Postgres; удаление staging-префикса + локальной директории; запись `ingest_metrics` по каждой активности (длительности + теги моделей по ролям) | `FinalizeIn` → `IngestResult` | `activities/finalize.py` |
+| — | `mark_skipped` | kb-ingest | **Opt-in** (срабатывает только при `classify_document` → skip): пишет терминальный статус `skipped` + причину, чистит staging; парсинг/индексация/граф не выполняются | `MarkSkippedIn` | `activities/finalize.py` |
 | — | `mark_failed` | kb-ingest | При падении векторной половины: статус `failed`, очистка, повторный проброс | `MarkFailedIn` | `activities/finalize.py` |
 
 `6a`/`6b` выполняются внутри **дочернего воркфлоу `GraphBuildWorkflow`** (`graph_build.py`), так что медленная LLM-работа по графу имеет свои собственные retry/timeout и метрики и может быть отменена без перезапуска векторной половины.
@@ -98,6 +104,31 @@ sequenceDiagram
 
 - **Векторная половина** (1–3): fetch → parse/chunk → embed → Milvus. Если падает/таймаутится → `mark_failed`, инжест проваливается.
 - **Графовая половина** (5–6): extract KG → merge/ER → Neo4j, внутри дочернего воркфлоу. Если поднимается исключение (`ActivityError`/`ChildWorkflowError`) → перехватывается → **`graph_status = "vector_only"`**: документ по-прежнему доступен для векторного поиска, граф просто пропускается. `push_wikibase` тогда тоже пропускается (он завязан на `completed`).
+
+Терминальные статусы документа: **`completed`** (обе половины успешны), **`vector_only`** (граф деградировал), **`failed`** (упала векторная половина) и **`skipped`** (новый — документ отклонён классификатором на шаге `classify_document`, парсинг/индексация/граф не выполнялись).
+
+## Классификатор входных документов (opt-in)
+
+**Track 2**, включается через env `CLASSIFIER_ENABLED` (по умолчанию false). Когда включён, между `fetch_source` (шаг 1) и `parse_and_chunk` (шаг 2) на очереди `kb-ingest` выполняется активность `classify_document`, решающая, стоит ли вообще пускать документ в дорогостоящий конвейер.
+
+- **Два слоя.** (a) Детерминированные правила (`ingestion/classifier.py::apply_rules`) — проверки по расширению файла, размеру, пустоте. (b) LLM-гейт по ограниченному превью файла (`classify_with_llm`, `astructured_predict`, small-уровень).
+- **Флаг `force`.** `Form`-параметр `force=true` на `POST /ingest`, снимаемый в `IngestParams.force`, **обходит детерминированные правила** — чтобы оператор мог протолкнуть документ, который правила иначе бы отсеяли.
+- **Skip → `mark_skipped`.** При решении skip воркфлоу коротко замыкается на новую активность `mark_skipped` (`activities/finalize.py`): пишется новый терминальный статус Postgres `skipped` + причина, чистится staging; парсинг/индексация/граф **не выполняются**.
+- **Fail-soft.** Любая ошибка классификатора по умолчанию трактуется как ingest (ложный skip теряет хороший документ — это дорогая ошибка).
+- **Детерминизм Temporal.** Флаг классификатора снимается в `IngestParams` в момент сабмита (как wiki-флаг); воркфлоу ветвится на `params.classifier_enabled` и никогда не читает settings напрямую.
+
+Файлы: `workflow/activities/classify_document.py`, `ingestion/classifier.py`, `workflow/activities/finalize.py` (`mark_skipped`).
+
+## Допуск документов (admission control)
+
+**Track 5**, включается через env `INGEST_ADMISSION_ENABLED` (по умолчанию false), `INGEST_ADMISSION_MAX_INFLIGHT` (по умолчанию 1). Решает проблему насыщения очередей: хвост слияния одного документа не должен голодать за десятками всплесков экстракции более новых документов.
+
+- **Когда включён**, `POST /ingest` **не** запускает `DocumentIngestWorkflow` напрямую. Вместо этого он делает signal-with-start синглтон-воркфлоу `IngestSchedulerWorkflow` (фиксированный workflow id `ingest-scheduler`, `WorkflowIDConflictPolicy.USE_EXISTING`, `start_signal="submit"`).
+- **Планировщик** допускает не более `max_inflight` (K) документов одновременно и доводит каждый `DocumentIngestWorkflow` (как дочерний) **до завершения** прежде чем допустить следующий, FIFO.
+- **K=1** = строгое «закончи один, прежде чем начать следующий». **K=2–3** перекрывает I/O-стадии одного документа с GPU-стадией другого, ограничивая глубину очереди.
+- **Когда выключен** (по умолчанию), `/ingest` запускает воркфлоу напрямую ровно как раньше — изменений в поведении нет.
+
+Чистая логика планирования — `workflow/admission.py::AdmissionState`; Temporal-оболочка — `workflow/ingest_scheduler.py`.
 
 ## Claim-check staging (MinIO)
 

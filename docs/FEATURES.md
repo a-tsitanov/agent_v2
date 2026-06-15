@@ -17,6 +17,9 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 ### Детерминированная канонизация идентификаторов
 24 типа структурных идентификаторов (телефоны→E.164, ИНН/ОГРН/БИК с контрольными суммами, email, URL, почтовые адреса через libpostal, даты, суммы, IMEI/MAC/VIN/госномера …) извлекаются **без LLM**, хранятся в метаданных чанка, дописываются в текст чанка (чтобы LLM видела канонические формы) и предварительно инжектятся как ноды `:__Entity__` **перед** KG-экстракцией. Гарантирует дедуп идентификаторов даже когда LLM извлекает дословное упоминание. — `ingestion/identifiers.py`, `ingestion/identifier_transform.py`, `activities/inject_canonical.py`
 
+### Классификатор входных документов 🆕
+Опциональный гейт перед инжестом, отсеивающий мусорные документы: сначала детерминированные правила (расширение/размер), затем LLM-гейт по превью документа. `force=true` на `POST /ingest` обходит правила; отсеянные документы получают новый статус `skipped`. Fail-soft → при ошибке документ идёт в инжест. По умолчанию выключено (`CLASSIFIER_ENABLED`). — `ingestion/classifier.py`, `activities/classify_document.py`
+
 ### KG-экстракция LightRAG
 На каждый чанк — один LLM-вызов (`LightRAGExtractor`, портированный из HKUDS/LightRAG) выдаёт типизированные сущности (имя + тип + описание в 1–2 предложения) и связи (src + tgt + ключевые слова + описание) одним структурированным ответом. Многоязычный промпт; `/no_think` для qwen3. — `graph/lightrag_extract.py`, `graph/lightrag_prompts.py`, `activities/extract_kg.py`
 
@@ -28,6 +31,9 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 
 ### Сборка property-графа
 Объединённые сущности/связи делаются upsert в Neo4j с рёбрами `(:Chunk)-[:MENTIONS]->(:__Entity__)`; эмбеддинги сущностей пишутся в нативный векторный индекс; гарантируются fulltext- и range-индексы. — `activities/build_property_graph.py`, `graph/index.py`
+
+### Взвешенные связи и теги 🆕
+Связи KG теперь несут осмысленный `weight` (= число различных совместных упоминаний, было константой 1.0), дискретные `tags` и агрегированные `mention_count`/`source_chunks`. Детекция сообществ Leiden теперь работает **взвешенно** по `r.weight`. — `graph/merge.py`, `graph/communities.py`
 
 ### Мультимодель и аналитика
 Имена моделей по ролям снимаются при сабмите и пишутся по каждой активности в таблицу Postgres `ingest_metrics` (длительности + теги версий), так что дашборды отражают точную модель, выполнявшую каждый шаг. — `runbook/multimodel.md`, `runbook/analytics.md`
@@ -44,6 +50,9 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 - **auto** — роутер классифицирует запрос и диспетчеризует один режим.
 - **Реранкер** — кросс-энкодер bge-reranker-v2-m3, топ-N на синтез.
 - **Проверка покрытия** — обнаруживает пробел в доказательствах и запускает один дополнительный целевой раунд.
+
+### Шаблонизированные ответы (Track 6) 🆕
+Поле запроса `answer_template` задаёт форму синтезированного ответа: именованный шаблон из `prompts/answer_templates/<name>.md` (например, `dossier`) либо инлайновый текст. Пустое значение → дефолтный русскоязычный вывод. — `retrieval/answer_template.py`
 
 Новые поведения поиска: [история диалога](#история-диалога-), [двойной walk-seed](#двойной-walk-seed-), [drift fallback](#drift-мягкий-fallback-), [индексы сообществ](#индексы-сообществ-).
 
@@ -67,11 +76,20 @@ LlamaIndex `IngestionPipeline`: ридер извлекает документ, 
 ### LLMPool (пер-процессная конкурентность)
 Единый пер-процессный пул владеет конкурентностью LLM с иерархическими гейтами — потолок уровня (small=ёмкость GPU, large=бюджет API) и полосы по ролям (extraction/judge/search/…), захватываемые сначала по полосе, затем глобально по уровню, — так что лимиты очередей Temporal могут быть щедрыми, а фактические одновременные LLM-вызовы соответствуют GPU. — `retrieval/llm_pool.py`
 
+### Документ-уровневый контроль допуска 🆕
+Синглтон-воркфлоу `IngestSchedulerWorkflow` допускает к обработке не более K документов одновременно и прогоняет каждый до завершения (FIFO), чтобы хвост слияния одного документа не голодал за экстрактами более новых документов. По умолчанию выключено (`INGEST_ADMISSION_ENABLED`, `INGEST_ADMISSION_MAX_INFLIGHT`). — `workflow/admission.py`, `workflow/ingest_scheduler.py`
+
+### Тулкит анализа графа (read-only) 🆕
+Admin-эндпоинты `/admin/graph/{stats,pagerank,components,shortest-path}` (за API-ключом) поверх GDS: счётчики сущностей/связей, p50/p99 степени, группы дублирующихся имён, число сообществ (`stats`); взвешенный PageRank; слабо-связные компоненты (`components`); кратчайший путь между двумя сущностями по имени (`shortest-path`). — `graph/analysis.py`, `api/routes/graph_admin.py`
+
 ### Claim-check staging
 Тяжёлое состояние (ноды, сущности) сериализуется в MinIO и передаётся между активностями по URI; в полезной нагрузке Temporal путешествуют только небольшие контракты; осиротевшие блобы упавших прогонов подметаются. — `workflow/staging.py`
 
 ### MCP-серверы
 Две MCP-поверхности открывают поиск для OpenWebUI / Claude Desktop / Cursor: MCP-1 (`kb_search` через воркфлоу поиска Temporal) и MCP-2 (атомарные инструменты ретрива в процессе). — `runbook/mcp.md`
+
+### Продакшен docker-compose + Dockerfile (Track 1) 🆕
+`docker-compose.prod.yml` поднимает всё приложение (api/worker/mcp + бэкенды + redis) минус litellm/ollama (внешние через `LITELLM_BASE_URL`); wikibase — за `--profile wikibase`. — `docker-compose.prod.yml`
 
 ### Scale-bench harness 🆕
 Синтетический набор бенчмарков без продакшен-данных (`tests/eval/scale/`), который очерчивает обрывы масштабирования (генерация кандидатов ER O(N²), Milvus FLAT против HNSW, стоимость хабов в graph_walk, охват native-vector ER против окна), генерируя реалистичные формы данных локально. — `tests/eval/scale/README.md`
@@ -128,3 +146,6 @@ Range-индексы на `Community.level` (чтение глобальной �
 | `AGENT_COMMUNITY_MAX_LEVELS` | 1 | глубина иерархии Leiden для материализации (1 = как сейчас) |
 | `AGENT_COMMUNITY_DYNAMIC_SELECTION` | lexical | выбор сообществ для global/drift: lexical \| semantic \| descent |
 | `MILVUS_INDEX_TYPE` | HNSW | ANN-индекс чанков (FLAT для точного) — применяется при (пере)создании |
+| `CLASSIFIER_ENABLED` | false | отсев мусорных документов перед инжестом (правила + LLM-гейт; `force=true` обходит правила) |
+| `INGEST_ADMISSION_ENABLED` | false | документ-уровневый контроль допуска через синглтон IngestSchedulerWorkflow |
+| `INGEST_ADMISSION_MAX_INFLIGHT` | — | макс. число документов в обработке одновременно (FIFO) |
