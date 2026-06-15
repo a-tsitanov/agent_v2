@@ -26,7 +26,7 @@
 | Server | Tool surface | Транспорт | Идёт через | Кто типично подключается |
 |---|---|---|---|---|
 | **MCP-1** (`src/mcp/search_server.py`) | 1 tool: `kb_search(query)` | stdio + HTTP/SSE | **Temporal `SearchOrchestratorWorkflow`** (plan-execute, local) | OpenWebUI как готовый ассистент; non-LLM-developer clients |
-| **MCP-2** (`src/mcp/tools_server.py`) | 6 tools: `vector_search`, `graph_search`, `find_entity_by_id`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` | stdio + HTTP/SSE | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
+| **MCP-2** (`src/mcp/tools_server.py`) | atomic retrieval (8): `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` + read-only GDS analysis (Track 7b, 5): `graph_pagerank`, `graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`, `graph_stats` | stdio + HTTP/SSE | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
 
 Оба сервера запускаются одной командой; параметр `--transport stdio|sse` переключает режим.
 

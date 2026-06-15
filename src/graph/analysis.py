@@ -41,6 +41,26 @@ LIMIT {int(top_n)}
 """
 
 
+def _personalized_pagerank_cypher(graph_name: str, top_n: int) -> str:
+    """Personalized (seed-biased) weighted PageRank: rank entities by
+    relevance to a set of seed entities (`$seeds` names → `sourceNodes`).
+
+    The random-walk restart is biased toward the seeds, so high scorers
+    are the entities most central *relative to the seeds* (e.g. "what's
+    most connected to these two companies?") rather than globally."""
+    return f"""
+MATCH (s:__Entity__) WHERE s.name IN $seeds
+WITH collect(id(s)) AS sources
+CALL gds.pageRank.stream('{graph_name}', {{
+    relationshipWeightProperty: 'weight', sourceNodes: sources
+}})
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).name AS name, score
+ORDER BY score DESC
+LIMIT {int(top_n)}
+"""
+
+
 def _wcc_cypher(graph_name: str) -> str:
     """Weakly-connected-components stats (count + size distribution)."""
     return f"""
@@ -119,6 +139,32 @@ async def pagerank(store: Any | None, *, top_n: int = 20) -> list[dict]:
     async def _run(graph_name: str) -> list[dict]:
         rows = await asyncio.to_thread(
             _run_query, store, _pagerank_cypher(graph_name, top_n),
+        )
+        return [
+            {"name": r.get("name"), "score": float(r.get("score") or 0.0)}
+            for r in rows
+            if isinstance(r, dict) and r.get("name")
+        ]
+
+    return (await _with_projection(store, _run)) or []
+
+
+async def personalized_pagerank(
+    store: Any | None, seeds: list[str], *, top_n: int = 20,
+) -> list[dict]:
+    """Top-N entities by PageRank biased toward `seeds` (seed entity names).
+
+    Empty/blank seeds → `[]` (no projection run — there's nothing to bias
+    toward).  Fail-soft like the rest: store/GDS error → `[]`."""
+    cleaned = [s for s in (seeds or []) if s and str(s).strip()]
+    if store is None or not cleaned:
+        return []
+
+    async def _run(graph_name: str) -> list[dict]:
+        rows = await asyncio.to_thread(
+            _run_query, store,
+            _personalized_pagerank_cypher(graph_name, top_n),
+            {"seeds": cleaned},
         )
         return [
             {"name": r.get("name"), "score": float(r.get("score") or 0.0)}
@@ -217,4 +263,10 @@ async def graph_stats(store: Any | None) -> dict:
     return out
 
 
-__all__ = ["pagerank", "components", "shortest_path", "graph_stats"]
+__all__ = [
+    "pagerank",
+    "personalized_pagerank",
+    "components",
+    "shortest_path",
+    "graph_stats",
+]

@@ -10,9 +10,11 @@ import pytest
 
 from src.graph.analysis import (
     _pagerank_cypher,
+    _personalized_pagerank_cypher,
     components,
     graph_stats,
     pagerank,
+    personalized_pagerank,
     shortest_path,
 )
 
@@ -59,6 +61,46 @@ async def test_pagerank_returns_scored_names():
         {"name": "Иванов", "score": 9.1},
         {"name": "СтройИнвест", "score": 4.2},
     ]
+
+
+# ── personalized pagerank ────────────────────────────────────────────
+
+
+def test_personalized_pagerank_cypher_seeds_source_nodes():
+    cy = _personalized_pagerank_cypher("g", 5)
+    assert "gds.pageRank.stream" in cy
+    assert "sourceNodes" in cy
+    assert "$seeds" in cy
+    assert "LIMIT 5" in cy
+
+
+@pytest.mark.asyncio
+async def test_personalized_pagerank_returns_scored_names():
+    store = _FakeStore(rows_by_fragment={
+        "sourceNodes": [
+            {"name": "СтройИнвест", "score": 6.0},
+            {"name": "Подрядчик", "score": 2.5},
+        ],
+    })
+    out = await personalized_pagerank(store, ["Иванов"], top_n=2)
+    assert out == [
+        {"name": "СтройИнвест", "score": 6.0},
+        {"name": "Подрядчик", "score": 2.5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_personalized_pagerank_empty_seeds_is_empty():
+    # No seeds → no personalization target → empty (and no projection run).
+    store = _FakeStore(rows_by_fragment={"sourceNodes": [{"name": "X", "score": 1.0}]})
+    assert await personalized_pagerank(store, [], top_n=5) == []
+    assert await personalized_pagerank(store, ["  "], top_n=5) == []
+    assert store.calls == []
+
+
+@pytest.mark.asyncio
+async def test_personalized_pagerank_none_store_failsafe():
+    assert await personalized_pagerank(None, ["A"]) == []
 
 
 # ── components ───────────────────────────────────────────────────────

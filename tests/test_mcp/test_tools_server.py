@@ -19,6 +19,12 @@ _EXPECTED_TOOLS = {
     "find_neighbours",
     "get_chunks_by_doc_id",
     "read_full_document",
+    # Track 7b: read-only GDS graph-analysis tools.
+    "graph_pagerank",
+    "graph_personalized_pagerank",
+    "graph_components",
+    "graph_shortest_path",
+    "graph_stats",
 }
 
 
@@ -28,6 +34,16 @@ async def test_tools_server_lists_all_atomic_tools():
     tools = await tools_server.mcp._list_tools()
     names = {t.name for t in tools}
     assert names == _EXPECTED_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_personalized_pagerank_schema_has_seeds():
+    from src.mcp import tools_server
+    tools = await tools_server.mcp._list_tools()
+    by_name = {t.name: t for t in tools}
+    props = by_name["graph_personalized_pagerank"].parameters.get("properties", {})
+    assert "seeds" in props
+    assert "top_n" in props
 
 
 @pytest.mark.asyncio

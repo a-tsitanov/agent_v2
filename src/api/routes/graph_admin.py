@@ -42,6 +42,17 @@ async def graph_pagerank(top_n: int = 20) -> dict:
     return {"top": await analysis.pagerank(_store(), top_n=top_n)}
 
 
+@router.post("/personalized-pagerank", dependencies=[Depends(require_api_key)])
+async def graph_personalized_pagerank(
+    seeds: list[str], top_n: int = 20,
+) -> dict:
+    """Top-N entities by PageRank biased toward the given seed entities
+    (relevance/centrality *relative to* the seeds)."""
+    return {"top": await analysis.personalized_pagerank(
+        _store(), seeds, top_n=top_n,
+    )}
+
+
 @router.post("/components", dependencies=[Depends(require_api_key)])
 async def graph_components() -> dict:
     """Weakly-connected-component count + size distribution."""

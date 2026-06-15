@@ -103,12 +103,15 @@ async def _init() -> None:
                 llm=llm,  # local LiteLLM model for the retriever's synonym step
             )
             _deps["graph"] = GraphRetriever(pg)
+            # Raw store for the GDS analysis tools (need structured_query).
+            _deps["graph_store"] = gs
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "MCP-2: graph_retriever disabled (Neo4j down?): {e}",
                 e=exc,
             )
             _deps["graph"] = None
+            _deps["graph_store"] = None
 
         _deps["chunks"] = ChunkRepository(pg=AsyncPostgres())
 
@@ -126,6 +129,11 @@ async def _g():
 async def _c():
     await _init()
     return _deps["chunks"]
+
+
+async def _gs():
+    await _init()
+    return _deps.get("graph_store")
 
 
 # ── MCP tools (one per atomic_tools.* function) ────────────────────
@@ -279,6 +287,83 @@ async def read_full_document(
     if r.observation.startswith("Error"):
         return {"error": r.observation}
     return {"text": r.observation}
+
+
+# ── graph analysis tools (Track 7b — read-only GDS) ────────────────
+#
+# Diagnostic / exploratory, NOT retrieval: they run GDS algorithms over
+# the whole __Entity__ graph (heavier, projection-backed) and are
+# fail-soft — Neo4j/GDS down or unavailable yields a safe empty result,
+# never an error.  `from src.graph import analysis` is module-level.
+
+
+@mcp.tool(timeout=1800)
+async def graph_pagerank(top_n: int = 20) -> dict[str, Any]:
+    """Most CENTRAL entities in the whole graph by weighted PageRank.
+
+    USE FOR: "who/what are the most important / connected entities" —
+    a global importance ranking, not tied to a query.
+    PREFER INSTEAD: `graph_personalized_pagerank` when you want
+    importance *relative to* specific seed entities. Returns top_n
+    {name, score}. Empty if Neo4j/GDS is unavailable."""
+    from src.graph import analysis
+    return {"top": await analysis.pagerank(await _gs(), top_n=top_n)}
+
+
+@mcp.tool(timeout=1800)
+async def graph_personalized_pagerank(
+    seeds: list[str], top_n: int = 20,
+) -> dict[str, Any]:
+    """Entities most relevant to the SEED entities by seed-biased
+    (personalized) PageRank.
+
+    USE FOR: "what's most connected to X and Y" — centrality relative to
+    `seeds` (exact entity names). Resolve names first with
+    `find_entity_by_name` if unsure. Empty seeds → empty result. Returns
+    top_n {name, score}; empty if Neo4j/GDS is unavailable."""
+    from src.graph import analysis
+    return {"top": await analysis.personalized_pagerank(
+        await _gs(), seeds, top_n=top_n,
+    )}
+
+
+@mcp.tool(timeout=1800)
+async def graph_components() -> dict[str, Any]:
+    """Weakly-connected-component count + size distribution of the graph.
+
+    USE FOR: connectivity health — a large singleton fraction explains
+    sparse/empty communities and weak multi-hop reach. Returns
+    {component_count, distribution}; empty if Neo4j/GDS is unavailable."""
+    from src.graph import analysis
+    return await analysis.components(await _gs())
+
+
+@mcp.tool(timeout=1800)
+async def graph_shortest_path(
+    source: str, target: str, max_hops: int = 6,
+) -> dict[str, Any]:
+    """Shortest undirected path between two entities by EXACT name.
+
+    USE FOR: "how are X and Y connected" — the concrete chain of entities
+    between them. Resolve names first with `find_entity_by_name` if
+    unsure. Returns {path:[names], hops}; {path:[], hops:-1} when there's
+    no path (or Neo4j unavailable)."""
+    from src.graph import analysis
+    return await analysis.shortest_path(
+        await _gs(), source, target, max_hops=max_hops,
+    )
+
+
+@mcp.tool(timeout=1800)
+async def graph_stats() -> dict[str, Any]:
+    """Operational snapshot of the knowledge graph: entity / relationship
+    counts, degree distribution (p50/p99/max), duplicate-name groups,
+    community count.
+
+    USE FOR: a quick health/size read of the graph. Returns a stats dict
+    (zeros if Neo4j is unavailable)."""
+    from src.graph import analysis
+    return await analysis.graph_stats(await _gs())
 
 
 # Note: filter_by_metadata is not exposed via MCP-2.  It only makes
