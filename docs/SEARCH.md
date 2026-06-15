@@ -298,7 +298,7 @@ question (+ optional history)
   ▼  1. map_communities — SELECT which communities to map over
   │       strategy: lexical | semantic | descent  (capped at max_communities)
   ├─ community 1 ─▶ map_community_partial (small tier) ─┐
-  ├─ community 2 ─▶ map_community_partial (small tier) ─┤  gather, sem=map_parallelism
+  ├─ community 2 ─▶ map_community_partial (small tier) ─┤  gather (fan-out bounded by LLM_POOL_N)
   └─ …                                                 ─┘
         off-topic communities self-drop ('НЕТ' → score 0)
                                                          │
@@ -311,10 +311,10 @@ question (+ optional history)
 ```
 
 - **MAP** (`map_community_partial`, `activities/global_search.py`)
-  выполняется на `kb-search-small` (small-модель уровня `retrieve`),
-  ограничен `map_parallelism` (`AGENT_GLOBAL_MAP_PARALLELISM`, по
-  умолчанию 4). Каждое не относящееся к теме сообщество само сообщает
-  буквальное `НЕТ` → score 0 и отбрасывается (`is_relevant_partial`).
+  выполняется на `kb-search-small` (small-модель уровня `retrieve`);
+  конкурентность ограничена глобальным семафором `LLM_POOL_N`. Каждое не
+  относящееся к теме сообщество само сообщает буквальное `НЕТ` → score 0
+  и отбрасывается (`is_relevant_partial`).
 - **REDUCE** — это существующий `synthesize_answer`, закреплённый за
   большой очередью ровно как в локальном потоке (`build_reduce_call`).
 - Сборка map-spec / reduce-context / reduce-call — чистые хелперы
@@ -554,7 +554,6 @@ HTTP-эндпоинты `/api/v1/search/*` НЕ имеют per-request поля 
 | `AGENT_GRAPH_SEARCH_PATH_DEPTH` | `graph_search_path_depth` | 1 | глубина соседей `graph_search` (1–3) |
 | `AGENT_GRAPH_SIMILARITY_TOP_K` | `graph_similarity_top_k` | 20 | число кандидатов графового ретривера |
 | `AGENT_GLOBAL_MAX_COMMUNITIES` | `global_max_communities` | 20 | ограничивает сообщества, входящие в глобальный MAP |
-| `AGENT_GLOBAL_MAP_PARALLELISM` | `global_map_parallelism` | 4 | конкурентность MAP по сообществам |
 | `AGENT_COMMUNITY_MAX_LEVELS` | `community_max_levels` | 1 | глубина иерархии Leiden для материализации (1 = один уровень) |
 | `AGENT_COMMUNITY_DYNAMIC_SELECTION` | `community_dynamic_selection` | lexical | отбор global/drift: `lexical`\|`semantic`\|`descent` |
 | `TEMPORAL_SEARCH_TASK_QUEUE` | `search_task_queue` | `kb-search-small` | очередь, где живёт оркестратор + дочерние подзапросы |

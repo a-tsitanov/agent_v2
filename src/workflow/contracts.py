@@ -652,7 +652,6 @@ class GlobalSearchParams(_Frozen):
     query: str
     level: int = 0
     max_communities: int = 20
-    map_parallelism: int = 4
     max_refinements: int = 3
     # Drift mode (R7a): when True, the workflow's REDUCE label is "drift"
     # and the partials are MERGED with caller-supplied local sources

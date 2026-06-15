@@ -527,11 +527,8 @@ class AgentSettings(BaseSettings):
     # local|global|drift map-reduce over the community summaries built in
     # R6.  ``global_max_communities`` caps how many summaries enter the
     # (parallel) MAP step so a huge corpus doesn't fan out unbounded;
-    # ``global_map_parallelism`` bounds the per-community MAP concurrency
-    # inside GlobalSearchWorkflow so a single query doesn't flood the
-    # small-tier LLM proxy.
+    # LLM_POOL_N is the single throttle for MAP concurrency.
     global_max_communities: int = Field(default=20, ge=1, le=200)
-    global_map_parallelism: int = Field(default=4, ge=1, le=32)
     # Multi-hop graph_walk seeding (Search R3b): in the deterministic
     # SubQuery retrieve path, after ``graph_search`` returns entities the
     # retrieve activity auto-seeds the bounded ``graph_walk`` tool from

@@ -63,7 +63,6 @@ def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSea
         query=req.query,
         level=0,
         max_communities=settings.agent.global_max_communities,
-        map_parallelism=settings.agent.global_map_parallelism,
         drift_mode=drift_mode,
         history=[
             ConversationTurnDict(role=t.role, content=t.content)

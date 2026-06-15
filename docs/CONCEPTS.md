@@ -587,13 +587,12 @@ Neo4j — это база данных, построенная нативно н
 
 **Почему мы это используем / альтернативы.** Альтернатива для вопроса «темы по всему» — это извлечь топ-k чанков и надеяться, что они репрезентативны — они не будут, потому что топ-k смещён к тому, что совпадает по формулировке, а не к покрытию уровня корпуса. Map-reduce над сводками сообществ даёт настоящую широту: каждое релевантное сообщество получает голос. Стратегии выбора меняют стоимость против точности — lexical бесплатна, но груба; semantic острее; descent эксплуатирует иерархию сообществ, чтобы вообще не маппить нерелевантные ветви.
 
-**В нашем коде.** Activity выбора + map: `src/workflow/search/activities/global_search.py` (`map_communities` переключается на `selection`; `rank_summaries`, `select_communities_semantic`, `select_communities_descent`; `map_community_partial` — пер-сообщественный шаг map). Оркестрация map-reduce: `src/workflow/search/global_wf.py` (`GlobalSearchWorkflow` — map fan-out с семафором, фильтрация `partials_to_sources`, затем `build_reduce_call` → один large-ярусный синтез). Сами сообщества строятся офлайн `src/workflow/search/community_wf.py` (`CommunityBuildWorkflow`: Leiden detect → тончайший-первым summarize), который работает на выделенной очереди `kb-graph-build`, никогда на горячем пути запроса. Конфиг (все `AGENT_`):
+**В нашем коде.** Activity выбора + map: `src/workflow/search/activities/global_search.py` (`map_communities` переключается на `selection`; `rank_summaries`, `select_communities_semantic`, `select_communities_descent`; `map_community_partial` — пер-сообщественный шаг map). Оркестрация map-reduce: `src/workflow/search/global_wf.py` (`GlobalSearchWorkflow` — map fan-out (конкурентность ограничена `LLM_POOL_N`), фильтрация `partials_to_sources`, затем `build_reduce_call` → один large-ярусный синтез). Сами сообщества строятся офлайн `src/workflow/search/community_wf.py` (`CommunityBuildWorkflow`: Leiden detect → тончайший-первым summarize), который работает на выделенной очереди `kb-graph-build`, никогда на горячем пути запроса. Конфиг (все `AGENT_`):
 
 | ручка | по умолчанию | эффект |
 |---|---|---|
 | `community_dynamic_selection` | `"lexical"` | какая стратегия выбора: `lexical` / `semantic` / `descent` |
 | `global_max_communities` | `20` (1–200) | потолок на то, сколько сводок сообществ входит в шаг MAP |
-| `global_map_parallelism` | `4` (1–32) | граница на конкурентные пер-сообщественные MAP LLM-вызовы |
 
 ---
 

@@ -46,8 +46,8 @@ docs {
   ## Response 200 — `SearchResponse` with `"mode": "global"`.
 
   ## Tuning (server-side env)
-  `AGENT_GLOBAL_MAX_COMMUNITIES` (how many communities enter MAP),
-  `AGENT_GLOBAL_MAP_PARALLELISM` (MAP concurrency). Freshness depends on
+  `AGENT_GLOBAL_MAX_COMMUNITIES` (how many communities enter MAP);
+  MAP concurrency is bounded by `LLM_POOL_N`. Freshness depends on
   the last rebuild.
 
   ## Errors
