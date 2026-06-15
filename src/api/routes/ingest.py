@@ -1,9 +1,11 @@
 """Document upload + ingestion-status endpoints.
 
 Flow: upload file to MinIO (synchronous put), insert a Postgres
-``documents`` row, start the Temporal ``DocumentIngestWorkflow`` and
-return ``202 Accepted`` with the job id.  The Temporal worker
-(``src.workflow.worker``) runs the activities asynchronously.
+``documents`` row, then hand the document to the
+``IngestSchedulerWorkflow`` admission singleton (K = max in-flight
+documents) which starts the actual processing workflow once a slot is
+available.  Returns ``202 Accepted`` with the job id.  The Temporal
+worker (``src.workflow.worker``) runs the activities asynchronously.
 """
 
 from __future__ import annotations

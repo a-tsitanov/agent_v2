@@ -217,9 +217,9 @@ class TemporalSettings(BaseSettings):
     staging_bucket: str = "kb-staging"
 
     # LLM-bound extract_kg activities run on a separate task queue.
-    # LLMPool owns real concurrency (tier + lane ceilings); this Temporal
-    # cap must be >= the pool extraction lane ceiling so the pool binds
-    # first.  Default matches LLMPoolSettings.lane_caps extraction ceiling.
+    # LLMPool owns LLM concurrency via a single global semaphore (LLM_POOL_N).
+    # This Temporal cap must be >= LLM_POOL_N so the in-process pool (not
+    # Temporal) is the binding LLM throttle.
     # Lower only if Temporal slot overhead is a concern on a constrained host.
     llm_task_queue: str = "kb-ingest-llm"
     llm_activity_concurrency: int = 18
@@ -228,8 +228,9 @@ class TemporalSettings(BaseSettings):
     # build_property_graph) runs on its OWN queue so it interleaves with
     # extract_kg instead of queueing behind a burst of extracts on
     # kb-ingest-llm (head-of-line blocking starved merge under load).
-    # Must be >= LLMPool judge/merge lane ceiling so the pool binds before
-    # Temporal.  Default matches LLMPoolSettings.lane_caps judge ceiling.
+    # LLMPool owns LLM concurrency via a single global semaphore (LLM_POOL_N).
+    # This Temporal cap must be >= LLM_POOL_N so the in-process pool (not
+    # Temporal) is the binding LLM throttle.
     merge_task_queue: str = "kb-ingest-merge"
     merge_activity_concurrency: int = 14
 

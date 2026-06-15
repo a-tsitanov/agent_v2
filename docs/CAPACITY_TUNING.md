@@ -79,7 +79,7 @@ The pipeline uses two knobs:
 | Env var | Default | Note |
 |---|---|---|
 | `LITELLM_TIMEOUT_S` | `900` | Per-attempt request timeout (15 min). |
-| `LITELLM_MAX_RETRIES` | `2` | **Recommend `0`** — see §4. Inner retries stack on top of Temporal's infinite retry and amplify load under overload. |
+| `LITELLM_MAX_RETRIES` | `2` | **Recommend `0`** — see §5. Inner retries stack on top of Temporal's infinite retry and amplify load under overload. |
 
 ---
 
@@ -105,7 +105,7 @@ The default `8` is a conservative starting point.
    Set `LLM_POOL_N` at or just below that knee — **not** above.
 2. **Lacking a load test?** Ramp in prod conservatively: start low
    (e.g. `4`), watch the saturation warning + heartbeat-timeout rate +
-   proxy latency (§5), raise until latency starts degrading, then back
+   proxy latency (§6), raise until latency starts degrading, then back
    off one step.
 3. **Re-check invariant 1** and adjust Temporal caps together (keep them
    ≥ N).
