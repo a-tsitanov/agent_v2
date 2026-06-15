@@ -17,7 +17,7 @@ from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel
-from temporalio.common import WorkflowIDReusePolicy
+from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from urllib3.exceptions import MaxRetryError
@@ -27,8 +27,9 @@ from src.config import settings
 from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
 from src.workflow.client import get_temporal_client
-from src.workflow.contracts import IngestParams
+from src.workflow.contracts import IngestParams, SchedulerParams
 from src.workflow.document_ingest import DocumentIngestWorkflow
+from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
 
 router = APIRouter(tags=["ingestion"])
 
@@ -142,31 +143,48 @@ async def upload_document(
     }
 
     client = await get_temporal_client()
+    params = IngestParams(
+        doc_id=str(doc_id), path=s3_uri,
+        version_tag=version_tag, model=model,
+        extraction_model=extraction_model,
+        judge_model=judge_model,
+        search_model=search_model,
+        env=env_name,
+        # Snapshot the wiki flag here (outside the Temporal sandbox) so
+        # the workflow never reads settings.wiki — constructing
+        # WikiSettings touches .env, a determinism violation inside
+        # @workflow.run.
+        wiki_enabled=settings.wiki.enabled,
+        # Same determinism reasoning: snapshot the classifier flag here,
+        # ship the operator's force override.
+        classifier_enabled=settings.classifier.enabled,
+        force=force,
+    )
+    admission = settings.ingest_admission
     try:
-        await client.start_workflow(
-            DocumentIngestWorkflow.run,
-            IngestParams(
-                doc_id=str(doc_id), path=s3_uri,
-                version_tag=version_tag, model=model,
-                extraction_model=extraction_model,
-                judge_model=judge_model,
-                search_model=search_model,
-                env=env_name,
-                # Snapshot the wiki flag here (outside the Temporal
-                # sandbox) so the workflow never reads settings.wiki —
-                # constructing WikiSettings touches .env, which is a
-                # determinism violation inside @workflow.run.
-                wiki_enabled=settings.wiki.enabled,
-                # Same determinism reasoning: snapshot the classifier flag
-                # here, ship the operator's force override.
-                classifier_enabled=settings.classifier.enabled,
-                force=force,
-            ),
-            id=f"ingest-{doc_id}",
-            task_queue=settings.temporal.task_queue,
-            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
-            search_attributes=search_attrs,
-        )
+        if admission.enabled:
+            # Admission control: hand the document to the singleton
+            # scheduler (signal-with-start; USE_EXISTING reuses the running
+            # one) so at most max_inflight documents run at once, each to
+            # completion, FIFO.
+            await client.start_workflow(
+                IngestSchedulerWorkflow.run,
+                SchedulerParams(max_inflight=admission.max_inflight),
+                id="ingest-scheduler",
+                task_queue=settings.temporal.task_queue,
+                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+                start_signal="submit",
+                start_signal_args=[params],
+            )
+        else:
+            await client.start_workflow(
+                DocumentIngestWorkflow.run,
+                params,
+                id=f"ingest-{doc_id}",
+                task_queue=settings.temporal.task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+                search_attributes=search_attrs,
+            )
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is
         # already running or already completed successfully.  Don't

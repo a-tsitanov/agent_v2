@@ -81,6 +81,15 @@ class Ctx(_Frozen):
     workflow_run_id: str
 
 
+class SchedulerParams(_Frozen):
+    """Input to the long-lived ``IngestSchedulerWorkflow`` (admission
+    control).  ``pending`` carries still-queued documents across a
+    ``continue_as_new`` recycle."""
+
+    max_inflight: int = 1
+    pending: list["IngestParams"] = Field(default_factory=list)
+
+
 class ClassifyIn(_Frozen):
     """Input to the ``classify_document`` activity."""
 

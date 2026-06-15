@@ -55,6 +55,7 @@ from src.workflow.activities import (
     synthesize_answer,
 )
 from src.workflow.document_ingest import DocumentIngestWorkflow
+from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
 from src.workflow.search.activities import (
     GRAPH_BUILD_ACTIVITIES,
@@ -143,7 +144,8 @@ def _build_worker(client: Client, group: str) -> Worker:
     if group == "main":
         return Worker(
             client, task_queue=t.task_queue,
-            workflows=[DocumentIngestWorkflow], activities=MAIN_ACTIVITIES,
+            workflows=[DocumentIngestWorkflow, IngestSchedulerWorkflow],
+            activities=MAIN_ACTIVITIES,
             max_concurrent_activities=t.activity_concurrency,
         )
     if group == "llm":
