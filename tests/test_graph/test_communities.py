@@ -321,3 +321,37 @@ async def test_detect_hierarchy_carries_unchanged_report():
         assert p.get("carry_title") is None
         assert p.get("carry_summary") is None
         assert p.get("carry_report_vec") is None
+
+
+# ── Track 4: weighted projection + instrumentation ──────────────────
+
+
+def test_leiden_stream_uses_relationship_weight():
+    """Leiden must run weighted (edge weight = co-occurrence count from
+    the merge layer) so dense ties dominate community structure."""
+    from src.graph.communities import _leiden_stream_cypher
+
+    cy = _leiden_stream_cypher("g")
+    assert "relationshipWeightProperty" in cy
+    assert "weight" in cy
+
+
+def test_projection_carries_weight_property():
+    from src.graph.communities import _project_cypher
+
+    cy = _project_cypher("g")
+    assert "relationshipProperties" in cy
+    assert "coalesce(r.weight" in cy
+
+
+def test_projection_stats_extracts_counts():
+    from src.graph.communities import _projection_stats
+
+    rows = [{"g": {"nodeCount": 50000, "relationshipCount": 120000}}]
+    assert _projection_stats(rows) == {"nodes": 50000, "rels": 120000}
+
+
+def test_projection_stats_empty_is_zero():
+    from src.graph.communities import _projection_stats
+
+    assert _projection_stats([]) == {"nodes": 0, "rels": 0}
