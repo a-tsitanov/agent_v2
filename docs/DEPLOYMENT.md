@@ -10,6 +10,127 @@ task queue, чтобы делать работу.  Топологию очере
 конкурентность см. в `docs/QUEUES.md`.  Архитектуру системы см. в
 `docs/ARCHITECTURE.md`.
 
+> **Два пути развёртывания.**  Разделы 1–14 описывают **dev / host-process**
+> сетап: `docker-compose.yml` поднимает backing-хранилища + Temporal **и**
+> `litellm`, а API и worker гоняются **на хосте** (`uv run ...`).  Для
+> **продакшена** есть отдельный путь — `docker-compose.prod.yml` +
+> корневой `Dockerfile`, которые контейнеризуют **само приложение** (api /
+> worker / mcp) и **выносят** `litellm`/`ollama` на внешние хосты.  См.
+> раздел **0. Продакшен: контейнеризованный compose** ниже.
+
+---
+
+## 0. Продакшен: контейнеризованный compose
+
+В корне репозитория лежат `Dockerfile` + `docker-compose.prod.yml` —
+полный продакшен-путь, поднимающий **всё приложение целиком в compose**
+(в отличие от dev-сетапа из разделов 4/7, где app гоняется на хосте).
+
+### 0a. Образ (`Dockerfile`)
+
+Один uv-based образ на **все** роли приложения (api / worker / mcp);
+конкретная роль выбирается `command`'ом в compose.  База — `python:3.12-slim`,
+зависимости ставятся `uv sync --frozen --no-dev`.  Default `CMD` поднимает API
+(`uvicorn src.api.main:app --host 0.0.0.0 --port 8000`).  `.dockerignore`
+исключает `.git` / `.venv` / worktrees / `tests` / `docs`, но **оставляет
+`prompts/`** (там лежат шаблоны ответов, нужные в рантайме).
+
+### 0b. Стек (`docker-compose.prod.yml`)
+
+Поднимает сервисы приложения:
+
+| Сервис | Порт (operator-facing) | Назначение |
+|---|---|---|
+| `api` | `:8000` (`API_PORT`) | FastAPI |
+| `worker` | — (только метрики `9090..9096`) | Temporal-worker, все 7 пулов; сплит на масштаб через `WORKER_GROUPS` |
+| `mcp-search` | `:9001` | MCP-сервер поиска |
+| `mcp-tools` | `:9002` | MCP-сервер инструментов |
+
+…плюс все backend'ы в том же compose: `postgres`, `temporal` + `temporal-ui`,
+`etcd`, `minio`, `milvus`, `neo4j` (apoc + gds), `prometheus`, `grafana` и
+`redis` (LLM-кеш; используется, как только смержится `feature/redis-llm-cache`).
+
+Ключевые отличия от dev-`docker-compose.yml`:
+
+* **Приложение в контейнерах.**  api / worker / mcp собираются из корневого
+  `Dockerfile` и гоняются в compose — на хосте `uv run ...` не нужен.
+* **`litellm` и `ollama` ИСКЛЮЧЕНЫ.**  Они живут на отдельных/внешних хостах;
+  приложение ходит на них через `LITELLM_BASE_URL` (**обязательная** env —
+  compose упадёт с ошибкой, если она не задана).
+* **App↔backend трафик идёт по compose-internal DNS** (по именам сервисов);
+  наружу публикуются только operator-facing порты (без коллизий).
+* **Wikibase-стек** (`wikibase`, `wikibase-mysql`, `wdqs`) спрятан за compose-
+  профиль `wikibase` — **opt-in**, по умолчанию выключен.
+* **Prometheus** использует `infra/prometheus/prometheus.prod.yml`, который
+  скрейпит пул-порты worker-контейнера `worker:9090..9096`.
+
+### 0c. Env (`.env.prod.example`)
+
+Скопируйте шаблон в `.env` (compose читает `.env` по умолчанию) и заполните —
+**ротируйте каждый дефолтный credential**:
+
+```env
+# ── ВНЕШНИЙ LLM-прокси (litellm/ollama НЕ в этом compose) ──
+LITELLM_BASE_URL=http://your-litellm-host:4000   # REQUIRED — compose упадёт, если пусто
+LITELLM_API_KEY=sk-change-me
+LITELLM_EMBEDDING_DIM=1536        # MUST совпадать с коллекцией Milvus
+
+# ── API ──
+API_KEYS=change-me-strong-key
+API_PORT=8000
+
+# ── Секреты / credentials (РОТИРУЙТЕ) ──
+NEO4J_PASSWORD=change-me
+POSTGRES_PASSWORD=change-me
+MINIO_ACCESS_KEY=change-me
+MINIO_SECRET_KEY=change-me
+GRAFANA_ADMIN_PASSWORD=change-me
+
+# ── Память Neo4j (под хост; Leiden на большом KG прожорлив до heap) ──
+NEO4J_HEAP_MAX=4G
+NEO4J_PAGECACHE=2G
+
+# ── Temporal (512 = прод-пол; НЕИЗМЕНЯЕМ после первого init) ──
+TEMPORAL_NUM_HISTORY_SHARDS=512
+
+# ── Opt-in фичи ──
+CLASSIFIER_ENABLED=false
+INGEST_ADMISSION_ENABLED=false
+INGEST_ADMISSION_MAX_INFLIGHT=1
+WIKI_ENABLED=false
+LLM_CACHE_ENABLED=false           # консьюмится, когда смержится feature/redis-llm-cache
+
+# ── Топология worker'а ──
+WORKER_GROUPS=                    # пусто = один контейнер тянет все 7 пулов; задайте подмножество (напр. llm) для сплита
+
+# ── Оверрайды хост-портов (избежать коллизий со сторонними стеками) ──
+# MINIO_CONSOLE_PORT=9101   # дефолт 9101, чтобы не клэшить с mcp-search :9001
+# PROMETHEUS_PORT=9092
+# GRAFANA_PORT=3001
+```
+
+### 0d. Команды
+
+```bash
+# Core (без wikibase)
+docker compose -f docker-compose.prod.yml up -d
+
+# С wikibase-стеком (opt-in профиль)
+docker compose -f docker-compose.prod.yml --profile wikibase up -d
+```
+
+### 0e. Прод-харденинг
+
+Заметки по харденингу — инлайн в самом compose.  Захардененный прод гоняет
+`temporalio/server` + одноразовую schema-миграцию через `temporal-sql-tool`
+(вместо образа `auto-setup`) и даёт Temporal **собственный** Postgres.  Общий
+прод-чеклист (auth-ротация, персистентность, супервизия, сетевая изоляция)
+см. в разделе **13** ниже — он применим к обоим путям.
+
+> **Статус валидации.**  `docker compose config` проходит; `docker build
+> --check` проходит.  Полный build образа в dev **не** прогонялся (тянет
+> PyPI) — прогоните его в вашем окружении перед первым деплоем.
+
 ---
 
 ## 1. Предварительные требования
@@ -127,7 +248,9 @@ docker compose up -d
   бута.  См. комментарии по прод-харденингу в `docker-compose.yml`.
 * **Worker и API гоняются на хосте** (не в compose).  Prometheus
   скрейпит хост-worker через `host.docker.internal` (экспортер на
-  `METRICS_BIND_ADDRESS`, default `0.0.0.0:9090`).
+  `METRICS_BIND_ADDRESS`, default `0.0.0.0:9090`).  Это **dev-путь**: app
+  на хосте, `litellm` — в compose.  Продакшен-путь контейнеризует app и
+  выносит `litellm`/`ollama` наружу — см. раздел **0** выше.
 
 Дождитесь, пока всё станет healthy:
 

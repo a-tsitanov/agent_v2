@@ -7,7 +7,7 @@
 
 | Очередь (поле конфига) | Default | Что хостит | Лимит конкурентности |
 | --- | --- | --- | --- |
-| `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + IO/embedding-активности | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
+| `task_queue` | `kb-ingest` | `DocumentIngestWorkflow` + `IngestSchedulerWorkflow` (синглтон-планировщик допуска, Track 5) + IO/embedding-активности | `TEMPORAL_ACTIVITY_CONCURRENCY` (4) |
 | `llm_task_queue` | `kb-ingest-llm` | ТОЛЬКО `extract_kg` (extract-полоса) | `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` (18) |
 | `merge_task_queue` | `kb-ingest-merge` | `GraphBuildWorkflow` + `merge_and_resolve` / `build_property_graph` (merge-полоса) | `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY` (14) |
 | `search_task_queue` | `kb-search-small` | `SearchOrchestratorWorkflow` + `SubQueryRetrievalWorkflow` + `GlobalSearchWorkflow` + `DriftSearchWorkflow` + `AutoSearchWorkflow` + их активности (plan / retrieve / coverage_check / rerank_sources / route / map_communities / documents_for_communities) | `TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY` (4) |
@@ -67,6 +67,41 @@ merge-полосе автоматически. `extract_kg` остаётся п�
 `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY`, если они не дефолтные (держите их ≥
 соответствующего потолка полосы пула), и перезапустите worker, чтобы он поллил
 новую очередь `kb-ingest-merge`.
+
+## Контроль допуска документов: `IngestSchedulerWorkflow` (Track 5, опционально)
+
+Синглтон-планировщик допуска (admission control) — долгоживущий workflow
+`IngestSchedulerWorkflow`, зарегистрированный в основном пуле на очереди
+`kb-ingest` рядом с `DocumentIngestWorkflow` (см. `src/workflow/worker.py`,
+пул `main`). Включается опционально через `INGEST_ADMISSION_ENABLED`
+(default false); число одновременно допущенных документов K задаётся
+`INGEST_ADMISSION_MAX_INFLIGHT` (default 1).
+
+Когда включён, `POST /ingest` делает **signal-with-start** этого синглтона
+(фиксированный id `ingest-scheduler`, `WorkflowIDConflictPolicy.USE_EXISTING`,
+сигнал `submit`) вместо прямого старта `DocumentIngestWorkflow`. Когда
+выключен (default), поведение не меняется — документ стартует напрямую.
+
+**Зачем**: отдельные пер-стадийные FIFO-очереди (`kb-ingest`=4,
+`kb-ingest-llm`=18, `kb-ingest-merge`=14) сами по себе позволяют документам
+чередоваться, так что хвост merge одного документа встаёт в очередь
+позади extract'ов множества более новых документов. Планировщик допускает
+не более K документов одновременно и гоняет каждый дочерний
+`DocumentIngestWorkflow` до завершения, прежде чем допустить следующий
+(FIFO) — так очереди держат работу только K документов, и документ, раз
+начатый, едет как приоритетная единица, а не голодает за более новыми.
+
+**Раскладка кода**: чистая логика — `src/workflow/admission.py::AdmissionState`
+(детерминированный FIFO-автомат с жёстким потолком `max_inflight`,
+покрыт юнит-тестами); тонкая оболочка вокруг неё —
+`src/workflow/ingest_scheduler.py`. Планировщик использует
+`continue_as_new`, чтобы ограничить рост истории (перезапускается только
+в состоянии покоя, перенося ещё не допущенные документы).
+
+**Активности классификации на `kb-ingest`**: в том же основном пуле едут две
+новые активности — `classify_document` (Track 2, опционально через
+`CLASSIFIER_ENABLED`) и `mark_skipped` (обе зарегистрированы в
+`MAIN_ACTIVITIES`, IO-bound, не GPU-bound).
 
 ## Оффлайн-очередь сборки сообществ графа: `kb-graph-build` (Search R6)
 

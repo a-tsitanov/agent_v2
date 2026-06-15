@@ -66,7 +66,7 @@
 | Хранилище | Что хранит | Подключение (по умолчанию) |
 |---|---|---|
 | **Milvus** | Векторный индекс чанков — одна запись на чанк (`id, text, embedding, metadata`). `text` — это чанк **на языке оригинала**; эмбеддинги получены из многоязычной embed-модели через LiteLLM. ANN-индекс — **HNSW** (`MILVUS_INDEX_TYPE`, `FLAT` для точного). | `MILVUS_HOST:MILVUS_PORT` (`localhost:19530`); коллекция `MILVUS_COLLECTION` |
-| **Neo4j** | Property-граф **и** два нативных индекса в одном хранилище: узлы `:__Entity__:<Type>` + типизированные связи (имена/описания **на русском** после слияния), узлы `:Chunk`, связанные через `(:Chunk)-[:MENTIONS]->(:__Entity__)`, **нативный векторный индекс** по эмбеддингам сущностей (`graph_search` kNN; плюс `er_vec` для ER на нативных векторах), **полнотекстовый индекс** по `__Entity__.name` (`find_entity_by_name`), а также иерархия `:Community` + отчёты (`community_report_vec`) для глобального поиска. | `NEO4J_URI` (`bolt://localhost:7687`) |
+| **Neo4j** | Property-граф **и** два нативных индекса в одном хранилище: узлы `:__Entity__:<Type>` + типизированные связи (имена/описания **на русском** после слияния; связи несут осмысленный `weight` = счётчик co-occurrence + дискретные `tags`), узлы `:Chunk`, связанные через `(:Chunk)-[:MENTIONS]->(:__Entity__)`, **нативный векторный индекс** по эмбеддингам сущностей (`graph_search` kNN; плюс `er_vec` для ER на нативных векторах), **полнотекстовый индекс** по `__Entity__.name` (`find_entity_by_name`), а также иерархия `:Community` + отчёты (`community_report_vec`) для глобального поиска. | `NEO4J_URI` (`bolt://localhost:7687`) |
 | **Postgres** | Таблица заданий/статусов `documents` (doc_id → статус → метаданные) и `ingest_metrics` (длительности по каждой активности + теги моделей по ролям для аналитики). | `POSTGRES_*` |
 | **MinIO** | Загруженные исходные файлы (отдаются обратно через `GET /documents/{id}`) **и** staging-блобы по схеме claim-check — тяжёлое состояние приёма (распарсенные узлы, KG, слитые сущности), сериализованное через pickle и передаваемое между активностями по URI. | `MINIO_*` (консоль `:9001`, S3 API `:9000`) |
 | **Wikibase / MediaWiki** | Курируемый **канонический якорь**: self-hosted Wikibase Item на каждую сущность (`push_wikibase`, opt-in) + страницы статей MediaWiki на каждую сущность, создаваемые непрерывным редактором wiki. WDQS предоставляет SPARQL-эндпоинт. | контейнеры `wikibase` / `wdqs` |
@@ -76,6 +76,11 @@
 (+ **temporal-ui** `:8080`) — бэкенд надёжного исполнения; **Prometheus** +
 **Grafana** — наблюдаемость. См. [`DEPLOYMENT.md`](DEPLOYMENT.md) /
 `docker-compose.yml`.
+
+**Прод-топология:** `Dockerfile` + `docker-compose.prod.yml` поднимают в
+одном compose всё приложение (API + воркер) вместе с бэкендами и redis,
+**исключая** litellm/ollama — они внешние и доступны через
+`LITELLM_BASE_URL`. Wikibase прячется за `--profile wikibase`.
 
 Сбросить всё: `uv run python -m scripts.wipe_db --yes`.
 
@@ -90,12 +95,19 @@ Postgres, снимает снапшот имён моделей по ролям 
 путешествует как **блобы MinIO по URI** (claim-check), так что по
 payload-ам Temporal едут только небольшие контракты.
 
+**Опциональный классификатор:** между `fetch_source` и `parse_and_chunk`
+может стоять шаг `classify_document` (opt-in `CLASSIFIER_ENABLED`,
+`src/ingestion/classifier.py`) — детерминированные правила + LLM-гейт
+отсеивают мусор; документ-мусор завершается новым статусом `skipped`
+вместо прохода через конвейер. `force=true` на `/ingest` обходит правила
+и форсирует приём.
+
 Две половины, намеренно разделённые:
 
-- **Векторная половина** — `fetch_source` → `parse_and_chunk` (разбиение →
-  детерминированная канонизация идентификаторов → опциональный перевод на
-  русский) → `index_vector` (эмбеддинг → Milvus). Если это падает, приём
-  падает (`mark_failed`).
+- **Векторная половина** — `fetch_source` → (`classify_document`) →
+  `parse_and_chunk` (разбиение → детерминированная канонизация
+  идентификаторов → опциональный перевод на русский) → `index_vector`
+  (эмбеддинг → Milvus). Если это падает, приём падает (`mark_failed`).
 - **Графовая половина** — `inject_canonical` (сущности-идентификаторы в
   Neo4j) → `extract_kg` (LightRAG, один LLM-вызов на чанк, очередь
   `kb-ingest-llm`) → дочерний **`GraphBuildWorkflow`** (очередь
@@ -113,6 +125,13 @@ Best-effort хвосты: `mark_entities_dirty` (помечает сущност
 редактора wiki) и `push_wikibase` (проецирование в якорь Wikibase, только
 если граф завершился), затем `finalize` записывает финальный статус +
 `ingest_metrics`.
+
+**Опциональный контроль допуска (admission control)** (opt-in
+`INGEST_ADMISSION_ENABLED`, `INGEST_ADMISSION_MAX_INFLIGHT`) — singleton
+`IngestSchedulerWorkflow` (`src/workflow/ingest_scheduler.py`,
+`src/workflow/admission.py`) допускает к исполнению не более K документов
+одновременно, проводя каждый до завершения по FIFO. Когда выключен,
+документы запускаются сразу, как раньше.
 
 Полная таблица активностей, диаграмма последовательности, staging-контракты → [`INGEST.md`](INGEST.md).
 
@@ -147,13 +166,24 @@ Best-effort хвосты: `mark_entities_dirty` (помечает сущност
   follow-up в самостоятельный вопрос.
 - **Иерархические сообщества** — global/drift выбирают по Leiden-**иерархии**
   узлов `:Community` со структурированными отчётами через
-  лексический / семантический-kNN / спуск-по-иерархии отбор. Сообщества
-  строятся **офлайн** через `CommunityBuildWorkflow` (очередь
+  лексический / семантический-kNN / спуск-по-иерархии отбор. Leiden
+  запускается **взвешенным** (по `weight` связей = co-occurrence).
+  Сообщества строятся **офлайн** через `CommunityBuildWorkflow` (очередь
   `kb-graph-build`, запускается админом), полностью отвязанные от горячего
   пути запроса.
 - **Вывод только на русском** — `synthesize_answer` оборачивает запрос
   инструкцией выдавать ответ на русском, так что язык ответа совпадает с
   нормализацией графа независимо от языка исходных чанков.
+- **Шаблон ответа** — поле запроса `answer_template`
+  (`src/retrieval/answer_template.py`) задаёт форму синтезируемого ответа:
+  именованный шаблон из `prompts/answer_templates/<name>.md` или inline-текст;
+  пустое значение → шаблон по умолчанию.
+
+**Анализ графа (admin):** набор read-only эндпоинтов
+`/admin/graph/{stats,pagerank,components,shortest-path}`
+(`src/graph/analysis.py`), опирающихся на GDS, даёт сводную статистику,
+PageRank, компоненты связности и кратчайшие пути по графу знаний — вне
+горячего пути запроса.
 
 Режимы, инструменты извлечения, отбор сообществ → [`SEARCH-FLOW.md`](SEARCH-FLOW.md)
 и [`SEARCH.md`](SEARCH.md).
