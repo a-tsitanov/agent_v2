@@ -104,10 +104,12 @@ def _get_store() -> Any | None:
 def _get_map_llm() -> Any:
     """Small-tier LLM for the per-community MAP step (role ``retrieve``,
     which maps to the small tier — same cheap tier as routing/summaries;
-    REDUCE uses the large synthesizer).  Indirected for monkeypatching."""
-    from src.retrieval.llm import build_llm
+    REDUCE uses the large synthesizer).  Indirected for monkeypatching.
+    Returns the pooled LLM via ``get_llm_pool().get('retrieve')`` so the
+    global N semaphore counts MAP calls."""
+    from src.retrieval.llm_pool import get_llm_pool
 
-    return build_llm("retrieve")
+    return get_llm_pool().get("retrieve")
 
 
 def _get_embed_model() -> Any:
