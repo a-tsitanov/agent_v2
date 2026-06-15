@@ -39,6 +39,26 @@ class _StubMilvus:
 
 
 @dataclass
+class _StubMinio:
+    """Faithful-enough stand-in for MinioStorage: s3 download + parse."""
+
+    objects: dict[str, bytes]  # s3_uri → content
+    download_dir: Path
+
+    def parse_s3_uri(self, uri: str) -> tuple[str, str]:
+        rest = uri[len("s3://") :]
+        bucket, _, key = rest.partition("/")
+        return bucket, key
+
+    def get_object_to_path(self, s3_uri: str, local: Path) -> Path:
+        if s3_uri not in self.objects:
+            raise RuntimeError("NoSuchKey")  # MinIO raises S3Error in prod
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(self.objects[s3_uri])
+        return local
+
+
+@dataclass
 class _StubPG:
     docs: dict[str, str]  # doc_id (str) → path
 
@@ -187,5 +207,42 @@ async def test_read_document_text_missing_file_returns_none(tmp_path: Path) -> N
         milvus_client=_StubMilvus(rows=[]),
         collection="x",
         pg=_StubPG(docs={valid_id: str(tmp_path / "ghost.txt")}),
+    )
+    assert await repo.aread_document_text(valid_id) is None
+
+
+@pytest.mark.asyncio
+async def test_read_document_text_streams_from_minio_for_s3_path(
+    tmp_path: Path,
+) -> None:
+    """documents.path is an s3:// URI; the repo must fetch from MinIO,
+    not treat it as a local filesystem path (the user-facing bug B)."""
+    valid_id = str(uuid.uuid4())
+    s3_uri = f"s3://kb-uploads/{valid_id}/doc.txt"
+    minio = _StubMinio(objects={s3_uri: b"a" * 500}, download_dir=tmp_path)
+    repo = ChunkRepository(
+        milvus_client=_StubMilvus(rows=[]),
+        collection="x",
+        pg=_StubPG(docs={valid_id: s3_uri}),
+        minio=minio,
+    )
+    out = await repo.aread_document_text(valid_id, max_chars=200)
+    assert out is not None
+    assert out.startswith("a" * 200)
+    assert "truncated" in out
+
+
+@pytest.mark.asyncio
+async def test_read_document_text_s3_missing_object_returns_none(
+    tmp_path: Path,
+) -> None:
+    valid_id = str(uuid.uuid4())
+    s3_uri = f"s3://kb-uploads/{valid_id}/doc.txt"
+    minio = _StubMinio(objects={}, download_dir=tmp_path)  # object absent
+    repo = ChunkRepository(
+        milvus_client=_StubMilvus(rows=[]),
+        collection="x",
+        pg=_StubPG(docs={valid_id: s3_uri}),
+        minio=minio,
     )
     assert await repo.aread_document_text(valid_id) is None

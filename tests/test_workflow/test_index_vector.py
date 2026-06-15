@@ -51,6 +51,48 @@ async def test_indexes_and_returns_ids():
 
 
 @pytest.mark.asyncio
+async def test_injects_doc_id_into_metadata():
+    """Chunks must carry `doc_id` so they can be fetched back by
+    document id (get_chunks_by_doc_id). Bug: index_vector never set it."""
+    n = TextNode(id_="a", text="hello")
+    n.metadata = {"k": 1}
+
+    staging = MagicMock()
+    staging.read_pickle.return_value = [n]
+
+    captured: dict = {}
+
+    def _capture(idx, nodes):
+        captured["doc_id"] = nodes[0].metadata.get("doc_id")
+
+    ctx = Ctx(doc_id="doc-123", local_path="/x", cleanup_dir=None, workflow_run_id="r")
+    parsed = Parsed(ctx=ctx, nodes_uri="s3://kb-staging/r/parsed.pkl", chunk_count=1)
+
+    with patch(
+        "src.workflow.activities.index_vector.build_staging_store",
+        return_value=staging,
+    ), patch(
+        "src.workflow.activities.index_vector.build_vector_store",
+    ), patch(
+        "src.workflow.activities.index_vector.build_vector_index",
+    ), patch(
+        "src.workflow.activities.index_vector.build_embedding_model",
+    ), patch(
+        "src.workflow.activities.index_vector.index_nodes",
+        side_effect=_capture,
+    ), patch(
+        "src.workflow.activities.index_vector.activity"
+    ) as mock_activity:
+        mock_activity.heartbeat = MagicMock()
+        await index_vector(parsed)
+
+    # doc_id present in the rows actually inserted into Milvus
+    assert captured["doc_id"] == "doc-123"
+    # and still on the in-memory node after metadata restore
+    assert n.metadata["doc_id"] == "doc-123"
+
+
+@pytest.mark.asyncio
 async def test_restores_metadata_after_insert():
     n = TextNode(id_="a", text="hello")
     n.metadata = {"canonical_identifiers": ["x"], "translated_text": "RU", "k": 1}

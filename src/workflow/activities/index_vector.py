@@ -164,6 +164,13 @@ async def index_vector(parsed: Parsed) -> Indexed:
     index = build_vector_index(store, embed_model)
     activity.heartbeat({"stage": "embedding_init"})
 
+    # Tag every chunk with its document id so it can be fetched back by
+    # doc_id (get_chunks_by_doc_id).  Set before the Milvus snapshot so
+    # the value is actually written into the collection; it's a tiny
+    # field and survives the size-guard scrub.
+    for n in nodes:
+        n.metadata["doc_id"] = parsed.ctx.doc_id
+
     text_snaps = _snapshot_oversized_text(nodes)
     snaps = _snapshot_for_milvus(nodes)
     activity.logger.info("index_vector inserting  chunks=%d", len(nodes))
