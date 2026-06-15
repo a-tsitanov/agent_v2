@@ -67,6 +67,12 @@ def _new_graph_name() -> str:
 #    EVERY projected type undirected — REQUIRED by Leiden, which rejects a
 #    directed graph ("works only with undirected graphs").  Edge direction
 #    is meaningless for community detection on a KG anyway.
+#    ``relationshipProperties: {{ weight: coalesce(r.weight, 1.0) }}``
+#    projects the merge-layer edge weight (distinct co-occurrence count)
+#    so Leiden runs WEIGHTED — dense, repeatedly-attested ties dominate
+#    the partition.  ``coalesce`` defends against legacy edges written
+#    before weights were meaningful.  The result is aliased ``AS g`` so
+#    ``_projection_stats`` can read nodeCount/relationshipCount back.
 def _project_cypher(graph_name: str) -> str:
     return f"""
 MATCH (s:__Entity__)
@@ -76,9 +82,10 @@ RETURN gds.graph.project(
     s,
     t,
     {{ sourceNodeLabels: labels(s), targetNodeLabels: labels(t),
-       relationshipType: type(r) }},
+       relationshipType: type(r),
+       relationshipProperties: {{ weight: coalesce(r.weight, 1.0) }} }},
     {{ undirectedRelationshipTypes: ['*'] }}
-)
+) AS g
 """
 
 
@@ -92,7 +99,8 @@ def _leiden_stream_cypher(graph_name: str) -> str:
     return f"""
 CALL gds.leiden.stream(
     '{graph_name}',
-    {{ randomSeed: 19, includeIntermediateCommunities: true }}
+    {{ randomSeed: 19, includeIntermediateCommunities: true,
+       relationshipWeightProperty: 'weight' }}
 )
 YIELD nodeId, communityId, intermediateCommunityIds
 RETURN gds.util.asNode(nodeId).name AS name,
@@ -182,6 +190,24 @@ WITH c
 MATCH (p:Community {id: $parent_id, level: $level - 1})
 MERGE (p)-[:PARENT_OF]->(c)
 """
+
+
+def _projection_stats(project_rows: list[dict]) -> dict[str, int]:
+    """Extract ``{nodes, rels}`` from the ``gds.graph.project`` result row
+    (aliased ``AS g``).  Returns zeros when the projection produced no
+    row — lets callers distinguish an EMPTY/disconnected entity graph
+    (0 nodes → Leiden finds nothing) from a GDS ERROR (raised, caught
+    separately) from an all-singletons graph (nodes > 0 but 0 communities
+    survive ``min_size``)."""
+    if not project_rows:
+        return {"nodes": 0, "rels": 0}
+    g = project_rows[0].get("g") if isinstance(project_rows[0], dict) else None
+    if not isinstance(g, dict):
+        return {"nodes": 0, "rels": 0}
+    return {
+        "nodes": int(g.get("nodeCount") or 0),
+        "rels": int(g.get("relationshipCount") or 0),
+    }
 
 
 def _run_query(store: Any, cypher: str, params: dict | None = None) -> list[dict]:
@@ -364,19 +390,30 @@ async def detect_communities(
         # build a fresh one (a leftover projection from a crashed run would
         # otherwise make gds.graph.project fail with "already exists").
         await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
-        await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+        proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+        stats = _projection_stats(proj_rows)
         rows = await asyncio.to_thread(_run_query, store, _leiden_stream_cypher(graph_name))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("communities: GDS Leiden detection failed: {e}", e=exc)
+        # A genuine GDS/Cypher ERROR (vs an empty graph) — surfaced loudly
+        # so "0 communities" is never silently mistaken for an infra fault.
+        logger.error("communities: GDS Leiden detection FAILED: {e}", e=exc)
         # Best-effort cleanup so we don't leak the projection.
         with contextlib.suppress(Exception):
             await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         return []
 
+    if not rows:
+        logger.warning(
+            "communities: Leiden returned 0 rows — projected {n} entities / "
+            "{r} relationships (empty or disconnected __Entity__ graph?)",
+            n=stats["nodes"], r=stats["rels"],
+        )
     communities = _coarsest_from_rows(rows, min_size=min_size, level=level)
     logger.info(
-        "communities: detected {n} communities (>= {m} members) from {r} rows",
+        "communities: detected {n} communities (>= {m} members) from {r} "
+        "rows — projected {pn} entities / {pr} relationships",
         n=len(communities), m=min_size, r=len(rows),
+        pn=stats["nodes"], pr=stats["rels"],
     )
 
     # Persist :Community nodes + member links (idempotent MERGE).
@@ -448,20 +485,31 @@ async def detect_hierarchy(
 
     try:
         await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
-        await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+        proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+        stats = _projection_stats(proj_rows)
         rows = await asyncio.to_thread(_run_query, store, _leiden_stream_cypher(graph_name))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("communities: GDS Leiden hierarchy detection failed: {e}", e=exc)
+        logger.error(
+            "communities: GDS Leiden hierarchy detection FAILED: {e}", e=exc,
+        )
         with contextlib.suppress(Exception):
             await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         return []
 
+    if not rows:
+        logger.warning(
+            "communities: Leiden returned 0 rows — projected {n} entities / "
+            "{r} relationships (empty or disconnected __Entity__ graph?)",
+            n=stats["nodes"], r=stats["rels"],
+        )
     communities = _group_by_levels(rows, min_size=min_size, max_levels=max_levels)
     n_levels = len({c.level for c in communities})
     logger.info(
         "communities: detected {n} communities across {L} level(s) "
-        "(>= {m} members) from {r} rows",
+        "(>= {m} members) from {r} rows — projected {pn} entities / "
+        "{pr} relationships",
         n=len(communities), L=n_levels, m=min_size, r=len(rows),
+        pn=stats["nodes"], pr=stats["rels"],
     )
 
     # Read the PRIOR build's reports BEFORE we prune so a community whose
