@@ -1,0 +1,27 @@
+# Prometheus config for docker-compose.prod.yml.
+#
+# The worker container runs all 7 pools (launcher forks one process per
+# pool), each binding METRICS base port + its pool index → 9090..9096.
+# Scrape them by the compose-internal service DNS name `worker`.  If you
+# split workers via WORKER_GROUPS into multiple services, add a target per
+# service with the ports for the pool indices it hosts (see
+# src/workflow/worker.py for the canonical pool order).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: kb-worker-pools
+    static_configs:
+      - targets:
+          - worker:9090   # main
+          - worker:9091   # llm
+          - worker:9092   # merge
+          - worker:9093   # search
+          - worker:9094   # large
+          - worker:9095   # graph_build
+          - worker:9096   # wiki
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
