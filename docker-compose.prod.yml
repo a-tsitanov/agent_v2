@@ -85,7 +85,7 @@ services:
 
   mcp-tools:
     <<: [*app-build]
-    command: ["python", "-m", "src.mcp.tools_server", "--transport", "sse", "--port", "9002"]
+    command: ["python", "-m", "src.mcp.tools_server", "--transport", "http", "--port", "9002"]
     environment: *app-env
     ports:
       - "${MCP_TOOLS_PORT:-9002}:9002"

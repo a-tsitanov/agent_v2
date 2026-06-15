@@ -28,6 +28,49 @@ _EXPECTED_TOOLS = {
 }
 
 
+def test_parse_args_accepts_http_transport(monkeypatch):
+    from src.mcp._shared import parse_args
+    monkeypatch.setattr("sys.argv", ["prog", "--transport", "http", "--port", "9002"])
+    a = parse_args()
+    assert a["transport"] == "http"
+    assert a["port"] == 9002
+
+
+def test_main_uses_streamable_http_for_non_stdio(monkeypatch):
+    """MCP-2 serves over Streamable HTTP (transport='http'), not SSE."""
+    from src.mcp import tools_server
+
+    calls: dict = {}
+    monkeypatch.setattr(
+        tools_server, "parse_args",
+        lambda: {"transport": "http", "host": "0.0.0.0", "port": 9002},
+    )
+    monkeypatch.setattr(tools_server, "assert_api_key_env_set", lambda: None)
+    monkeypatch.setattr(tools_server, "log_banner", lambda *a, **k: None)
+    monkeypatch.setattr(tools_server.mcp, "run", lambda **kw: calls.update(kw))
+
+    tools_server.main()
+    assert calls["transport"] == "http"
+    assert calls["host"] == "0.0.0.0"
+    assert calls["port"] == 9002
+
+
+def test_main_stdio_still_supported(monkeypatch):
+    from src.mcp import tools_server
+
+    calls: dict = {}
+    monkeypatch.setattr(
+        tools_server, "parse_args",
+        lambda: {"transport": "stdio", "host": "0.0.0.0", "port": 9002},
+    )
+    monkeypatch.setattr(tools_server, "assert_api_key_env_set", lambda: None)
+    monkeypatch.setattr(tools_server, "log_banner", lambda *a, **k: None)
+    monkeypatch.setattr(tools_server.mcp, "run", lambda **kw: calls.update(kw))
+
+    tools_server.main()
+    assert calls == {"transport": "stdio"}
+
+
 @pytest.mark.asyncio
 async def test_tools_server_lists_all_atomic_tools():
     from src.mcp import tools_server

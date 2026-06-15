@@ -26,9 +26,10 @@
 | Server | Tool surface | Транспорт | Идёт через | Кто типично подключается |
 |---|---|---|---|---|
 | **MCP-1** (`src/mcp/search_server.py`) | 1 tool: `kb_search(query)` | stdio + HTTP/SSE | **Temporal `SearchOrchestratorWorkflow`** (plan-execute, local) | OpenWebUI как готовый ассистент; non-LLM-developer clients |
-| **MCP-2** (`src/mcp/tools_server.py`) | atomic retrieval (8): `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` + read-only GDS analysis (Track 7b, 5): `graph_pagerank`, `graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`, `graph_stats` | stdio + HTTP/SSE | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
+| **MCP-2** (`src/mcp/tools_server.py`) | atomic retrieval (8): `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` + read-only GDS analysis (Track 7b, 5): `graph_pagerank`, `graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`, `graph_stats` | stdio + **Streamable HTTP** (`/mcp`) | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
 
-Оба сервера запускаются одной командой; параметр `--transport stdio|sse` переключает режим.
+Запуск одной командой; `--transport` переключает режим: MCP-1 — `stdio|sse`,
+MCP-2 — `stdio|http` (Streamable HTTP, эндпоинт `/mcp`; SSE здесь заменён).
 
 ---
 
@@ -69,14 +70,17 @@
 
 В Cursor: settings.json → `mcp.servers`, та же структура. В Continue: `~/.continue/config.json` под секцией `experimental.mcp`.
 
-### HTTP/SSE (для OpenWebUI и web-клиентов)
+### HTTP (для OpenWebUI и web-клиентов)
 
 ```bash
-uv run python -m src.mcp.search_server --transport sse --host 0.0.0.0 --port 9001
-uv run python -m src.mcp.tools_server  --transport sse --host 0.0.0.0 --port 9002
+# MCP-1 (search) — legacy SSE
+uv run python -m src.mcp.search_server --transport sse  --host 0.0.0.0 --port 9001
+# MCP-2 (tools)  — Streamable HTTP (эндпоинт /mcp)
+uv run python -m src.mcp.tools_server  --transport http --host 0.0.0.0 --port 9002
 ```
 
-OpenWebUI Admin Settings → MCP servers → URL `http://localhost:9001/sse` (и `:9002/sse`).
+OpenWebUI Admin Settings → MCP servers → URL `http://localhost:9001/sse`
+(search, SSE) и `http://localhost:9002/mcp` (tools, Streamable HTTP).
 
 ### Docker (recommended для prod)
 
@@ -187,12 +191,12 @@ LLM-используют `graph_search` (через LLMSynonymRetriever норм
 ```bash
 # Development без auth:
 export KB_MCP_REQUIRE_AUTH=false
-uv run python -m src.mcp.tools_server --transport sse --port 9002
+uv run python -m src.mcp.tools_server --transport http --port 9002
 
 # Production:
 export KB_MCP_REQUIRE_AUTH=true
 export API_KEYS=dev-local-key,prod-key-2
-uv run python -m src.mcp.tools_server --transport sse --port 9002
+uv run python -m src.mcp.tools_server --transport http --port 9002
 ```
 
 ---
@@ -235,10 +239,10 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
 #                  "find_neighbours", "get_chunks_by_doc_id",
 #                  "read_full_document"]
 
-# 4. HTTP/SSE smoke (после ingest какого-нибудь doc'а)
+# 4. HTTP smoke (после ingest какого-нибудь doc'а)
 KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.tools_server \
-  --transport sse --host 127.0.0.1 --port 9002 &
-curl -X POST http://127.0.0.1:9002/sse  # выдаст stream начало
+  --transport http --host 127.0.0.1 --port 9002 &
+curl -X POST http://127.0.0.1:9002/mcp  # Streamable HTTP endpoint
 kill %1
 
 # 5. End-to-end через MCP-1 → Temporal:
