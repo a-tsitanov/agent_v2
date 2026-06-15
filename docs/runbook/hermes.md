@@ -15,7 +15,8 @@ Hermes. Интеграция **аддитивна**: поведение MCP-се
 
 ```bash
 # Атомарные тулы (основная поверхность для интерактивного цикла)
-uv run python -m src.mcp.tools_server  --transport sse --host 0.0.0.0 --port 9002
+# Streamable HTTP (эндпоинт /mcp)
+uv run python -m src.mcp.tools_server  --transport http --host 0.0.0.0 --port 9002
 
 # Оркестрованный поиск: kb_search (local) + kb_global_search +
 # kb_drift_search + kb_auto_search — тяжёлые escape-hatch'и

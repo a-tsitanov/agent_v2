@@ -22,12 +22,16 @@ def _auth_required() -> bool:
 
 def parse_args() -> dict[str, Any]:
     """Tiny argparse — fastmcp's runtime takes `transport`, `host`,
-    `port` via kwargs.  We support `--transport stdio|sse` plus the
-    standard host/port for sse.
+    `port` via kwargs.  We support `--transport stdio|http|sse` plus the
+    standard host/port for the network transports.  `http` is Streamable
+    HTTP (the modern MCP transport; endpoint `/mcp`); `sse` is the legacy
+    Server-Sent-Events transport.
     """
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
+    p.add_argument(
+        "--transport", choices=["stdio", "http", "sse"], default="stdio",
+    )
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=9001)
     args, _ = p.parse_known_args()

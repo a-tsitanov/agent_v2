@@ -25,8 +25,8 @@ Run::
     # Stdio
     uv run python -m src.mcp.tools_server --transport stdio
 
-    # HTTP/SSE — OpenWebUI etc.
-    uv run python -m src.mcp.tools_server --transport sse --port 9002
+    # Streamable HTTP (endpoint /mcp) — OpenWebUI etc.
+    uv run python -m src.mcp.tools_server --transport http --port 9002
 """
 
 from __future__ import annotations
@@ -382,8 +382,10 @@ def main() -> None:
     if args["transport"] == "stdio":
         mcp.run(transport="stdio")
     else:
+        # Streamable HTTP (modern MCP transport; endpoint `/mcp`).  Replaces
+        # the legacy SSE transport for MCP-2.
         mcp.run(
-            transport="sse",
+            transport="http",
             host=args["host"], port=args["port"],
         )
 
