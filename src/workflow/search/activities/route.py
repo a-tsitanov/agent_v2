@@ -78,10 +78,11 @@ def _get_route_llm():
     """Small-tier router LLM (role ``route`` → small per ``_DEFAULT_ROLE_TIERS``).
 
     Indirected through a module-level fn so tests can monkeypatch it
-    without touching the LiteLLM factory."""
-    from src.retrieval.llm import build_llm
+    without touching the LiteLLM factory.  Returns the pooled LLM via
+    ``get_llm_pool().get('route')`` so the global N semaphore counts it."""
+    from src.retrieval.llm_pool import get_llm_pool
 
-    return build_llm("route")
+    return get_llm_pool().get("route")
 
 
 @activity.defn

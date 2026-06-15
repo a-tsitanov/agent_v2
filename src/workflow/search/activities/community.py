@@ -7,8 +7,9 @@ on the query hot path:
     Leiden) and returns the detected communities.
   * ``summarize_community_activity`` — for ONE community, generate a
     STRUCTURED REPORT ``{title, summary, findings:[{statement,
-    importance}]}`` via the SMALL-tier LLM (``build_llm("retrieve")`` →
-    small tier), embed ``title + summary`` and persist the report (JSON),
+    importance}]}`` via the SMALL-tier LLM (``get_llm_pool().get("retrieve")`` →
+    small tier, gated by the global N semaphore), embed ``title + summary``
+    and persist the report (JSON),
     its components, and a native ``report_vec`` on the ``:Community`` node
     (idempotent MERGE).  Built bottom-up: level-0 reports draw on member
     entities/relations; level k>0 reports draw on CHILD reports (cheaper
@@ -180,10 +181,11 @@ def _get_summary_llm() -> Any:
 
     Uses the ``retrieve`` role (small tier per ``_DEFAULT_ROLE_TIERS``) so
     summaries NEVER occupy the large synthesis model.  Indirected for
-    monkeypatching in tests."""
-    from src.retrieval.llm import build_llm
+    monkeypatching in tests.  Returns the pooled LLM via
+    ``get_llm_pool().get('retrieve')`` so the global N semaphore counts it."""
+    from src.retrieval.llm_pool import get_llm_pool
 
-    return build_llm("retrieve")
+    return get_llm_pool().get("retrieve")
 
 
 def _get_embed_model() -> Any:

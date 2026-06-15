@@ -47,12 +47,13 @@ def _build_prompt(query: str, turns: list[ConversationTurnDict]) -> str:
 def _get_contextualize_llm():
     """Small-tier LLM (role ``route`` → small per ``_DEFAULT_ROLE_TIERS``).
 
-    Reuses the SAME accessor the router uses (``build_llm("route")``).
+    Reuses the SAME role the router uses (``get_llm_pool().get('route')``).
     Indirected through a module-level fn so tests can monkeypatch it
-    without touching the LiteLLM factory."""
-    from src.retrieval.llm import build_llm
+    without touching the LiteLLM factory.  Returns the pooled LLM so the
+    global N semaphore counts this call."""
+    from src.retrieval.llm_pool import get_llm_pool
 
-    return build_llm("route")
+    return get_llm_pool().get("route")
 
 
 @activity.defn

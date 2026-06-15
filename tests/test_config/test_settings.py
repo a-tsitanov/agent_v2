@@ -161,11 +161,35 @@ def test_community_build_selection_defaults():
 def test_llm_pool_settings_defaults():
     from src.config import LLMPoolSettings
     s = LLMPoolSettings()
-    assert s.tier_small_total == 25
-    assert s.tier_large_total == 8
-    # f49a83c anti-regression sizing rule must hold by default:
-    assert s.lane_caps["extraction"] <= s.tier_small_total - s.judge_floor
-    assert s.lane_caps["judge"] >= 1
+    # K+N model: single semaphore, default N=8
+    assert s.n == 8
+
+
+def test_llm_pool_settings_single_n(monkeypatch):
+    monkeypatch.setenv("LLM_POOL_N", "12")
+    from src.config import LLMPoolSettings
+    s = LLMPoolSettings()
+    assert s.n == 12
+    assert not hasattr(s, "lane_caps")
+    assert not hasattr(s, "tier_small_total")
+    assert not hasattr(s, "judge_floor")
+    assert not hasattr(s, "global_n")
+
+
+def test_llm_pool_n_default_and_floor():
+    from src.config import LLMPoolSettings
+    assert LLMPoolSettings().n == 8
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        LLMPoolSettings(n=0)
+
+
+def test_admission_always_on_no_enabled_flag():
+    from src.config import IngestAdmissionSettings
+    s = IngestAdmissionSettings()
+    assert s.max_inflight == 1
+    assert not hasattr(s, "enabled")
 
 
 def test_wiki_settings_defaults():

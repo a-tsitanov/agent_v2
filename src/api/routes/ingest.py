@@ -1,9 +1,11 @@
 """Document upload + ingestion-status endpoints.
 
 Flow: upload file to MinIO (synchronous put), insert a Postgres
-``documents`` row, start the Temporal ``DocumentIngestWorkflow`` and
-return ``202 Accepted`` with the job id.  The Temporal worker
-(``src.workflow.worker``) runs the activities asynchronously.
+``documents`` row, then hand the document to the
+``IngestSchedulerWorkflow`` admission singleton (K = max in-flight
+documents) which starts the actual processing workflow once a slot is
+available.  Returns ``202 Accepted`` with the job id.  The Temporal
+worker (``src.workflow.worker``) runs the activities asynchronously.
 """
 
 from __future__ import annotations
@@ -17,9 +19,8 @@ from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel
-from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
-
 from urllib3.exceptions import MaxRetryError
 
 from src.api.auth import require_api_key
@@ -28,7 +29,6 @@ from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import IngestParams, SchedulerParams
-from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
 
 router = APIRouter(tags=["ingestion"])
@@ -108,17 +108,6 @@ async def upload_document(
         doc_id, s3_uri, department=department, doc_type=doc_type,
     )
 
-    # Kick off the Temporal workflow directly.  The Temporal worker
-    # (``python -m src.workflow.worker``) polls the task queue and
-    # executes ``DocumentIngestWorkflow`` end-to-end (fetch → parse →
-    # vector → graph → finalize).  The workflow id is derived from
-    # ``doc_id`` so we get idempotent de-dup at the Temporal level.
-    #
-    # ``ALLOW_DUPLICATE_FAILED_ONLY`` blocks a fresh upload of the same
-    # doc_id from re-running a workflow that already succeeded (we'd
-    # silently re-index, paying the LLM bill again).  Failed workflows
-    # CAN be restarted under the same id — that's the explicit retry
-    # path: re-upload to retry an ingest that died terminally.
     # Analytics labels: explicit header wins, else AnalyticsSettings default.
     # Models are auto-captured from runtime config so model swaps
     # (LITELLM_*_MODEL env changes) are reflected without operator effort.
@@ -133,14 +122,6 @@ async def upload_document(
     judge_model = cfg.model_for("judge")
     search_model = cfg.model_for("search")
     env_name = settings.analytics.env_name
-    search_attrs = {
-        "VersionTag":      [version_tag],
-        "Model":           [model],
-        "ExtractionModel": [extraction_model],
-        "JudgeModel":      [judge_model],
-        "SearchModel":     [search_model],
-        "Env":             [env_name],
-    }
 
     client = await get_temporal_client()
     params = IngestParams(
@@ -160,31 +141,19 @@ async def upload_document(
         classifier_enabled=settings.classifier.enabled,
         force=force,
     )
-    admission = settings.ingest_admission
+    # Admission is always on: hand the document to the singleton scheduler
+    # (signal-with-start; USE_EXISTING reuses the running one) so at most K
+    # (max_inflight) documents run at once, each to completion, FIFO.
     try:
-        if admission.enabled:
-            # Admission control: hand the document to the singleton
-            # scheduler (signal-with-start; USE_EXISTING reuses the running
-            # one) so at most max_inflight documents run at once, each to
-            # completion, FIFO.
-            await client.start_workflow(
-                IngestSchedulerWorkflow.run,
-                SchedulerParams(max_inflight=admission.max_inflight),
-                id="ingest-scheduler",
-                task_queue=settings.temporal.task_queue,
-                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-                start_signal="submit",
-                start_signal_args=[params],
-            )
-        else:
-            await client.start_workflow(
-                DocumentIngestWorkflow.run,
-                params,
-                id=f"ingest-{doc_id}",
-                task_queue=settings.temporal.task_queue,
-                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
-                search_attributes=search_attrs,
-            )
+        await client.start_workflow(
+            IngestSchedulerWorkflow.run,
+            SchedulerParams(max_inflight=settings.ingest_admission.max_inflight),
+            id="ingest-scheduler",
+            task_queue=settings.temporal.task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            start_signal="submit",
+            start_signal_args=[params],
+        )
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is
         # already running or already completed successfully.  Don't

@@ -92,7 +92,6 @@ def _global_params(query: str, *, drift_mode: bool = False) -> GlobalSearchParam
         query=query,
         level=0,
         max_communities=settings.agent.global_max_communities,
-        map_parallelism=settings.agent.global_map_parallelism,
         drift_mode=drift_mode,
     )
 

@@ -15,7 +15,7 @@ surface: "Entry surfaces (same params + history)\nMCP-1: kb_search / _global / _
 
 local: "SearchOrchestratorWorkflow  (mode=local)\ncontextualize → plan → parallel sub-Q retrieve\n(vector · graph_search · find_entity · graph_walk DUAL-SEED)\n→ coverage → rerank → synthesize" { class: wf }
 
-global: "GlobalSearchWorkflow  (mode=global)\nGraphRAG map-reduce over :Community REPORTS\nSELECT (lexical | semantic kNN | hierarchy descent)\n→ MAP (parallel) → REDUCE → synth\nparams: max_communities, map_parallelism" { class: wf }
+global: "GlobalSearchWorkflow  (mode=global)\nGraphRAG map-reduce over :Community REPORTS\nSELECT (lexical | semantic kNN | hierarchy descent)\n→ MAP (parallel, bounded by LLM_POOL_N) → REDUCE → synth\nparams: max_communities" { class: wf }
 
 drift: "DriftSearchWorkflow  (mode=drift)" {
   class: wf

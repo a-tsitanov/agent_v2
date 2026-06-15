@@ -1,9 +1,9 @@
 """``IngestSchedulerWorkflow`` — long-lived document admission control
 (Track 5, variant A).
 
-Opt-in (``INGEST_ADMISSION_ENABLED``).  /ingest signal-with-starts this
-SINGLETON workflow (fixed id ``ingest-scheduler``) instead of starting
-``DocumentIngestWorkflow`` directly.  The scheduler admits at most
+Always on.  /ingest signal-with-starts this SINGLETON workflow (fixed id
+``ingest-scheduler``); it owns the launch of every ``DocumentIngestWorkflow``
+child.  The scheduler admits at most
 ``max_inflight`` documents at once and runs each to completion before
 admitting the next (FIFO) — so a document's tail (merge) is never starved
 behind dozens of newer documents' extract bursts (see

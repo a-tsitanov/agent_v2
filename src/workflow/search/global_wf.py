@@ -6,8 +6,8 @@ retrieving individual chunks:
 
   1. ``map_communities`` — read the relevant ``:Community.summary`` texts
      (small-tier, ranked + capped by ``max_communities``).
-  2. MAP — fan out one ``map_community_partial`` per community (SMALL tier,
-     bounded by ``map_parallelism``); off-topic communities self-drop.
+  2. MAP — fan out one ``map_community_partial`` per community (SMALL tier);
+     off-topic communities self-drop.
   3. REDUCE — wrap the surviving partials as synthesis context and run the
      existing ``synthesize_answer`` ONCE, pinned to ``large_task_queue``
      with ``use_synthesis_llm=True`` (the R5 large-tier pattern).
@@ -209,21 +209,19 @@ class GlobalSearchWorkflow:
         self._state["n_communities"] = len(comm.communities)
         log.info("global_search  %d communities to map", len(comm.communities))
 
-        # ── 2. MAP: per-community partial (small tier, bounded fan-out) ─
+        # ── 2. MAP: per-community partial (small tier) — N bounds the LLM ─
         self._state["phase"] = "map"
         specs = build_map_specs(comm.communities, query=params.query)
-        sem = asyncio.Semaphore(max(1, params.map_parallelism))
 
         async def _map_one(spec: MapPartialParams) -> MapPartialResult:
-            async with sem:
-                return await workflow.execute_activity(
-                    "map_community_partial",
-                    spec,
-                    result_type=MapPartialResult,
-                    start_to_close_timeout=LLM_START_TO_CLOSE,
-                    schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
-                    retry_policy=FAST_RETRY,
-                )
+            return await workflow.execute_activity(
+                "map_community_partial",
+                spec,
+                result_type=MapPartialResult,
+                start_to_close_timeout=LLM_START_TO_CLOSE,
+                schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+                retry_policy=FAST_RETRY,
+            )
 
         partials: list[MapPartialResult] = await asyncio.gather(
             *[_map_one(s) for s in specs],
