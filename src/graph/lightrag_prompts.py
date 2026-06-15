@@ -89,8 +89,10 @@ You are a Knowledge Graph Specialist responsible for extracting entities and rel
         *   `target_entity`: The name of the target entity (same rule).
         *   `relationship_keywords`: One or more high-level keywords summarizing the overarching nature, concepts, or themes of the relationship. Multiple keywords within this field must be separated by a comma `,`. **DO NOT use `{tuple_delimiter}` for separating multiple keywords within this field.**
         *   `relationship_description`: A concise explanation of the nature of the relationship between the source and target entities, providing a clear rationale for their connection.
-    *   **Output Format - Relationships:** Output a total of 5 fields for each relationship, delimited by `{tuple_delimiter}`, on a single line. The first field *must* be the literal string `relation`.
-        *   Format: `relation{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description`
+        *   `relationship_polarity`: The *logical* status of the relationship — NOT sentiment. Use exactly one of: `affirmed` (the text asserts the relationship holds), `negated` (the text states it does NOT hold or no longer holds, e.g. "X is not the owner", "Y left the company"), or `uncertain` (the text hedges, e.g. "allegedly", "reportedly", "is suspected to"). Default to `affirmed` when the relationship is plainly stated.
+        *   `temporal_validity`: The period during which the relationship holds, as `from..to` using ISO dates (`YYYY` or `YYYY-MM-DD`). Use an open bound when only one side is known: `2015..` (since 2015), `..2020` (until 2020). For a single point in time use just the date (`2024-03-15`). Leave **empty** (output nothing between the delimiters) when the text gives no time information.
+    *   **Output Format - Relationships:** Output a total of 7 fields for each relationship, delimited by `{tuple_delimiter}`, on a single line. The first field *must* be the literal string `relation`.
+        *   Format: `relation{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description{tuple_delimiter}relationship_polarity{tuple_delimiter}temporal_validity`
 
 3.  **Delimiter Usage Protocol:**
     *   The `{tuple_delimiter}` is a complete, atomic marker and **must not be filled with content**. It serves strictly as a field separator.
@@ -158,7 +160,7 @@ Based on the last extraction task, identify and extract any **missed or incorrec
     *   If an entity or relationship was **missed** in the last task, extract and output it now according to the system format.
     *   If an entity or relationship was **truncated, had missing fields, or was otherwise incorrectly formatted**, re-output the *corrected and complete* version.
 3.  **Output Format - Entities:** 4 fields, delimited by `{tuple_delimiter}`, one entity per line. First field must be `entity`.
-4.  **Output Format - Relationships:** 5 fields, delimited by `{tuple_delimiter}`, one relation per line. First field must be `relation`.
+4.  **Output Format - Relationships:** 7 fields, delimited by `{tuple_delimiter}`, one relation per line. First field must be `relation`. Trailing fields are `relationship_polarity` (`affirmed`/`negated`/`uncertain`) and `temporal_validity` (`from..to` ISO dates, empty if unknown).
 5.  **Output Content Only:** Output *only* the extracted list. No remarks before or after.
 6.  **Completion Signal:** Output `{completion_delimiter}` as the final line.
 7.  **Output Language:** {language}. Proper nouns kept in original language.
@@ -222,9 +224,9 @@ entity{tuple_delimiter}Taylor{tuple_delimiter}Person{tuple_delimiter}Taylor is p
 entity{tuple_delimiter}Jordan{tuple_delimiter}Person{tuple_delimiter}Jordan shares a commitment to discovery and has a significant interaction with Taylor regarding a device.
 entity{tuple_delimiter}Cruz{tuple_delimiter}Person{tuple_delimiter}Cruz is associated with a vision of control and order, influencing the dynamics among other characters.
 entity{tuple_delimiter}The Device{tuple_delimiter}Product{tuple_delimiter}The Device is central to the story, with potential game-changing implications, and is revered by Taylor.
-relation{tuple_delimiter}Alex{tuple_delimiter}Taylor{tuple_delimiter}power dynamics, observation{tuple_delimiter}Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.
-relation{tuple_delimiter}Jordan{tuple_delimiter}Cruz{tuple_delimiter}ideological conflict, rebellion{tuple_delimiter}Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.
-relation{tuple_delimiter}Taylor{tuple_delimiter}The Device{tuple_delimiter}reverence, technological significance{tuple_delimiter}Taylor shows reverence towards the device, indicating its importance and potential impact.
+relation{tuple_delimiter}Alex{tuple_delimiter}Taylor{tuple_delimiter}power dynamics, observation{tuple_delimiter}Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.{tuple_delimiter}affirmed{tuple_delimiter}
+relation{tuple_delimiter}Jordan{tuple_delimiter}Cruz{tuple_delimiter}ideological conflict, rebellion{tuple_delimiter}Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.{tuple_delimiter}affirmed{tuple_delimiter}
+relation{tuple_delimiter}Taylor{tuple_delimiter}The Device{tuple_delimiter}reverence, technological significance{tuple_delimiter}Taylor shows reverence towards the device, indicating its importance and potential impact.{tuple_delimiter}affirmed{tuple_delimiter}
 {completion_delimiter}
 """
 
@@ -244,8 +246,8 @@ entity{tuple_delimiter}Global Tech Index{tuple_delimiter}Concept{tuple_delimiter
 entity{tuple_delimiter}Nexon Technologies{tuple_delimiter}Organization{tuple_delimiter}Nexon Technologies is a tech company that saw its stock decline by 7.8% after disappointing earnings.
 entity{tuple_delimiter}Market Selloff{tuple_delimiter}EventOrAction{tuple_delimiter}Market selloff refers to the significant decline in stock values due to investor concerns over interest rates and regulations.
 entity{tuple_delimiter}3.4% Decline{tuple_delimiter}Metric{tuple_delimiter}The Global Tech Index experienced a 3.4% decline in midday trading.
-relation{tuple_delimiter}Global Tech Index{tuple_delimiter}Market Selloff{tuple_delimiter}market performance, investor sentiment{tuple_delimiter}The decline in the Global Tech Index is part of the broader market selloff driven by investor concerns.
-relation{tuple_delimiter}Nexon Technologies{tuple_delimiter}Global Tech Index{tuple_delimiter}company impact, index movement{tuple_delimiter}Nexon Technologies' stock decline contributed to the overall drop in the Global Tech Index.
+relation{tuple_delimiter}Global Tech Index{tuple_delimiter}Market Selloff{tuple_delimiter}market performance, investor sentiment{tuple_delimiter}The decline in the Global Tech Index is part of the broader market selloff driven by investor concerns.{tuple_delimiter}affirmed{tuple_delimiter}
+relation{tuple_delimiter}Nexon Technologies{tuple_delimiter}Global Tech Index{tuple_delimiter}company impact, index movement{tuple_delimiter}Nexon Technologies' stock decline contributed to the overall drop in the Global Tech Index.{tuple_delimiter}affirmed{tuple_delimiter}
 {completion_delimiter}
 """
 
@@ -264,9 +266,9 @@ entity{tuple_delimiter}ООО «Северные технологии»{tuple_de
 entity{tuple_delimiter}АО «Промсервис»{tuple_delimiter}Organization{tuple_delimiter}Заказчик по договору № ДП-2024/178-К.
 entity{tuple_delimiter}Иванов Иван Петрович{tuple_delimiter}Person{tuple_delimiter}Руководитель отдела продаж в ООО «Северные технологии», контактное лицо по договору.
 entity{tuple_delimiter}7707083893{tuple_delimiter}INN{tuple_delimiter}ИНН ООО «Северные технологии».
-relation{tuple_delimiter}ООО «Северные технологии»{tuple_delimiter}Договор № ДП-2024/178-К{tuple_delimiter}contractual party, supply{tuple_delimiter}ООО «Северные технологии» заключило договор поставки № ДП-2024/178-К.
-relation{tuple_delimiter}АО «Промсервис»{tuple_delimiter}Договор № ДП-2024/178-К{tuple_delimiter}contractual party, supply{tuple_delimiter}АО «Промсервис» — вторая сторона договора № ДП-2024/178-К.
-relation{tuple_delimiter}Иванов Иван Петрович{tuple_delimiter}ООО «Северные технологии»{tuple_delimiter}employment, contact{tuple_delimiter}Иванов работает в ООО «Северные технологии» руководителем отдела продаж.
+relation{tuple_delimiter}ООО «Северные технологии»{tuple_delimiter}Договор № ДП-2024/178-К{tuple_delimiter}contractual party, supply{tuple_delimiter}ООО «Северные технологии» заключило договор поставки № ДП-2024/178-К.{tuple_delimiter}affirmed{tuple_delimiter}2024-03-15..
+relation{tuple_delimiter}АО «Промсервис»{tuple_delimiter}Договор № ДП-2024/178-К{tuple_delimiter}contractual party, supply{tuple_delimiter}АО «Промсервис» — вторая сторона договора № ДП-2024/178-К.{tuple_delimiter}affirmed{tuple_delimiter}2024-03-15..
+relation{tuple_delimiter}Иванов Иван Петрович{tuple_delimiter}ООО «Северные технологии»{tuple_delimiter}employment, contact{tuple_delimiter}Иванов работает в ООО «Северные технологии» руководителем отдела продаж.{tuple_delimiter}affirmed{tuple_delimiter}
 {completion_delimiter}
 """
 
@@ -285,9 +287,9 @@ entity{tuple_delimiter}Agent{tuple_delimiter}Person{tuple_delimiter}Support agen
 entity{tuple_delimiter}Order #4521{tuple_delimiter}Document{tuple_delimiter}Order whose delivery is disputed despite the tracking marking it delivered.
 entity{tuple_delimiter}Refund for Order #4521{tuple_delimiter}Resolution{tuple_delimiter}Refund issued by the agent as the resolution to the missing-delivery complaint.
 entity{tuple_delimiter}Missing Delivery{tuple_delimiter}Issue{tuple_delimiter}Customer's complaint that order #4521 was never delivered though tracking shows delivered.
-relation{tuple_delimiter}Customer{tuple_delimiter}Missing Delivery{tuple_delimiter}complaint, support{tuple_delimiter}The customer reported the missing-delivery issue to support.
-relation{tuple_delimiter}Missing Delivery{tuple_delimiter}Refund for Order #4521{tuple_delimiter}resolution, refund{tuple_delimiter}Missing delivery resolved by issuing a refund.
-relation{tuple_delimiter}Agent{tuple_delimiter}Refund for Order #4521{tuple_delimiter}action, resolution{tuple_delimiter}The agent issued the refund.
+relation{tuple_delimiter}Customer{tuple_delimiter}Missing Delivery{tuple_delimiter}complaint, support{tuple_delimiter}The customer reported the missing-delivery issue to support.{tuple_delimiter}affirmed{tuple_delimiter}
+relation{tuple_delimiter}Missing Delivery{tuple_delimiter}Refund for Order #4521{tuple_delimiter}resolution, refund{tuple_delimiter}Missing delivery resolved by issuing a refund.{tuple_delimiter}affirmed{tuple_delimiter}
+relation{tuple_delimiter}Agent{tuple_delimiter}Refund for Order #4521{tuple_delimiter}action, resolution{tuple_delimiter}The agent issued the refund.{tuple_delimiter}affirmed{tuple_delimiter}
 {completion_delimiter}
 """
 
@@ -306,8 +308,8 @@ entity{tuple_delimiter}Conversion Growth{tuple_delimiter}Metric{tuple_delimiter}
 entity{tuple_delimiter}Onboarding Redesign{tuple_delimiter}EventOrAction{tuple_delimiter}Product change launched on 2024-02-15 that drove the Q1 2024 conversion growth.
 entity{tuple_delimiter}Welcome Flow{tuple_delimiter}Product{tuple_delimiter}New-user onboarding flow whose completion time improved 1.8× quarter-on-quarter.
 entity{tuple_delimiter}New User Cohort{tuple_delimiter}Concept{tuple_delimiter}The cohort of new users measured against the welcome-flow completion KPI.
-relation{tuple_delimiter}Onboarding Redesign{tuple_delimiter}Conversion Growth{tuple_delimiter}causation, product change{tuple_delimiter}The onboarding redesign caused the 12% conversion growth in Q1 2024.
-relation{tuple_delimiter}New User Cohort{tuple_delimiter}Welcome Flow{tuple_delimiter}user journey, KPI{tuple_delimiter}The cohort of new users completed the welcome flow 1.8× faster than the previous quarter.
+relation{tuple_delimiter}Onboarding Redesign{tuple_delimiter}Conversion Growth{tuple_delimiter}causation, product change{tuple_delimiter}The onboarding redesign caused the 12% conversion growth in Q1 2024.{tuple_delimiter}affirmed{tuple_delimiter}2024-01-01..2024-03-31
+relation{tuple_delimiter}New User Cohort{tuple_delimiter}Welcome Flow{tuple_delimiter}user journey, KPI{tuple_delimiter}The cohort of new users completed the welcome flow 1.8× faster than the previous quarter.{tuple_delimiter}affirmed{tuple_delimiter}2024-01-01..2024-03-31
 {completion_delimiter}
 """
 

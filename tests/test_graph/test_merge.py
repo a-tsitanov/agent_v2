@@ -262,6 +262,66 @@ async def test_empty_descriptions() -> None:
 # ── source_chunks tracking ──────────────────────────────────────────
 
 
+# ── #7: relation polarity + temporal validity aggregation ───────────
+
+
+def _rel_pt(src: EntityNode, tgt: EntityNode, desc: str, *,
+            polarity: str = "affirmed",
+            valid_from: str | None = None,
+            valid_to: str | None = None,
+            keywords: str = "rel") -> Relation:
+    return Relation(
+        label="REL", source_id=src.id, target_id=tgt.id,
+        properties={
+            "description": desc, "keywords": keywords, "weight": 1.0,
+            "polarity": polarity, "valid_from": valid_from, "valid_to": valid_to,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_relation_polarity_majority_vote() -> None:
+    """polarity aggregates by majority vote across occurrences."""
+    a1 = _ent("A", "Concept", "a."); b1 = _ent("B", "Concept", "b.")
+    a2 = _ent("A", "Concept", "a2."); b2 = _ent("B", "Concept", "b2.")
+    a3 = _ent("A", "Concept", "a3."); b3 = _ent("B", "Concept", "b3.")
+    chunks = [
+        _chunk("c1", [a1, b1], [_rel_pt(a1, b1, "d1.", polarity="negated")]),
+        _chunk("c2", [a2, b2], [_rel_pt(a2, b2, "d2.", polarity="affirmed")]),
+        _chunk("c3", [a3, b3], [_rel_pt(a3, b3, "d3.", polarity="negated")]),
+    ]
+    _, rels = await merge_kg_extraction(chunks, _StubLLM())
+    assert rels[0].properties["polarity"] == "negated"
+
+
+@pytest.mark.asyncio
+async def test_relation_temporal_window_widens() -> None:
+    """valid_from = earliest observed start, valid_to = latest observed end."""
+    a1 = _ent("A", "Concept", "a."); b1 = _ent("B", "Concept", "b.")
+    a2 = _ent("A", "Concept", "a2."); b2 = _ent("B", "Concept", "b2.")
+    chunks = [
+        _chunk("c1", [a1, b1],
+               [_rel_pt(a1, b1, "d1.", valid_from="2016", valid_to="2019")]),
+        _chunk("c2", [a2, b2],
+               [_rel_pt(a2, b2, "d2.", valid_from="2015", valid_to="2020")]),
+    ]
+    _, rels = await merge_kg_extraction(chunks, _StubLLM())
+    assert rels[0].properties["valid_from"] == "2015"
+    assert rels[0].properties["valid_to"] == "2020"
+
+
+@pytest.mark.asyncio
+async def test_relation_polarity_temporal_default_when_absent() -> None:
+    """Legacy relations without the fields → polarity affirmed, window None."""
+    a = _ent("A", "Concept", "a."); b = _ent("B", "Concept", "b.")
+    r = _rel(a, b, "REL", "A relates B.", keywords="rel")  # no polarity/window
+    _, rels = await merge_kg_extraction([_chunk("c1", [a, b], [r])], _StubLLM())
+    props = rels[0].properties
+    assert props["polarity"] == "affirmed"
+    assert props["valid_from"] is None
+    assert props["valid_to"] is None
+
+
 @pytest.mark.asyncio
 async def test_source_chunks_deduped() -> None:
     e1 = _ent("Alpha", "Concept", "x.")

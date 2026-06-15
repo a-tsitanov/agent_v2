@@ -10,7 +10,11 @@ from src.graph.lightrag_parse import (
     parse_lightrag_output,
     parsed_relations_to_relations,
 )
-from src.graph.lightrag_prompts import COMPLETE_DELIM, TUPLE_DELIM
+from src.graph.lightrag_prompts import (
+    COMPLETE_DELIM,
+    ENTITY_EXTRACTION_SYSTEM,
+    TUPLE_DELIM,
+)
 
 
 def _build(entities: list[tuple[str, str, str]],
@@ -214,3 +218,102 @@ def test_ensure_orphan_entities_for_missing_endpoint() -> None:
     rels = parsed_relations_to_relations(res.relations, id_by_name)
     assert len(rels) == 1
     assert rels[0].target_id == orphans[0].id
+
+
+# ── #7: relation polarity + temporal validity ───────────────────────
+
+
+def _rel_line(*fields: str) -> str:
+    return TUPLE_DELIM.join(["relation", *fields])
+
+
+def test_parse_relation_polarity_and_temporal_seven_fields() -> None:
+    """7-field relation carries polarity + temporal validity window."""
+    raw = "\n".join([
+        _rel_line("Ivan", "Plant", "employment",
+                  "Ivan was the director of the plant.",
+                  "affirmed", "2015..2020"),
+        COMPLETE_DELIM,
+    ])
+    res = parse_lightrag_output(raw)
+    assert len(res.relations) == 1
+    rel = res.relations[0]
+    assert rel.polarity == "affirmed"
+    assert rel.valid_from == "2015"
+    assert rel.valid_to == "2020"
+
+
+def test_parse_relation_legacy_five_fields_defaults() -> None:
+    """Legacy 5-field relation → polarity defaults affirmed, no window."""
+    raw = "\n".join([
+        _rel_line("A", "B", "causation", "A causes B."),
+        COMPLETE_DELIM,
+    ])
+    res = parse_lightrag_output(raw)
+    rel = res.relations[0]
+    assert rel.polarity == "affirmed"
+    assert rel.valid_from is None
+    assert rel.valid_to is None
+
+
+def test_parse_relation_polarity_normalised() -> None:
+    def polarity_of(raw_pol: str) -> str:
+        raw = "\n".join([
+            _rel_line("A", "B", "k", "desc.", raw_pol, ""),
+            COMPLETE_DELIM,
+        ])
+        return parse_lightrag_output(raw).relations[0].polarity
+
+    assert polarity_of("negated") == "negated"
+    assert polarity_of("NEGATION") == "negated"
+    assert polarity_of("uncertain") == "uncertain"
+    assert polarity_of("unsure") == "uncertain"
+    assert polarity_of("affirmed") == "affirmed"
+    assert polarity_of("garbage") == "affirmed"
+
+
+def test_parse_relation_temporal_open_ended() -> None:
+    def window_of(temporal: str) -> tuple[str | None, str | None]:
+        raw = "\n".join([
+            _rel_line("A", "B", "k", "desc.", "affirmed", temporal),
+            COMPLETE_DELIM,
+        ])
+        rel = parse_lightrag_output(raw).relations[0]
+        return rel.valid_from, rel.valid_to
+
+    assert window_of("2015..2020") == ("2015", "2020")
+    assert window_of("..2020") == (None, "2020")
+    assert window_of("2015..") == ("2015", None)
+    assert window_of("") == (None, None)
+    assert window_of("2024-03-15") == ("2024-03-15", None)  # bare → from only
+
+
+def test_extraction_prompt_requests_polarity_and_temporal() -> None:
+    """The parser reads polarity/temporal fields — the system prompt MUST
+    instruct the LLM to emit them, or extraction silently never populates
+    them (and we ship a parser expecting fields that never arrive)."""
+    sys = ENTITY_EXTRACTION_SYSTEM.lower()
+    assert "polarity" in sys
+    assert "temporal" in sys
+    assert "7 fields" in sys
+    # the format line must list both new fields after the description
+    assert "relationship_polarity" in ENTITY_EXTRACTION_SYSTEM
+    assert "temporal_validity" in ENTITY_EXTRACTION_SYSTEM
+
+
+def test_parsed_relations_to_relations_carries_polarity_temporal() -> None:
+    raw = "\n".join([
+        TUPLE_DELIM.join(["entity", "A", "Concept", "First."]),
+        TUPLE_DELIM.join(["entity", "B", "Concept", "Second."]),
+        _rel_line("A", "B", "ownership", "A no longer owns B.",
+                  "negated", "..2020"),
+        COMPLETE_DELIM,
+    ])
+    res = parse_lightrag_output(raw)
+    id_by_name = {_normalize_entity_name(e.name): e.id for e in res.entities}
+    rels = parsed_relations_to_relations(res.relations, id_by_name)
+    assert len(rels) == 1
+    props = rels[0].properties
+    assert props["polarity"] == "negated"
+    assert props["valid_from"] is None
+    assert props["valid_to"] == "2020"

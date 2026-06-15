@@ -74,6 +74,43 @@ def _first_keyword(keywords_field: str) -> str:
     return ""
 
 
+def _normalize_polarity(raw: str) -> str:
+    """Map the LLM's free-text polarity to one of
+    `affirmed` / `negated` / `uncertain`.
+
+    Logical polarity (NOT sentiment): does the text *assert* the
+    relation, *deny* it, or hedge?  Anything unrecognised defaults to
+    `affirmed` so legacy / malformed extractions read as plain facts.
+    """
+    val = (raw or "").strip().lower()
+    if val.startswith("neg"):
+        return "negated"
+    if val.startswith(("uncert", "unsure", "unknown", "doubt", "maybe")):
+        return "uncertain"
+    return "affirmed"
+
+
+def _parse_temporal(raw: str) -> tuple[str | None, str | None]:
+    """Parse a `from..to` validity window into `(valid_from, valid_to)`.
+
+    * `"2015..2020"` → `("2015", "2020")`
+    * `"..2020"` → `(None, "2020")` (open start)
+    * `"2015.."` → `("2015", None)` (open end)
+    * bare `"2024-03-15"` (no `..`) → `("2024-03-15", None)` (point/start)
+    * empty / `none` / `null` → `(None, None)`
+
+    Dates are kept as opaque strings (ISO `YYYY`/`YYYY-MM-DD` recommended)
+    so they sort lexicographically for the merge window-widening.
+    """
+    val = (raw or "").strip()
+    if not val or val.lower() in {"none", "null", "n/a", "-"}:
+        return None, None
+    if ".." in val:
+        left, _, right = val.partition("..")
+        return (left.strip() or None, right.strip() or None)
+    return (val, None)
+
+
 # ── Parsing ─────────────────────────────────────────────────────────
 
 
@@ -86,6 +123,9 @@ class ParsedRelation:
     keywords: str           # raw "kw1, kw2"
     description: str
     weight: float = 1.0
+    polarity: str = "affirmed"        # affirmed | negated | uncertain
+    valid_from: str | None = None     # window start (opaque ISO string)
+    valid_to: str | None = None       # window end
 
 
 @dataclass
@@ -189,7 +229,12 @@ def _parse_entity(
 
 def _parse_relation(fields: list[str]) -> ParsedRelation | None:
     """Return a `ParsedRelation` for a valid (src, tgt, keywords,
-    description) tuple; `None` for anything malformed."""
+    description[, polarity, temporal]) tuple; `None` for anything
+    malformed.
+
+    Fields 5 (polarity) and 6 (temporal validity `from..to`) are
+    optional — legacy 5-field relations parse with defaults
+    (affirmed, no window)."""
     if len(fields) < 4:
         return None
     src, tgt, keywords, description = fields[0], fields[1], fields[2], fields[3]
@@ -199,11 +244,18 @@ def _parse_relation(fields: list[str]) -> ParsedRelation | None:
         return None
     if not description.strip():
         return None
+    polarity = _normalize_polarity(fields[4]) if len(fields) > 4 else "affirmed"
+    valid_from, valid_to = (
+        _parse_temporal(fields[5]) if len(fields) > 5 else (None, None)
+    )
     return ParsedRelation(
         source_name=src,
         target_name=tgt,
         keywords=keywords.strip(),
         description=description.strip(),
+        polarity=polarity,
+        valid_from=valid_from,
+        valid_to=valid_to,
     )
 
 
@@ -231,6 +283,9 @@ def parsed_relations_to_relations(
             "description": rel.description,
             "keywords": rel.keywords,
             "weight": rel.weight,
+            "polarity": rel.polarity,
+            "valid_from": rel.valid_from,
+            "valid_to": rel.valid_to,
         }
         if source_chunk_id:
             properties["source_chunk_id"] = source_chunk_id
