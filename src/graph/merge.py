@@ -76,7 +76,6 @@ class _RelationAgg:
     display_tgt: str
     descriptions: list[str] = field(default_factory=list)
     keywords: set[str] = field(default_factory=set)
-    weight: float = 1.0
     source_chunks: list[str] = field(default_factory=list)
 
 
@@ -238,8 +237,6 @@ async def merge_kg_extraction(
             agg.keywords.update(_split_keywords(
                 (rel.properties or {}).get("keywords", "")
             ))
-            weight = float((rel.properties or {}).get("weight", 1.0) or 1.0)
-            agg.weight = max(agg.weight, weight)
             agg.source_chunks.append(chunk_id)
 
     # ── 3. Materialise merged EntityNode list ────────────────────────
@@ -290,16 +287,25 @@ async def merge_kg_extraction(
         )
         primary_keyword = sorted(agg.keywords)[0] if agg.keywords else ""
         label = _cypher_safe_label(primary_keyword)
+        tags = sorted(agg.keywords)
+        distinct_chunks = list(dict.fromkeys(agg.source_chunks))
+        mention_count = len(distinct_chunks)
         merged_relations.append(Relation(
             label=label,
             source_id=src_id,
             target_id=tgt_id,
             properties={
                 "description": merged_desc,
-                "keywords": ",".join(sorted(agg.keywords)),
-                "weight": agg.weight,
-                "source_chunks": list(dict.fromkeys(agg.source_chunks)),
-                "mention_count": len(agg.source_chunks),
+                "keywords": ",".join(tags),
+                # Tie strength = distinct co-occurrence count, so
+                # weighted Leiden / ranking see meaningful weights
+                # (ParsedRelation.weight is a constant 1.0 today).
+                "weight": float(mention_count),
+                # Discrete, per-element-filterable tags (vs the joined
+                # `keywords` string) for graph analysis / edge filtering.
+                "tags": tags,
+                "source_chunks": distinct_chunks,
+                "mention_count": mention_count,
             },
         ))
 
