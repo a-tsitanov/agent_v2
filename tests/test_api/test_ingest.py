@@ -83,14 +83,14 @@ async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
     )
     assert pos_or_kw_path == "s3://kb-uploads/abc/file.txt"
 
-    # Temporal workflow was started with the doc-derived id and the
-    # S3 URI in IngestParams.
+    # Temporal: always the scheduler workflow, never the direct-start path.
     fake_client.start_workflow.assert_awaited_once()
     call = fake_client.start_workflow.call_args
-    assert call.kwargs.get("id") == f"ingest-{job_id}"
+    assert call.kwargs.get("id") == "ingest-scheduler"
+    assert call.kwargs.get("start_signal") == "submit"
     assert call.kwargs.get("task_queue") == settings.temporal.task_queue
-    # Positional args: (workflow_run, IngestParams(...))
-    params = call.args[1]
+    # The submitted IngestParams is in start_signal_args[0].
+    params = call.kwargs["start_signal_args"][0]
     assert params.doc_id == job_id
     assert params.path == "s3://kb-uploads/abc/file.txt"
     # Wiki flag is snapshotted here (outside the Temporal sandbox) so the
@@ -240,3 +240,50 @@ async def test_ingest_requires_filename() -> None:
         )
 
     assert resp.status_code in (400, 422)
+
+
+@pytest.mark.asyncio
+async def test_ingest_always_starts_scheduler() -> None:
+    """Admission is always-on: every upload MUST route through the singleton
+    IngestSchedulerWorkflow (id='ingest-scheduler', signal='submit').
+    There is no fallback direct-start path any more."""
+    from src.api.main import app
+    from src.storage.postgres import AsyncPostgres
+
+    stub_storage = _stub_minio("s3://kb-uploads/abc/report.pdf")
+    fake_client = _stub_temporal_client()
+
+    with (
+        patch(
+            "src.api.routes.ingest.build_minio_storage",
+            return_value=stub_storage,
+        ),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()),
+        patch(
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("report.pdf", b"%PDF-test", "application/pdf")},
+                data={"department": "finance"},
+            )
+
+    assert resp.status_code == 202, resp.text
+
+    fake_client.start_workflow.assert_awaited_once()
+    call = fake_client.start_workflow.call_args
+
+    # Must always be the scheduler — never a per-doc id.
+    assert call.kwargs.get("id") == "ingest-scheduler"
+    assert call.kwargs.get("start_signal") == "submit"
+
+    # The submitted document params arrive via start_signal_args.
+    signal_args = call.kwargs.get("start_signal_args", [])
+    assert signal_args, "start_signal_args must not be empty"
+    params = signal_args[0]
+    assert params.path == "s3://kb-uploads/abc/report.pdf"
