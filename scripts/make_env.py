@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import json
 import re
 import secrets
 import sys
@@ -148,27 +147,11 @@ class Issue:
     msg: str
 
 
-_DEFAULT_LANE_CAPS = {
-    "extraction": 18, "judge": 14, "search": 14,
-    "plan": 4, "route": 2, "retrieve": 4, "synthesis": 8,
-}
-
-
 def _int(values: dict[str, str], key: str, default: int = 0) -> int:
     try:
         return int(values[key])
     except (KeyError, ValueError):
         return default
-
-
-def _lane_caps(values: dict[str, str]) -> dict[str, int]:
-    raw = values.get("LLM_POOL_LANE_CAPS", "").strip()
-    if raw:
-        try:
-            return {**_DEFAULT_LANE_CAPS, **json.loads(raw)}
-        except json.JSONDecodeError:
-            pass
-    return dict(_DEFAULT_LANE_CAPS)
 
 
 def validate(values: dict[str, str]) -> list[Issue]:
@@ -181,24 +164,18 @@ def validate(values: dict[str, str]) -> list[Issue]:
                 "MILVUS_DIM must equal LITELLM_EMBEDDING_DIM "
                 f"({values['MILVUS_DIM']} != {values['LITELLM_EMBEDDING_DIM']})"))
 
-    caps = _lane_caps(values)
-    small = _int(values, "LLM_POOL_TIER_SMALL_TOTAL", 25)
-    floor = _int(values, "LLM_POOL_JUDGE_FLOOR", 7)
-    if caps["extraction"] > small - floor:
-        issues.append(Issue("ERROR",
-            f"LLM_POOL extraction ceiling ({caps['extraction']}) must be <= "
-            f"tier_small_total - judge_floor ({small} - {floor} = {small - floor})"))
-
+    # K + N pool model: N = LLM_POOL_N (global semaphore), K = INGEST_ADMISSION_MAX_INFLIGHT
+    pool_n = _int(values, "LLM_POOL_N", 8)
     llm_cap = _int(values, "TEMPORAL_LLM_ACTIVITY_CONCURRENCY", 0)
-    if llm_cap and llm_cap < caps["extraction"]:
+    if llm_cap and llm_cap < pool_n:
         issues.append(Issue("WARN",
-            f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY ({llm_cap}) < extraction lane "
-            f"ceiling ({caps['extraction']}); Temporal will throttle before the pool"))
+            f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY ({llm_cap}) < LLM_POOL_N "
+            f"({pool_n}); Temporal will throttle before the pool"))
     merge_cap = _int(values, "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY", 0)
-    if merge_cap and merge_cap < caps["judge"]:
+    if merge_cap and merge_cap < pool_n:
         issues.append(Issue("WARN",
-            f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY ({merge_cap}) < judge lane "
-            f"ceiling ({caps['judge']}); Temporal will throttle before the pool"))
+            f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY ({merge_cap}) < LLM_POOL_N "
+            f"({pool_n}); Temporal will throttle before the pool"))
 
     models = (values.get("LITELLM_MODEL_SMALL", ""),
               values.get("LITELLM_MODEL_LARGE", ""))

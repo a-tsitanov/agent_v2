@@ -76,7 +76,7 @@ def test_is_secret_matches_secret_keys():
     for k in ["NEO4J_PASSWORD", "WIKIBASE_SECRET_KEY", "API_KEYS",
               "MINIO_ACCESS_KEY", "LITELLM_API_KEY", "WIKIBASE_ADMIN_PASS"]:
         assert is_secret(k), k
-    for k in ["API_HOST", "MILVUS_PORT", "LLM_POOL_TIER_SMALL_TOTAL"]:
+    for k in ["API_HOST", "MILVUS_PORT", "LLM_POOL_N"]:
         assert not is_secret(k), k
 
 
@@ -99,7 +99,8 @@ from scripts.make_env import validate, Issue
 
 BASE = {
     "MILVUS_DIM": "1536", "LITELLM_EMBEDDING_DIM": "1536",
-    "LLM_POOL_TIER_SMALL_TOTAL": "25", "LLM_POOL_JUDGE_FLOOR": "7",
+    "LLM_POOL_N": "8",
+    "INGEST_ADMISSION_MAX_INFLIGHT": "1",
     "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "18",
     "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY": "14",
     "OPENAI_API_KEY": "sk-x", "LITELLM_MODEL_SMALL": "gemma4:e4b",
@@ -120,10 +121,19 @@ def test_validate_dim_mismatch_errors():
     assert "ERROR" in _levels(validate(v), "DIM")
 
 
-def test_validate_pool_rule_errors_when_extraction_too_high():
-    # default lane_caps extraction=18; small-floor = 20-7=13 -> 18>13 -> ERROR
-    v = {**BASE, "LLM_POOL_TIER_SMALL_TOTAL": "20"}
-    assert "ERROR" in _levels(validate(v), "extraction")
+def test_validate_pool_n_temporal_warns_when_below_pool_n():
+    # LLM_POOL_N=8; TEMPORAL cap of 4 < 8 → WARN
+    v = {**BASE, "LLM_POOL_N": "8", "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "4"}
+    assert "WARN" in _levels(validate(v), "TEMPORAL_LLM_ACTIVITY_CONCURRENCY")
+
+
+def test_validate_temporal_caps_no_warn_when_above_pool_n():
+    # TEMPORAL caps >= LLM_POOL_N → no WARN
+    v = {**BASE, "LLM_POOL_N": "8",
+         "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "18",
+         "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY": "14"}
+    warns = [i for i in validate(v) if i.level == "WARN" and "TEMPORAL" in i.msg]
+    assert warns == []
 
 
 def test_validate_temporal_caps_warn_when_below_ceiling():
