@@ -1,15 +1,23 @@
 """Per-process LLM concurrency pool — single home for LLM gating.
 
-One ``LLMPool`` per process owns:
-  * a per-tier global semaphore (``small`` = GPU capacity, ``large`` =
-    OpenAI budget), and
-  * a per-role *lane* ceiling that intentionally over-subscribes the
-    tier total.
+Two modes (selected by ``LLM_POOL_GLOBAL_N``):
 
-Each small-tier LLM call acquires its lane permit first, then the
-tier-global (lane-first keeps the scarce global occupied only around
-the actual call).  All call-sites for a role share ONE wrapped LLM, so
-the scattered ``BoundedLLM`` instances collapse into one gate per role.
+* **Hierarchical** (default, ``global_n == 0``) — one ``LLMPool`` owns a
+  per-tier global semaphore (``small`` = GPU capacity, ``large`` = OpenAI
+  budget) and a per-role *lane* ceiling that intentionally over-subscribes
+  the tier total.  Each small-tier call acquires its lane permit first,
+  then the tier-global (lane-first keeps the scarce global occupied only
+  around the actual call).  Lets one workload fill the GPU while reserving
+  headroom (``judge_floor``) so a flood of one role can't starve another.
+
+* **Global / simple** (``global_n > 0``) — ONE semaphore of size ``N``
+  gates EVERY role and tier; ``lane_caps`` and the per-tier totals are
+  ignored.  The single operator knob becomes "at most N concurrent LLM
+  calls", paired with admission ``K`` (in-flight documents).  Trades the
+  per-role headroom guarantee for one number.
+
+All call-sites for a role share ONE wrapped LLM, so the scattered
+``BoundedLLM`` instances collapse into one gate per role.
 
 This is a *per-process* control, NOT distributed: the true cross-process
 GPU ceiling belongs at the LiteLLM proxy (out of scope).
@@ -72,25 +80,44 @@ class LLMPool:
     def __init__(self, settings: Any) -> None:
         self._settings = settings
         cfg = settings.llm_pool
-        self._tiers: dict[str, Lane] = {
-            "small": Lane("tier:small", "small", cfg.tier_small_total),
-            "large": Lane("tier:large", "large", cfg.tier_large_total),
-        }
+        # Global/simple mode when LLM_POOL_GLOBAL_N > 0.  The isinstance
+        # guard keeps MagicMock-based tests (auto-attr ⇒ not an int) in the
+        # default hierarchical mode without having to set global_n.
+        gn = getattr(cfg, "global_n", 0)
+        self._global_n = gn if isinstance(gn, int) and gn > 0 else 0
+        if self._global_n > 0:
+            self._global_lane: Lane | None = Lane("global", "global", self._global_n)
+            self._tiers: dict[str, Lane] = {}
+        else:
+            self._global_lane = None
+            self._tiers = {
+                "small": Lane("tier:small", "small", cfg.tier_small_total),
+                "large": Lane("tier:large", "large", cfg.tier_large_total),
+            }
         self._lanes: dict[str, Lane] = {}
         self._llms: dict[str, LLM] = {}
 
     def get(self, role: LLMRole) -> LLM:
         if role not in self._llms:
-            tier = self._settings.litellm.tier_for(role)
-            cap = self._settings.llm_pool.lane_caps[role]
-            lane = Lane(role, tier, cap)
-            self._lanes[role] = lane
-            logger.debug(
-                "LLMPool register role={role!r} tier={tier} lane_cap={cap}",
-                role=role, tier=tier, cap=cap,
-            )
-            # lane first, then tier-global (consistent order => no deadlock).
-            gates = [lane, self._tiers[tier]]
+            if self._global_lane is not None:
+                # Global mode: every role shares the one semaphore.
+                self._lanes.setdefault("global", self._global_lane)
+                gates = [self._global_lane]
+                logger.debug(
+                    "LLMPool[global] register role={role!r} N={n}",
+                    role=role, n=self._global_n,
+                )
+            else:
+                tier = self._settings.litellm.tier_for(role)
+                cap = self._settings.llm_pool.lane_caps[role]
+                lane = Lane(role, tier, cap)
+                self._lanes[role] = lane
+                logger.debug(
+                    "LLMPool register role={role!r} tier={tier} lane_cap={cap}",
+                    role=role, tier=tier, cap=cap,
+                )
+                # lane first, then tier-global (consistent order => no deadlock).
+                gates = [lane, self._tiers[tier]]
             self._llms[role] = BoundedLLM(  # type: ignore[assignment]
                 build_llm(role), gates=gates,
             )

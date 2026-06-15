@@ -51,13 +51,31 @@ remove it — it's the isolation/backpressure backstop.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `LLM_POOL_TIER_SMALL_TOTAL` | `25` | **Primary knob.** Max concurrent small-tier (local GPU) calls across the whole process. |
+| `LLM_POOL_GLOBAL_N` | `0` | **Simple mode.** When > 0: ONE global semaphore of size N across all roles/tiers; everything below is **ignored**. `0` = hierarchical mode (rows below). |
+| `LLM_POOL_TIER_SMALL_TOTAL` | `25` | **Primary knob (hierarchical).** Max concurrent small-tier (local GPU) calls across the whole process. |
 | `LLM_POOL_TIER_LARGE_TOTAL` | `8` | Max concurrent large-tier (OpenAI synthesis) calls. |
 | `LLM_POOL_JUDGE_FLOOR` | `7` | Slots reserved for the merge/judge lane so an extraction flood can't starve merge. |
 | `LLM_POOL_LANE_CAPS` | see below | Per-role ceilings (JSON). Lanes intentionally over-subscribe the tier total. |
 
 Default lane caps:
 `{"extraction":18,"judge":14,"search":14,"plan":4,"route":2,"retrieve":4,"synthesis":8}`
+
+#### Simple **K + N** mode (`LLM_POOL_GLOBAL_N > 0`)
+
+Two knobs instead of seven lanes:
+
+- **N** = `LLM_POOL_GLOBAL_N` — hard ceiling on concurrent LLM calls
+  (size N to the proxy/GPU knee, exactly like `tier_small_total` in §4).
+- **K** = `INGEST_ADMISSION_MAX_INFLIGHT` (with `INGEST_ADMISSION_ENABLED=true`)
+  — how many documents run end-to-end at once.
+
+N is the **GPU safety ceiling** (one document's internal fan-out —
+`extract_kg num_workers` + the ER-judge `gather` — is bounded by N even at
+K=1). K is the **operator throughput/priority knob**. Trade-off vs
+hierarchical: you lose the per-role headroom guarantee (`judge_floor`,
+search/synthesis reservations), so a big ingest can contend with
+interactive search latency. Benchmark before adopting — it's opt-in,
+default off.
 
 ### Temporal — isolation, not throttle (`TEMPORAL_*`, `src/config.py:207`)
 

@@ -586,6 +586,13 @@ class LLMPoolSettings(BaseSettings):
         env_prefix="LLM_POOL_", env_file=".env", extra="ignore",
     )
 
+    # Opt-in "simple mode": ONE global semaphore of size N across ALL
+    # roles + tiers.  When > 0, lane_caps and the per-tier totals below are
+    # IGNORED and every LLM call shares one semaphore — the single knob "at
+    # most N concurrent LLM calls", paired with admission K (in-flight
+    # docs).  0 (default) keeps the hierarchical tier+lane behaviour.
+    global_n: int = Field(default=0, ge=0)
+
     # Real backend capacity (GPU concurrent requests for small tier).
     tier_small_total: int = Field(default=25, ge=1)
     tier_large_total: int = Field(default=8, ge=1)

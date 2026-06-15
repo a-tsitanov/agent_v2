@@ -81,6 +81,82 @@ async def test_tier_global_bounds_across_lanes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_global_mode_one_semaphore_across_all_roles(monkeypatch):
+    """global_n > 0 → ONE semaphore of size N gates EVERY role; lane_caps
+    and per-tier totals are ignored. Total in-flight across roles == N."""
+    monkeypatch.setattr(pool_mod, "build_llm", lambda role: _fake_llm())
+
+    in_flight = 0
+    max_observed = 0
+    lock = asyncio.Lock()
+
+    async def fake(*a, **kw):
+        nonlocal in_flight, max_observed
+        async with lock:
+            in_flight += 1
+            max_observed = max(max_observed, in_flight)
+        await asyncio.sleep(0.05)
+        async with lock:
+            in_flight -= 1
+        return "ok"
+
+    settings = MagicMock()
+    settings.llm_pool.global_n = 2
+    # lane_caps + tier totals are deliberately huge — must be IGNORED.
+    settings.llm_pool.tier_small_total = 100
+    settings.llm_pool.tier_large_total = 100
+    settings.llm_pool.lane_caps = {"extraction": 100, "judge": 100, "synthesis": 100}
+    settings.litellm.tier_for = lambda role: "small"
+
+    pool = LLMPool(settings)
+    ext = pool.get("extraction")
+    jud = pool.get("judge")
+    syn = pool.get("synthesis")
+    for w in (ext, jud, syn):
+        w._inner.achat = fake
+
+    calls = (
+        [ext.achat() for _ in range(5)]
+        + [jud.achat() for _ in range(5)]
+        + [syn.achat() for _ in range(5)]
+    )
+    await asyncio.gather(*calls)
+    assert max_observed <= 2  # N, regardless of role mix or lane caps
+
+
+@pytest.mark.asyncio
+async def test_global_mode_stats_reports_single_global_lane(monkeypatch):
+    monkeypatch.setattr(pool_mod, "build_llm", lambda role: _fake_llm())
+    settings = MagicMock()
+    settings.llm_pool.global_n = 5
+    settings.litellm.tier_for = lambda role: "small"
+    pool = LLMPool(settings)
+    pool.get("extraction")
+    pool.get("judge")
+    st = pool.stats()
+    assert set(st["lanes"]) == {"global"}
+    assert st["lanes"]["global"]["cap"] == 5
+    assert st["tiers"] == {}  # no per-tier semaphores in global mode
+
+
+@pytest.mark.asyncio
+async def test_global_mode_off_keeps_lane_tier_behaviour(monkeypatch):
+    """global_n == 0 (default) → unchanged hierarchical lane+tier gating."""
+    monkeypatch.setattr(pool_mod, "build_llm", lambda role: _fake_llm())
+    settings = MagicMock()
+    settings.llm_pool.global_n = 0
+    settings.llm_pool.tier_small_total = 25
+    settings.llm_pool.tier_large_total = 8
+    settings.llm_pool.lane_caps = {"extraction": 18}
+    settings.litellm.tier_for = lambda role: "small"
+    pool = LLMPool(settings)
+    pool.get("extraction")
+    st = pool.stats()
+    assert "extraction" in st["lanes"]
+    assert "small" in st["tiers"]
+
+
+@pytest.mark.asyncio
 async def test_judge_floor_under_extraction_flood(monkeypatch):
     """Sizing rule: with tier=10, extraction ceiling 6, judge can always
     get >= 4 (10-6). Flood extraction; assert judge still runs concurrently."""
