@@ -437,10 +437,12 @@ async def detect_communities(
                     "members_hash": comm.members_hash,
                     "members": comm.members,
                     # No carry-over on the single-level path; the MERGE's
-                    # FOREACH no-ops when $carry_report is NULL.  Params still
-                    # required so the parameterised query doesn't error.
+                    # FOREACH no-ops when $carry_report is NULL.  ALL params
+                    # the Cypher references must still be passed or Neo4j
+                    # raises ParameterMissing (incl. carry_summarized_at).
                     "carry_report": None, "carry_title": None,
                     "carry_summary": None, "carry_report_vec": None,
+                    "carry_summarized_at": None,
                 },
             )
     except Exception as exc:  # noqa: BLE001

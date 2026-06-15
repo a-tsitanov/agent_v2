@@ -355,3 +355,44 @@ def test_projection_stats_empty_is_zero():
     from src.graph.communities import _projection_stats
 
     assert _projection_stats([]) == {"nodes": 0, "rels": 0}
+
+
+# ── regression: every $param referenced in a write must be passed ───
+
+
+class _ParamCheckingStore:
+    """Records (not raises) any `$name` in a Cypher that isn't in
+    param_map — like Neo4j's ParameterMissing, but collected so the
+    fail-soft persist block doesn't hide it from the test."""
+
+    import re as _re
+    _PARAM = _re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+
+    def __init__(self, stream_rows):
+        self._stream_rows = stream_rows
+        self.missing: list[str] = []
+
+    def structured_query(self, cypher, param_map=None):
+        params = param_map or {}
+        for name in set(self._PARAM.findall(cypher)):
+            if name not in params:
+                self.missing.append(name)
+        if "gds.leiden.stream" in cypher:
+            return self._stream_rows
+        return []
+
+
+@pytest.mark.asyncio
+async def test_single_level_merge_passes_all_params():
+    """detect_communities (max_levels=1 path) must pass EVERY param the
+    persist Cyphers reference — the single-level path forgot
+    carry_summarized_at, so the :Community write silently failed against
+    a live Neo4j (ParameterMissing)."""
+    rows = [
+        {"name": "Иванов", "communityId": 7},
+        {"name": "Петров", "communityId": 7},
+        {"name": "Сидоров", "communityId": 7},
+    ]
+    store = _ParamCheckingStore(rows)
+    await detect_communities(store, min_size=3)
+    assert store.missing == [], f"missing query params: {store.missing}"
