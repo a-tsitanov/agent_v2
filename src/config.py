@@ -574,45 +574,25 @@ class AgentSettings(BaseSettings):
 
 
 class LLMPoolSettings(BaseSettings):
-    """Per-process LLM concurrency pool (hierarchical tier + lane limits).
+    """Per-process LLM concurrency pool (K+N model).
 
-    The pool owns LLM concurrency; Temporal queue caps are relaxed to
-    isolation only.  Small-tier lanes intentionally over-subscribe
-    (sum of ceilings > tier_small_total) so one workload can fill the
-    GPU while no role can monopolize it beyond its ceiling.
+    ONE semaphore of size ``n`` (``LLM_POOL_N``) gates EVERY LLM call across
+    all roles.  Paired with admission K (``INGEST_ADMISSION_MAX_INFLIGHT``)
+    this is the entire concurrency contract: "at most K documents in flight,
+    at most N concurrent LLM calls".
+
+    Role still selects the physical *model* (``build_llm(role)`` ->
+    ``LiteLLMSettings.model_for``); it no longer affects gating.
+
+    Per-process, NOT distributed - the true cross-process GPU ceiling belongs
+    at the LiteLLM proxy (out of scope).
     """
 
     model_config = SettingsConfigDict(
         env_prefix="LLM_POOL_", env_file=".env", extra="ignore",
     )
 
-    # Opt-in "simple mode": ONE global semaphore of size N across ALL
-    # roles + tiers.  When > 0, lane_caps and the per-tier totals below are
-    # IGNORED and every LLM call shares one semaphore — the single knob "at
-    # most N concurrent LLM calls", paired with admission K (in-flight
-    # docs).  0 (default) keeps the hierarchical tier+lane behaviour.
-    global_n: int = Field(default=0, ge=0)
-
-    # Real backend capacity (GPU concurrent requests for small tier).
-    tier_small_total: int = Field(default=25, ge=1)
-    tier_large_total: int = Field(default=8, ge=1)
-    # Reserved floor for the merge/judge lane under an extraction flood.
-    # The sizing rule extraction_ceiling <= tier_small_total - judge_floor
-    # guarantees merge never starves (f49a83c anti-regression).
-    judge_floor: int = Field(default=7, ge=1)
-    # Per-role lane ceilings.  Override the whole map via
-    # LLM_POOL_LANE_CAPS='{"extraction":12,...}'.
-    lane_caps: dict[str, int] = Field(
-        default_factory=lambda: {
-            "extraction": 18,
-            "judge": 14,
-            "search": 14,
-            "plan": 4,
-            "route": 2,
-            "retrieve": 4,
-            "synthesis": 8,
-        }
-    )
+    n: int = Field(default=8, ge=1)
 
 
 class MetricsSettings(BaseSettings):
@@ -684,22 +664,17 @@ class ClassifierSettings(BaseSettings):
 
 
 class IngestAdmissionSettings(BaseSettings):
-    """Document-level admission control (opt-in).  When enabled, /ingest
-    hands documents to a singleton ``IngestSchedulerWorkflow`` that runs
-    at most ``max_inflight`` documents at once, each to completion, FIFO —
-    so a document's tail (merge) isn't starved behind newer documents'
-    extract bursts.  Disabled → /ingest starts the workflow directly
-    (today's behaviour, unbounded concurrency)."""
+    """Document-level admission control (always on).  /ingest hands every
+    document to a singleton ``IngestSchedulerWorkflow`` that runs at most
+    ``max_inflight`` (K) documents at once, each to completion, FIFO - so a
+    document's tail (merge) isn't starved behind newer documents' extract
+    bursts."""
 
     model_config = SettingsConfigDict(
         env_prefix="INGEST_ADMISSION_", env_file=".env", extra="ignore",
     )
 
-    enabled: bool = False
-    # K=1 = strict "finish before next start"; raise to overlap a
-    # document's I/O stages with another's GPU stage while bounding queue
-    # depth.
-    max_inflight: int = 1
+    max_inflight: int = Field(default=1, ge=1)
 
 
 # ── composed top-level settings ──────────────────────────────────────
