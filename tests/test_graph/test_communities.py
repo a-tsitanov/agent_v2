@@ -344,6 +344,75 @@ def test_projection_carries_weight_property():
     assert "coalesce(r.weight" in cy
 
 
+# ── #4 follow-up: gamma (resolution) + concurrency knobs ─────────────
+
+
+def test_leiden_stream_includes_gamma_and_concurrency():
+    """gamma (resolution) + concurrency must reach the GDS Leiden config."""
+    from src.graph.communities import _leiden_stream_cypher
+
+    cy = _leiden_stream_cypher("g", gamma=2.5, concurrency=8)
+    assert "gamma: 2.5" in cy
+    assert "concurrency: 8" in cy
+
+
+def test_leiden_stream_default_gamma_concurrency():
+    from src.graph.communities import _leiden_stream_cypher
+
+    cy = _leiden_stream_cypher("g")
+    # defaults are still emitted so behaviour is explicit, not GDS-implicit.
+    assert "gamma: 1.0" in cy
+    assert "concurrency: 4" in cy
+
+
+@pytest.mark.asyncio
+async def test_detect_forwards_gamma_concurrency_to_stream():
+    rows = [
+        {"name": "A", "communityId": 1},
+        {"name": "B", "communityId": 1},
+        {"name": "C", "communityId": 1},
+    ]
+    store = _FakeStore(rows)
+    await detect_communities(store, min_size=3, gamma=3.0, concurrency=6)
+    stream_calls = [c for c, _ in store.calls if "gds.leiden.stream" in c]
+    assert stream_calls and "gamma: 3.0" in stream_calls[0]
+    assert "concurrency: 6" in stream_calls[0]
+
+
+@pytest.mark.asyncio
+async def test_detect_hierarchy_forwards_gamma_concurrency():
+    from src.graph.communities import detect_hierarchy
+
+    rows = [
+        {"name": "A", "communityId": 1, "ids": [1, 1]},
+        {"name": "B", "communityId": 1, "ids": [1, 1]},
+        {"name": "C", "communityId": 1, "ids": [1, 1]},
+    ]
+    store = _FakeStore(rows)
+    await detect_hierarchy(store, max_levels=2, min_size=3,
+                           gamma=2.0, concurrency=2)
+    stream_calls = [c for c, _ in store.calls if "gds.leiden.stream" in c]
+    assert stream_calls and "gamma: 2.0" in stream_calls[0]
+    assert "concurrency: 2" in stream_calls[0]
+
+
+def test_detect_communities_params_carry_gamma_concurrency():
+    from src.workflow.contracts import DetectCommunitiesParams
+
+    p = DetectCommunitiesParams()
+    assert p.gamma == 1.0
+    assert p.concurrency == 4
+    p2 = DetectCommunitiesParams(gamma=2.0, concurrency=8)
+    assert p2.gamma == 2.0 and p2.concurrency == 8
+
+
+def test_community_leiden_settings_defaults():
+    from src.config import settings
+
+    assert settings.temporal.community_leiden_gamma == 1.0
+    assert settings.temporal.community_leiden_concurrency == 4
+
+
 def test_projection_stats_extracts_counts():
     from src.graph.communities import _projection_stats
 

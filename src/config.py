@@ -275,6 +275,12 @@ class TemporalSettings(BaseSettings):
     # Communities smaller than this are ignored (too small to summarise
     # meaningfully — likely noise / disconnected pairs).
     community_min_size: int = 3
+    # GDS Leiden tuning knobs (detection only — never the query path).
+    # ``gamma`` = resolution: >1 yields MORE, smaller communities; <1
+    # yields fewer, larger ones.  ``concurrency`` = GDS worker threads for
+    # the Leiden run; keep modest so a rebuild doesn't starve Neo4j.
+    community_leiden_gamma: float = Field(default=1.0, gt=0)
+    community_leiden_concurrency: int = Field(default=4, ge=1)
 
     @property
     def target(self) -> str:

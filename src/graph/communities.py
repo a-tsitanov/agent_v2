@@ -95,12 +95,18 @@ RETURN gds.graph.project(
 #    We read that list back as ``ids`` so ``_group_by_levels`` can build the
 #    HIERARCHY.  The legacy single-level path is just ``max_levels=1`` over
 #    the same stream (coarsest column = ids[-1] = today's ``communityId``).
-def _leiden_stream_cypher(graph_name: str) -> str:
+def _leiden_stream_cypher(
+    graph_name: str, *, gamma: float = 1.0, concurrency: int = 4,
+) -> str:
+    # ``gamma`` (resolution) and ``concurrency`` are config-tunable knobs;
+    # the defaults reproduce the pre-knob behaviour (gamma 1.0 == GDS
+    # default resolution, concurrency 4).
     return f"""
 CALL gds.leiden.stream(
     '{graph_name}',
     {{ randomSeed: 19, includeIntermediateCommunities: true,
-       relationshipWeightProperty: 'weight' }}
+       relationshipWeightProperty: 'weight',
+       gamma: {float(gamma)}, concurrency: {int(concurrency)} }}
 )
 YIELD nodeId, communityId, intermediateCommunityIds
 RETURN gds.util.asNode(nodeId).name AS name,
@@ -364,6 +370,8 @@ async def detect_communities(
     *,
     min_size: int = 3,
     level: int = 0,
+    gamma: float = 1.0,
+    concurrency: int = 4,
 ) -> list[CommunityRef]:
     """Run GDS Leiden over ``__Entity__`` and materialise ``:Community``.
 
@@ -392,7 +400,10 @@ async def detect_communities(
         await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
         stats = _projection_stats(proj_rows)
-        rows = await asyncio.to_thread(_run_query, store, _leiden_stream_cypher(graph_name))
+        rows = await asyncio.to_thread(
+            _run_query, store,
+            _leiden_stream_cypher(graph_name, gamma=gamma, concurrency=concurrency),
+        )
     except Exception as exc:  # noqa: BLE001
         # A genuine GDS/Cypher ERROR (vs an empty graph) — surfaced loudly
         # so "0 communities" is never silently mistaken for an infra fault.
@@ -461,6 +472,8 @@ async def detect_hierarchy(
     *,
     max_levels: int,
     min_size: int = 3,
+    gamma: float = 1.0,
+    concurrency: int = 4,
 ) -> list[CommunityRef]:
     """Run GDS Leiden over ``__Entity__`` and materialise the community
     HIERARCHY (up to ``max_levels`` dendrogram levels).
@@ -489,7 +502,10 @@ async def detect_hierarchy(
         await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
         stats = _projection_stats(proj_rows)
-        rows = await asyncio.to_thread(_run_query, store, _leiden_stream_cypher(graph_name))
+        rows = await asyncio.to_thread(
+            _run_query, store,
+            _leiden_stream_cypher(graph_name, gamma=gamma, concurrency=concurrency),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.error(
             "communities: GDS Leiden hierarchy detection FAILED: {e}", e=exc,
