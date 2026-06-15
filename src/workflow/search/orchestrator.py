@@ -61,6 +61,7 @@ def build_synthesize_call(
     query: str,
     sources: list[SerializedNode],
     max_refinements: int,
+    answer_template: str = "",
 ) -> tuple[str, SynthesizeParams]:
     """Pure spec for the final ``synthesize_answer`` schedule (R5).
 
@@ -80,6 +81,7 @@ def build_synthesize_call(
         accumulated=sources,
         max_refinements=max_refinements,
         use_synthesis_llm=True,  # large tier — build_synthesis_llm()
+        answer_template=answer_template,
     )
     return settings.temporal.large_task_queue, params
 
@@ -322,6 +324,7 @@ class SearchOrchestratorWorkflow:
             query=params.query,
             sources=synth_sources,
             max_refinements=params.max_refinements,
+            answer_template=params.answer_template,
         )
         synth: SynthesizeResult = await workflow.execute_activity(
             "synthesize_answer",

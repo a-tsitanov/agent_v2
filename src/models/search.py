@@ -43,6 +43,10 @@ class SearchRequest(BaseModel):
     created_before: int | None = None
     response_type: str = "Multiple Paragraphs"
     include_references: bool = False
+    # Optional answer-shape template — a named template
+    # (prompts/answer_templates/<name>.md) or an inline template string.
+    # Empty/None → default Russian-output synthesis (unchanged).
+    answer_template: str | None = None
 
 
 class SourceCitation(BaseModel):

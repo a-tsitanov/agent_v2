@@ -13,20 +13,10 @@ from __future__ import annotations
 
 from temporalio import activity
 
+from src.retrieval.answer_template import build_query
 from src.workflow._search_deps import get_synthesis_synthesizer, get_synthesizer
 from src.workflow._search_serde import serialized_to_node
 from src.workflow.contracts import SynthesizeParams, SynthesizeResult
-
-
-def _ru_query(query: str) -> str:
-    """Russian-output instruction — same prefix used in the legacy
-    `/search` handler.  Without it LlamaIndex's synthesizer can flip
-    to English when most context chunks are English."""
-    return (
-        "Ответь на следующий вопрос на русском языке, "
-        "сохраняя имена собственные и идентификаторы дословно "
-        f"из исходного языка контекста: {query}"
-    )
 
 
 @activity.defn
@@ -35,7 +25,9 @@ async def synthesize_answer(params: SynthesizeParams) -> SynthesizeResult:
     activity.heartbeat({"stage": "init", "mode": params.mode,
                         "n_sources": len(params.accumulated)})
     nodes = [serialized_to_node(n) for n in params.accumulated]
-    query = _ru_query(params.query)
+    # answer_template (named or inline) shapes the answer; empty → the
+    # default Russian-output preamble (unchanged behaviour).
+    query = build_query(params.query, params.answer_template)
 
     # R2 plan-execute flow opts into the large synthesis tier
     # (build_synthesis_llm); other paths keep the small search-tier
