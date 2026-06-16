@@ -208,7 +208,7 @@ def test_write_env_no_backup_when_absent(tmp_path):
     assert not (tmp_path / ".env.bak").exists()
 
 
-from scripts.make_env import iter_app_env_vars
+from scripts.make_env import iter_app_env_vars, build_reference
 
 
 def test_iter_app_env_vars_covers_known_fields():
@@ -279,3 +279,16 @@ def test_validate_bot_password_length(bot_pass, expect_error):
         assert errors, f"Expected ERROR for password {bot_pass!r}, got none"
     else:
         assert not errors, f"Unexpected ERROR for password {bot_pass!r}: {errors}"
+
+
+def test_build_reference_groups_and_marks_secrets():
+    text = build_reference()
+    assert "# Generated from src/config.py" in text
+    assert "MILVUS_DIM=1536" in text
+    assert "NEO4J_PASSWORD=" in text
+    assert "# secret" in text.lower()
+    assert "MilvusSettings" in text
+
+
+def test_reference_is_deterministic():
+    assert build_reference() == build_reference()

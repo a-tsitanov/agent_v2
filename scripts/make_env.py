@@ -190,6 +190,27 @@ def iter_app_env_vars() -> list[EnvVar]:
     return rows
 
 
+_REFERENCE_HEADER = (
+    "# Generated from src/config.py by `python -m scripts.make_env --reference`.\n"
+    "# DO NOT EDIT BY HAND. Exhaustive catalog of every app env var.\n"
+    "# Secrets show an empty value (set them yourself).\n"
+)
+
+
+def build_reference() -> str:
+    """Render the exhaustive .env.reference from the config.py catalog."""
+    rows = iter_app_env_vars()
+    out = [_REFERENCE_HEADER.rstrip("\n")]
+    group = None
+    for r in rows:
+        if r.group != group:
+            group = r.group
+            out.append(f"\n# ── {group} ──")
+        suffix = "   # secret" if r.secret else ""
+        out.append(f"{r.env}={r.default}{suffix}")
+    return "\n".join(out) + "\n"
+
+
 def gen_secret(key: str) -> str:
     """Generate a sensible secret for `key` (opt-in per field)."""
     k = key.upper()
@@ -340,7 +361,35 @@ def main(argv: list[str] | None = None) -> int:
                    help="write despite ERROR-level validation")
     p.add_argument("--no-merge", action="store_true",
                    help="ignore an existing .env")
+    p.add_argument("--reference", action="store_true",
+                   help="(re)generate .env.reference from config.py and exit")
+    p.add_argument("--check", action="store_true",
+                   help="verify .env.reference is current (+ report .env.example coverage); exit 1 on stale reference")
     args = p.parse_args(argv)
+
+    ref_path = Path(".env.reference")
+    if args.reference:
+        ref_path.write_text(build_reference())
+        print(f"wrote {ref_path}")
+        return 0
+    if args.check:
+        current = build_reference()
+        on_disk = ref_path.read_text() if ref_path.exists() else ""
+        stale = current != on_disk
+        if stale:
+            print("  [DRIFT] .env.reference is stale — run `python -m scripts.make_env --reference`")
+        # coverage is INFORMATIONAL (do not fail on it in this batch)
+        example_keys = {ln.key for ln in parse_example(Path(args.example).read_text())
+                        if isinstance(ln, KV)}
+        missing = sorted({r.env for r in iter_app_env_vars()} - example_keys)
+        if missing:
+            print(f"  [INFO] {len(missing)} app var(s) not in {args.example} "
+                  f"(documented in .env.reference): {', '.join(missing[:8])}"
+                  + (" ..." if len(missing) > 8 else ""))
+        if stale:
+            return 1
+        print("env check: OK")
+        return 0
 
     example_path = Path(args.example)
     out_path = Path(args.out)
