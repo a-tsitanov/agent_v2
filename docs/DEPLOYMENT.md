@@ -64,20 +64,48 @@ task queue, чтобы делать работу.  Топологию очере
 * **Prometheus** использует `infra/prometheus/prometheus.prod.yml`, который
   скрейпит пул-порты worker-контейнера `worker:9090..9096`.
 
-### 0c. Env (`.env.prod.example`)
+### 0c. Env (`.env.prod.example` / `.env.reference`)
 
-Скопируйте шаблон в `.env` (compose читает `.env` по умолчанию) и заполните —
-**ротируйте каждый дефолтный credential**:
+Скопируйте `.env.prod.example` в `.env` (compose читает `.env` по умолчанию) и
+заполните — **ротируйте каждый дефолтный credential**.  Полный каталог (~123 env
+vars) — в `.env.reference` (сгенерирован из `config.py`; не редактируйте вручную):
+
+```bash
+# Посмотреть исчерпывающий каталог всех переменных:
+cat .env.reference
+
+# Проверить актуальность .env.reference (drift guard):
+make env-check
+# или: python -m scripts.make_env --check
+
+# Перегенерировать .env.reference из config.py:
+python -m scripts.make_env --reference
+```
+
+Ключевые переменные для прод-сетапа:
 
 ```env
 # ── ВНЕШНИЙ LLM-прокси (litellm/ollama НЕ в этом compose) ──
 LITELLM_BASE_URL=http://your-litellm-host:4000   # REQUIRED — compose упадёт, если пусто
 LITELLM_API_KEY=sk-change-me
-LITELLM_EMBEDDING_DIM=1536        # MUST совпадать с коллекцией Milvus
+
+# ── Модели (канон: OpenAI text-embedding-3-small / 1536) ──
+LITELLM_MODEL_SMALL=gpt-4o-mini
+LITELLM_MODEL_LARGE=gpt-4o-mini
+LITELLM_EMBEDDING_MODEL=text-embedding-3-small
+# Размерность вектора — ДОЛЖНА совпадать с нативной dim модели
+# (text-embedding-3-small=1536, nomic-embed-text=768).
+MILVUS_DIM=1536
+# ── Opt-in: локальный Ollama-профиль (раскомментируйте вместо OpenAI) ──
+# LITELLM_MODEL_SMALL=gemma4:e4b
+# LITELLM_MODEL_LARGE=gemma4:e4b
+# LITELLM_EMBEDDING_MODEL=nomic-embed-text
+# MILVUS_DIM=768
 
 # ── API ──
 API_KEYS=change-me-strong-key
 API_PORT=8000
+API_ENV=production
 
 # ── Секреты / credentials (РОТИРУЙТЕ) ──
 NEO4J_PASSWORD=change-me
@@ -95,10 +123,8 @@ TEMPORAL_NUM_HISTORY_SHARDS=512
 
 # ── Opt-in фичи ──
 CLASSIFIER_ENABLED=false
-INGEST_ADMISSION_ENABLED=false
 INGEST_ADMISSION_MAX_INFLIGHT=1
 WIKI_ENABLED=false
-LLM_CACHE_ENABLED=false           # консьюмится, когда смержится feature/redis-llm-cache
 
 # ── Топология worker'а ──
 WORKER_GROUPS=                    # пусто = один контейнер тянет все 7 пулов; задайте подмножество (напр. llm) для сплита
@@ -111,15 +137,47 @@ WORKER_GROUPS=                    # пусто = один контейнер т�
 
 ### 0d. Команды
 
-```bash
-# Core (без wikibase)
-docker compose -f docker-compose.prod.yml up -d
+Рекомендуемый путь через Makefile:
 
-# С wikibase-стеком (opt-in профиль)
-docker compose -f docker-compose.prod.yml --profile wikibase up -d
+```bash
+# Поднять весь прод-стек (build + up, init-сервис запускается автоматически):
+make up-prod
+
+# С wikibase-стеком (opt-in профиль):
+docker compose -f docker-compose.prod.yml --profile wikibase up -d --build --wait
 ```
 
-### 0e. Прод-харденинг
+Полный контроль (без Makefile):
+
+```bash
+# Core (без wikibase)
+docker compose -f docker-compose.prod.yml up -d --build --wait
+
+# С wikibase-стеком (opt-in профиль)
+docker compose -f docker-compose.prod.yml --profile wikibase up -d --build --wait
+```
+
+> **init-сервис (prod):** `api` и `worker` объявлены через `depends_on: init:
+> service_completed_successfully` — compose автоматически запускает одноразовый
+> `init`-контейнер (Postgres-таблицы + MinIO-бакет + Temporal search-attrs) и
+> ждёт его успешного завершения **до** старта приложения.  При повторном `up -d`
+> уже запущенный init-сервис пропускается.
+
+### 0e. Temporal UI: CSRF через HTTP
+
+Если temporal-ui раздаётся через **plain HTTP** (dev-compose или прод без TLS),
+POST-действия (terminate workflow, signal) упадут с ошибкой
+`"CSRF token missing in headers"`.  Фикс:
+
+```env
+# В .env (dev) или .env / .env.prod.example (prod):
+TEMPORAL_UI_CSRF_COOKIE_INSECURE=true   # только при HTTP; оставьте false (дефолт) под HTTPS
+```
+
+* **Dev (`docker-compose.yml`):** уже захардкоден `TEMPORAL_CSRF_COOKIE_INSECURE: "true"` — ничего не нужно.
+* **Prod (`docker-compose.prod.yml`):** читает `${TEMPORAL_UI_CSRF_COOKIE_INSECURE:-false}`; задайте переменную в `.env`, если прод тоже за HTTP (например, внутренний инстанс без TLS).
+
+### 0f. Прод-харденинг
 
 Заметки по харденингу — инлайн в самом compose.  Захардененный прод гоняет
 `temporalio/server` + одноразовую schema-миграцию через `temporal-sql-tool`
@@ -177,6 +235,10 @@ cp .env.example .env
 $EDITOR .env
 ```
 
+> **Исчерпывающий список всех env-переменных** — в `.env.reference` (сгенерирован
+> из `config.py`; ~123 vars, секреты оставлены пустыми).  Для прод-сетапа
+> используйте `.env.prod.example` как базу.  Проверить актуальность: `make env-check`.
+
 Критичные регуляторы:
 
 ```env
@@ -189,14 +251,22 @@ API_KEYS=dev-local-key
 # ── Two physical model tiers (you manage exactly TWO names).  Every
 # logical role resolves to one of these (small = high-volume local,
 # large = final synthesis only).  See docs/MODELS.md.
-LITELLM_MODEL_SMALL=gemma4:e4b
+# Канон: text-embedding-3-small / 1536.  Ollama-профиль (opt-in) — ниже.
+LITELLM_MODEL_SMALL=gpt-4o-mini
 LITELLM_MODEL_LARGE=gpt-4o-mini
 
-# ── Embedding dim must match the model AND Milvus: 1536 for
-# text-embedding-3-small, 768 for nomic-embed-text, 3072 for -3-large.
+# ── Embedding model + vector dim ────────────────────────────────────
+# MILVUS_DIM должен равняться нативной dim модели:
+#   text-embedding-3-small → 1536 (канон)
+#   nomic-embed-text       → 768  (Ollama opt-in)
 LITELLM_EMBEDDING_MODEL=text-embedding-3-small
-LITELLM_EMBEDDING_DIM=1536
-MILVUS_DIM=1536          # MUST match LITELLM_EMBEDDING_DIM
+MILVUS_DIM=1536
+
+# ── Opt-in: локальный Ollama-профиль (раскомментируйте вместо OpenAI) ──
+# LITELLM_MODEL_SMALL=gemma4:e4b
+# LITELLM_MODEL_LARGE=gemma4:e4b
+# LITELLM_EMBEDDING_MODEL=nomic-embed-text
+# MILVUS_DIM=768
 
 # ── Russian normalisation of the knowledge graph (set false to
 # skip the LLM translation cost on ingest; graph stays in source language)
@@ -214,8 +284,20 @@ WIKI_ENABLED=false       # continuous per-entity MediaWiki article editor
 
 ## 4. Поднимите стек хранилищ + оркестрации
 
+Рекомендуемый путь (через Makefile):
+
 ```bash
-docker compose up -d
+make up       # dev: docker compose up -d --wait + init-схемы
+make ps       # статус контейнеров
+make logs     # хвост логов
+make down     # остановить стек
+```
+
+Полный контроль (без Makefile):
+
+```bash
+docker compose up -d --wait
+docker compose --profile init up init   # если схемы ещё не инициализированы
 ```
 
 Это стартует следующие контейнеры:
@@ -255,7 +337,7 @@ docker compose up -d
 Дождитесь, пока всё станет healthy:
 
 ```bash
-docker compose ps
+make ps              # = docker compose ps
 # Core STATUS columns should show "healthy"
 ```
 
@@ -271,13 +353,26 @@ docker exec kb-llamaindex-postgres-1 pg_isready -U postgres
 
 ## 5. Инициализация схем
 
-`scripts/setup_db.py` идемпотентен — безопасно перезапускать.
+Рекомендуемый путь (Makefile):
+
+```bash
+make up     # dev: поднимает backends --wait + запускает init автоматически
+# или отдельно:
+make init   # = docker compose --profile init up init
+```
+
+Прямой вызов (полный контроль):
 
 ```bash
 uv run python -m scripts.setup_db
 ```
 
-Что он делает:
+> **Prod:** `api` и `worker` в `docker-compose.prod.yml` объявлены с
+> `depends_on: init: service_completed_successfully` — `init`-сервис
+> запускается автоматически при `make up-prod` / `docker compose up`.
+> Повторный `up -d` безопасен: `setup_db` идемпотентен.
+
+Что делает `setup_db`:
 * Создаёт таблицу `documents` (+ индексы по status / department) и таблицу
   `ingest_metrics` в Postgres.
 * Пингует Milvus (коллекция создаётся лениво `MilvusVectorStore`
@@ -292,16 +387,55 @@ uv run python -m scripts.setup_db
 
 Только если `WIKIBASE_ENABLED=true` и/или `WIKI_ENABLED=true`.
 
+**Шаг 1 — создание runtime bot-аккаунта (однократно):**
+
 ```bash
-# One-time Wikibase bootstrap: creates base-class Items + Properties,
-# provisions the runtime bot account, caches QIDs/PIDs into Neo4j.
+# Рекомендуемый путь:
+make wiki-setup   # создаёт бота в контейнере + запускает setup_wikibase (схема)
+
+# Полный контроль (без Makefile):
+docker compose --profile wikibase exec wikibase \
+  php /var/www/html/maintenance/run.php createAndPromote --bot --force \
+  "$WIKIBASE_BOT_USER" "$WIKIBASE_BOT_PASSWORD"
+```
+
+> **Замечание по архитектуре amd64-on-arm64:** образ `wikibase` (MediaWiki)
+> распространяется только как `linux/amd64`.  На Apple Silicon (M-серия) он
+> запускается через эмуляцию Rosetta/QEMU — рассчитывайте на медленный старт
+> (30–90 с) и повышенное потребление RAM.  На arm64-хостах убедитесь, что
+> включён Docker Rosetta-слой (`Use Rosetta for x86_64/amd64 emulation on Apple
+> Silicon` в настройках Docker Desktop).
+
+**Шаг 2 — схема Wikibase (Items/Properties) + кеш QID/PID:**
+
+```bash
+# Только схема через Wikibase API (контейнер-совместимый):
 uv run python -m scripts.setup_wikibase
 #   --dry-run        report planned creates without writing
 #   --refresh-cache  re-pull existing QIDs/PIDs into the Neo4j cache only
+```
 
+> `setup_wikibase.py` теперь отвечает **только за схему** (базовые Items +
+> Properties) и кеш QID/PID в Neo4j — он **не создаёт** bot-аккаунт.
+> Bot создаётся исключительно через `createAndPromote` (шаг 1 выше).
+
+**Шаг 3 — Temporal Schedule для wiki-редактора:**
+
+```bash
 # Create/refresh the Temporal Schedule that runs WikiSweepWorkflow every
 # WIKI_SWEEP_INTERVAL_MINUTES.  No-op when WIKI_ENABLED=false.
 uv run python -m scripts.setup_wiki_schedule
+```
+
+---
+
+## 5c. Предзагрузка HF-моделей (опционально)
+
+Загрузите BGE-reranker и GLiNER до первого запроса, чтобы избежать
+задержки при первом ingest'е:
+
+```bash
+make models   # = uv run python -m scripts.download_models
 ```
 
 ---
@@ -341,6 +475,17 @@ uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 # Terminal 2 — Temporal worker (hosts ALL queue pools in one process)
 uv run python -m src.workflow.worker
 ```
+
+> **Fail-fast preflight (prod):** при `API_ENV=production` и API, и worker
+> запускают проверку конфига **до** того, как принять трафик / poll очереди.
+> Preflight фейлится с понятным сообщением, если:
+> * `API_KEYS` / секреты Wikibase содержат placeholder-значения по умолчанию;
+> * `TEMPORAL_LLM_ACTIVITY_CONCURRENCY` или `TEMPORAL_MERGE_ACTIVITY_CONCURRENCY`
+>   < `LLM_POOL_N` (в-процессный пул не сможет насытить Temporal-лимит);
+> * отсутствуют обязательные wiki-credentials при `WIKI_ENABLED=true`.
+>
+> В dev (`API_ENV=development`, дефолт) preflight только логирует предупреждения,
+> не прерывая старт.
 
 Единственный процесс worker'а хостит семь пулов Worker'ов против одного и того же
 Temporal-клиента — ingest (`kb-ingest`), extract (`kb-ingest-llm`), merge
@@ -511,8 +656,8 @@ uv run python -m scripts.wipe_db --yes --keep-files --keep-temporal --keep-wiki
 
 * **OpenAI → локальный (Ollama/vLLM)**: отредактируйте `docker/litellm_config.yaml`
   (наведите tier'ы `small`/`large` на `ollama_chat/...`), задайте
-  `LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE`, задайте `MILVUS_DIM` /
-  `LITELLM_EMBEDDING_DIM` под новую embedding-модель (например, 768 для
+  `LITELLM_MODEL_SMALL` / `LITELLM_MODEL_LARGE` и `LITELLM_EMBEDDING_MODEL`,
+  задайте `MILVUS_DIM` под нативную dim новой embedding-модели (например, 768 для
   `nomic-embed-text`), очистите Milvus (`scripts/wipe_db.py`), затем
   `docker compose up -d --force-recreate litellm`.
 * **Эскалировать одну роль на large-tier**: задайте
