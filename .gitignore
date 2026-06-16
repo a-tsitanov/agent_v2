@@ -13,8 +13,8 @@ venv/
 .env.local
 .env.*.local
 
-# uv
-uv.lock
+# uv: the lockfile MUST be committed for reproducible builds
+# (Dockerfile runs `uv sync --frozen`, which requires it).
 
 # IDE
 
