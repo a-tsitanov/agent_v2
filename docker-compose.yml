@@ -174,6 +174,24 @@ services:
       - wikibase_wdqs_data:/wdqs/data
     restart: unless-stopped
 
+  # ── One-shot: provision the bot user inside the wikibase image ──────
+  # Run with:  docker compose --profile wikibase run --rm wiki-bootstrap
+  # Idempotent (--force re-applies group membership on repeat runs).
+  wiki-bootstrap:
+    image: wikibase/wikibase-bundle:1.41.1-wmde.20
+    profiles: ["wikibase"]
+    command:
+      - "php"
+      - "/var/www/html/maintenance/run.php"
+      - "createAndPromote"
+      - "--bot"
+      - "--force"
+      - "${WIKIBASE_BOT_USER:-KbBot}"
+      - "${WIKIBASE_BOT_PASSWORD:-changemebot}"
+    restart: "no"
+    depends_on:
+      wikibase: {condition: service_healthy}
+
   # ── Relational DB: PostgreSQL 16 ────────────────────────────────────
   postgres:
     image: postgres:16-alpine
