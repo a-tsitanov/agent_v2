@@ -33,14 +33,12 @@ History of the initial 9-stage build is in `CHANGELOG.md`.
 
 ## Prerequisites
 
-- Docker Compose stack (etcd / minio / milvus / postgres / neo4j /
-  rabbitmq / litellm / prometheus / grafana).
-- **Ollama running on the host** with required models pulled:
-  ```bash
-  ollama pull qwen3:8b
-  ollama pull nomic-embed-text
-  ```
-  LiteLLM proxy inside Docker reaches Ollama via
+- Docker Compose stack (etcd / minio / milvus / neo4j / postgres /
+  temporal / litellm).
+- **LLM access:** canonical profile is **OpenAI** (`text-embedding-3-small`
+  + `gpt-4o-mini`).  Ollama is opt-in — uncomment the Ollama block in
+  `.env.example` (`gemma4:e4b` + `nomic-embed-text`) and pull the models
+  separately.  LiteLLM proxy inside Docker reaches Ollama via
   `host.docker.internal:11434` — see `docker/litellm_config.yaml`.
 - Python 3.12.
 
@@ -51,8 +49,7 @@ cd kb-llamaindex
 cp .env.example .env
 uv sync --extra dev
 
-bash scripts/start.sh                  # bring up docker stack
-uv run python -m scripts.setup_db      # init PG schema + Milvus ping
+make up                                # backends (healthy) + schema init
 
 # Ingest a directory
 uv run python -m src.ingestion.run ./tests/test_ingestion/fixtures/
@@ -66,9 +63,11 @@ uv run python -m src.ingestion.run ./tests/test_ingestion/fixtures/
 #    INGEST_ADMISSION_MAX_INFLIGHT): a singleton scheduler admits at most
 #    K documents at once, each run to completion FIFO.
 
-# Serve API + worker
+# One command: backends (healthy) + schema init
+make up
+# Then start the app on the host:
+uv run python -m src.workflow.worker &
 uv run uvicorn src.api.main:app --port 8000 &
-uv run taskiq worker src.ingestion.tasks:broker --workers 1 &
 
 # Search (three endpoints land in R7-R8; until then only /search works)
 curl -X POST localhost:8000/api/v1/search \

@@ -16,18 +16,22 @@ case "${1:-up}" in
     echo
     echo "Services:"
     echo "  Milvus      → localhost:19530 (gRPC), localhost:9091 (HTTP)"
-    echo "  MinIO       → http://localhost:9001 (minioadmin / minioadmin)"
+    echo "  MinIO       → http://localhost:9001 (dev defaults — see your .env)"
     echo "  Postgres    → localhost:5432 (postgres / postgres)"
-    echo "  Neo4j       → http://localhost:7474 (neo4j / changeme)"
+    echo "  Neo4j       → http://localhost:7474 (dev defaults — see your .env)"
     echo "  Temporal    → http://localhost:8080 (UI), localhost:7233 (gRPC)"
     echo "  LiteLLM     → http://localhost:4000"
     echo
-    echo "Make sure Ollama is running on the host with required models:"
-    echo "  ollama pull qwen3:8b nomic-embed-text"
-    echo "  (optional) ollama pull llama3.1:8b   # baseline for R9 eval"
+    echo "Canonical LLM profile: OpenAI text-embedding-3-small (+ gpt-4o-mini)."
+    echo "Ollama is opt-in — uncomment the Ollama block in .env.example"
+    echo "  (gemma4:e4b + nomic-embed-text) and re-run 'ollama pull' as needed."
     echo
-    echo "After services are healthy:"
-    echo "  uv run python -m scripts.setup_db"
+    echo "After services are healthy, initialise schemas:"
+    echo "  make init        # Postgres tables + MinIO bucket + Temporal search attrs"
+    echo "  — or —"
+    echo "  make up          # compose up + schema init in one step"
+    echo
+    echo "Tip: 'make up' does compose up + schema init in one step."
     ;;
   down)
     docker compose down
