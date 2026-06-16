@@ -20,20 +20,25 @@ Auth note:
     Items and Properties are written with admin credentials
     (``WIKIBASE_ADMIN_USER`` / ``WIKIBASE_ADMIN_PASS``) provisioned
     by ``docker compose`` (T1) — bot-password CSRF flow is too
-    brittle to mint headlessly in v1.  Before doing that, this
-    script also provisions the runtime bot account
-    (``WIKIBASE_BOT_USER`` / ``WIKIBASE_BOT_PASSWORD``) inside the
-    Wikibase container via the ``createAndPromote`` maintenance
-    script — the ``push_wikibase`` activity logs in with those
-    bot creds at ingest time.
+    brittle to mint headlessly in v1.
+
+Bot user provisioning:
+    The runtime bot account (``WIKIBASE_BOT_USER`` /
+    ``WIKIBASE_BOT_PASSWORD``) must be created via ``docker exec`` into
+    the already-running wikibase container (a one-shot container cannot
+    run maintenance scripts: the image ENTRYPOINT always launches
+    apache2-foreground and LocalSettings.php is only present in the
+    running container's filesystem).  Run it with::
+
+        docker compose --profile wikibase exec wikibase \
+          php /var/www/html/maintenance/run.php createAndPromote --bot --force \
+          "$WIKIBASE_BOT_USER" "$WIKIBASE_BOT_PASSWORD"
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, get_args
@@ -92,89 +97,6 @@ class _Counter:
     def __init__(self) -> None:
         self.created = 0
         self.existing = 0
-
-
-# ── bot user provisioning (docker exec) ─────────────────────────────
-
-
-_MIN_PASSWORD_LEN = 8
-
-
-def _wikibase_container_name() -> str | None:
-    """Locate the running Wikibase MediaWiki container.
-
-    Order: ``WIKIBASE_DOCKER_CONTAINER`` env override → compose label
-    lookup → ``None`` (caller falls back to a clear error message).
-    """
-    explicit = os.environ.get("WIKIBASE_DOCKER_CONTAINER")
-    if explicit:
-        return explicit
-
-    if shutil.which("docker") is None:
-        return None
-    try:
-        out = subprocess.run(
-            [
-                "docker", "ps",
-                "--filter", "label=com.docker.compose.service=wikibase",
-                "--format", "{{.Names}}",
-            ],
-            check=True, capture_output=True, text=True, timeout=10,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
-    names = [n for n in out.stdout.strip().splitlines() if n]
-    return names[0] if names else None
-
-
-def _ensure_bot_user(cfg: Any, *, dry_run: bool) -> None:
-    """Create/refresh the Wikibase bot account via maintenance script.
-
-    Uses ``docker exec <container> php maintenance/run.php
-    createAndPromote --bot --force <user> <pw>`` so the runtime
-    ``push_wikibase`` activity has a real user to log in as.
-    ``--force`` makes the call idempotent — on a second run it just
-    re-applies group membership.
-    """
-    user = cfg.bot_user
-    password = cfg.bot_password.get_secret_value()
-    if len(password) < _MIN_PASSWORD_LEN:
-        raise SystemExit(
-            f"WIKIBASE_BOT_PASSWORD is too short ({len(password)} chars); "
-            f"MediaWiki requires at least {_MIN_PASSWORD_LEN}.",
-        )
-
-    container = _wikibase_container_name()
-    if container is None:
-        raise SystemExit(
-            "Could not locate the running Wikibase container.  Set "
-            "WIKIBASE_DOCKER_CONTAINER explicitly, or bring up the stack "
-            "first via `docker compose up -d wikibase`.",
-        )
-
-    if dry_run:
-        logger.info(
-            "bot user would-create  user={u}  container={c}",
-            u=user, c=container,
-        )
-        return
-
-    logger.info("bot user provisioning  user={u}  container={c}",
-                u=user, c=container)
-    proc = subprocess.run(
-        [
-            "docker", "exec", container,
-            "php", "/var/www/html/maintenance/run.php",
-            "createAndPromote", "--bot", "--force", user, password,
-        ],
-        check=False, capture_output=True, text=True, timeout=60,
-    )
-    if proc.returncode != 0:
-        raise SystemExit(
-            f"createAndPromote failed (exit {proc.returncode}):\n"
-            f"stdout={proc.stdout.strip()}\nstderr={proc.stderr.strip()}",
-        )
-    logger.info("bot user ready  user={u}", u=user)
 
 
 # ── wikibase helpers ────────────────────────────────────────────────
@@ -415,11 +337,13 @@ def main() -> int:
 
     _configure_wbi(cfg.base_url, cfg.language)
 
-    # Provision the runtime bot user first so the ingest hot path has
-    # somebody to log in as.  Skip in refresh-cache mode — there we
-    # only read from Wikibase, never write, and never need bot creds.
-    if not args.refresh_cache:
-        _ensure_bot_user(cfg, dry_run=args.dry_run)
+    logger.info(
+        "bot user provisioning is now an operator step (run on the docker "
+        "host, where the wikibase container is running):\n"
+        "  docker compose --profile wikibase exec wikibase \\\n"
+        "    php /var/www/html/maintenance/run.php createAndPromote --bot --force \\\n"
+        "    \"$WIKIBASE_BOT_USER\" \"$WIKIBASE_BOT_PASSWORD\"\n"
+        "This script bootstraps only the schema (Items/Properties) over the API.")
 
     # WikibaseIntegrator is needed only when we may write — search
     # works against the public API without login.  We still log in

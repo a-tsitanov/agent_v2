@@ -312,6 +312,31 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     restart: unless-stopped
 
+  # ── One-shot schema initialiser (opt-in; never pulled in by default) ──
+  # Run with:  docker compose --profile init up init
+  # Idempotent: safe to re-run.  Creates Postgres tables, MinIO bucket,
+  # and Temporal search-attributes — the same steps as `python -m scripts.setup_db`.
+  init:
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["python", "-m", "scripts.setup_db"]
+    env_file: [.env]
+    # The host-oriented `.env` uses localhost for backends (dev app runs on
+    # the host); inside this container they must be the compose-DNS names.
+    # `environment` overrides `env_file`.
+    environment:
+      POSTGRES_HOST: postgres
+      MILVUS_HOST: milvus
+      MINIO_ENDPOINT: minio:9000
+      NEO4J_URI: bolt://neo4j:7687
+      TEMPORAL_HOST: temporal
+    restart: "no"
+    profiles: ["init"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      milvus: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      temporal: {condition: service_started}
+
 volumes:
   etcd_data:
   minio_data:

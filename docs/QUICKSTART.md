@@ -139,7 +139,13 @@ uv run python -m scripts.wipe_db --yes
 ```bash
 # Wikibase нужно ~90 сек на первый старт — подними отдельно:
 docker compose up -d wikibase wikibase-mysql
-uv run python -m scripts.setup_wikibase            # bootstrap классов/свойств + бот-аккаунт (идемпотентно)
+uv run python -m scripts.setup_wikibase            # bootstrap классов/свойств (идемпотентно)
+
+# создай бот-аккаунт (на docker host, пока wikibase-профиль запущен):
+docker compose --profile wikibase exec wikibase \
+  php /var/www/html/maintenance/run.php createAndPromote --bot --force \
+  "$WIKIBASE_BOT_USER" "$WIKIBASE_BOT_PASSWORD"
+
 uv run python -m scripts.setup_wiki_schedule       # (опц.) Temporal Schedule для авто-свипа редактора
 ```
 

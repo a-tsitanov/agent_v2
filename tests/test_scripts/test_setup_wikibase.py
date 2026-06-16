@@ -4,12 +4,24 @@ Focus on pure helpers and the Neo4j writeback logic.  The actual
 Wikibase API interaction is deferred to a live smoke (operator
 runs ``uv run python -m scripts.setup_wikibase`` against a real
 Wikibase container in the Stage 2 gate).
+
+setup_wikibase no longer needs the host docker CLI (container-runnable).
 """
 
 from __future__ import annotations
 
 from typing import get_args
 from unittest.mock import MagicMock, patch
+
+import scripts.setup_wikibase as sw
+
+
+def test_no_host_docker_bot_path():
+    text = open(sw.__file__, encoding="utf-8").read()
+    # the host-docker bot provisioning path is gone
+    assert "_ensure_bot_user" not in text
+    assert "_wikibase_container_name" not in text
+    assert "createAndPromote --bot" in text  # operator exec command documented
 
 
 def test_identifier_properties_match_IdentifierType_literal() -> None:

@@ -82,6 +82,20 @@ x-app-build: &app-build
 services:
 
   # ───────────────────────── application ─────────────────────────────
+  # One-shot: creates Postgres tables, MinIO bucket, and Temporal
+  # search-attributes before the api/worker start.  Idempotent — safe to
+  # re-run on every fresh boot.
+  init:
+    <<: [*app-build]
+    command: ["python", "-m", "scripts.setup_db"]
+    environment: *app-env
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+      milvus: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      temporal: {condition: service_started}
+
   api:
     <<: [*app-build]
     environment: *app-env
@@ -92,6 +106,7 @@ services:
       neo4j: {condition: service_healthy}
       milvus: {condition: service_healthy}
       temporal: {condition: service_started}
+      init: {condition: service_completed_successfully}
     restart: unless-stopped
 
   # All 7 worker pools in one container (launcher forks one process per
@@ -108,6 +123,7 @@ services:
       neo4j: {condition: service_healthy}
       milvus: {condition: service_healthy}
       temporal: {condition: service_started}
+      init: {condition: service_completed_successfully}
     restart: unless-stopped
 
   mcp-search:
