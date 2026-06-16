@@ -49,6 +49,52 @@ async def _post(path: str, *, headers=None):
         return await ac.post(path, json={"query": "q"}, headers=headers)
 
 
+async def _post_body(path: str, body: dict, *, headers=None):
+    from src.api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        return await ac.post(path, json=body, headers=headers)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"query": "q", "top_k": 0},          # below floor
+        {"query": "q", "top_k": 1_000_000},  # above ceiling (DoS guard)
+        {"query": "", "top_k": 5},           # empty query
+        {"query": "q", "history": [{"role": "user", "content": "x"}] * 51},  # too many turns
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_request_validation_422(body):
+    """top_k is bounded [1,100], query non-empty, history capped — invalid
+    requests are rejected by validation (422) before any workflow starts (#11)."""
+    resp = await _post_body("/api/v1/search/local", body, headers=_api_key_header())
+    assert resp.status_code == 422, resp.text
+
+
+def test_reserved_filter_warns_not_applied():
+    """A reserved filter (department) is accepted but logged as NOT applied —
+    no silent drop (#11).  Unit-tests the warning helper via a loguru sink."""
+    from loguru import logger
+
+    from src.api.routes.search_v2 import _warn_reserved_filters
+    from src.models.search import SearchRequest
+
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, level="WARNING")
+    try:
+        _warn_reserved_filters(SearchRequest(query="q", department="finance"))
+        _warn_reserved_filters(SearchRequest(query="q"))  # no reserved -> no warn
+    finally:
+        logger.remove(sink_id)
+
+    warns = [m for m in messages if "NOT applied" in m or "not applied" in m]
+    assert len(warns) == 1, messages
+    assert "department" in warns[0]
+
+
 @pytest.mark.parametrize(
     ("path", "wf", "expected_mode"),
     [

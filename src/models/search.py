@@ -26,21 +26,31 @@ class SearchRequest(BaseModel):
     backward-compatible clients.
     """
 
-    query: str
+    query: str = Field(min_length=1, description="User query (non-empty).")
     history: list[ConversationTurn] = Field(
         default_factory=list,
+        max_length=50,
         description="Prior turns (client-managed). Empty = single-shot, no contextualisation.",
     )
     mode: str = Field(
         "hybrid",
-        description="vector | hybrid | bypass",
+        description="RESERVED — not applied by the current retrieval flow.",
     )
-    department: str | None = None
-    top_k: int = 10
-    user_id: str | None = None
-    doc_type_filter: str | None = None
-    created_after: int | None = None
-    created_before: int | None = None
+    # Reserved filter fields: accepted for backward-compatible clients but
+    # NOT applied by the plan-execute / GraphRAG flows.  They are NOT an
+    # access-control boundary — do not rely on them for scoping.  See #11.
+    department: str | None = Field(
+        default=None, description="RESERVED — not applied (not an access boundary).",
+    )
+    top_k: int = Field(default=10, ge=1, le=100, description="Results to retrieve (1–100).")
+    user_id: str | None = Field(
+        default=None, description="RESERVED — not applied (not an access boundary).",
+    )
+    doc_type_filter: str | None = Field(
+        default=None, description="RESERVED — not applied.",
+    )
+    created_after: int | None = Field(default=None, description="RESERVED — not applied.")
+    created_before: int | None = Field(default=None, description="RESERVED — not applied.")
     response_type: str = "Multiple Paragraphs"
     include_references: bool = False
     # Optional answer-shape template — a named template
