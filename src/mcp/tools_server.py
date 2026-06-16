@@ -102,7 +102,12 @@ async def _init() -> None:
                 extractor=build_kg_extractor(llm), nodes=None,
                 llm=llm,  # local LiteLLM model for the retriever's synonym step
             )
-            _deps["graph"] = GraphRetriever(pg)
+            _deps["graph"] = GraphRetriever(
+                pg,
+                filter_polarity_temporal=(
+                    settings.agent.graph_walk_filter_polarity_temporal
+                ),
+            )
             # Raw store for the GDS analysis tools (need structured_query).
             _deps["graph_store"] = gs
         except Exception as exc:  # noqa: BLE001

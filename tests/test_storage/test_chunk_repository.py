@@ -142,15 +142,16 @@ def test_read_file_capped_handles_non_utf8(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_get_chunks_by_doc_id_sorts_by_position() -> None:
+    did = str(uuid.uuid4())
     milvus = _StubMilvus(rows=[
-        {"id": "c3", "text": "third", "doc_id": "d1", "position": 2},
-        {"id": "c1", "text": "first", "doc_id": "d1", "position": 0},
-        {"id": "c2", "text": "second", "doc_id": "d1", "position": 1},
+        {"id": "c3", "text": "third", "doc_id": did, "position": 2},
+        {"id": "c1", "text": "first", "doc_id": did, "position": 0},
+        {"id": "c2", "text": "second", "doc_id": did, "position": 1},
     ])
     repo = ChunkRepository(
         milvus_client=milvus, collection="kb_llamaindex", pg=_StubPG(docs={}),
     )
-    chunks = await repo.aget_chunks_by_doc_id("d1")
+    chunks = await repo.aget_chunks_by_doc_id(did)
     positions = [c["position"] for c in chunks]
     assert positions == [0, 1, 2]
     assert [c["text"] for c in chunks] == ["first", "second", "third"]
@@ -159,14 +160,48 @@ async def test_get_chunks_by_doc_id_sorts_by_position() -> None:
 @pytest.mark.asyncio
 async def test_get_chunks_by_doc_id_uses_filter() -> None:
     milvus = _StubMilvus(rows=[])
+    valid_id = str(uuid.uuid4())
     repo = ChunkRepository(
         milvus_client=milvus, collection="some_coll", pg=_StubPG(docs={}),
     )
-    await repo.aget_chunks_by_doc_id("d42", limit=5, offset=10)
-    assert milvus.calls[0]["filter"] == 'doc_id == "d42"'
+    await repo.aget_chunks_by_doc_id(valid_id, limit=5, offset=10)
+    assert milvus.calls[0]["filter"] == f'doc_id == "{valid_id}"'
     assert milvus.calls[0]["limit"] == 5
     assert milvus.calls[0]["offset"] == 10
     assert milvus.calls[0]["collection_name"] == "some_coll"
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_by_doc_id_rejects_non_uuid() -> None:
+    """A client-controlled doc_id must be UUID-validated before it is
+    interpolated into a Milvus filter expression (filter injection)."""
+    milvus = _StubMilvus(rows=[])
+    repo = ChunkRepository(
+        milvus_client=milvus, collection="some_coll", pg=_StubPG(docs={}),
+    )
+    for bad in ('not-a-uuid', 'd1" or doc_id != "', "1; drop", ""):
+        with pytest.raises(ValueError):
+            await repo.aget_chunks_by_doc_id(bad)
+    # Never reached Milvus.
+    assert milvus.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_by_doc_id_sorts_by_position_with_uuid() -> None:
+    """End-to-end sort guarantee with the canonical (app) doc_id UUID
+    now living in the scalar `doc_id` column."""
+    did = str(uuid.uuid4())
+    milvus = _StubMilvus(rows=[
+        {"id": "c3", "text": "third", "doc_id": did, "position": 2},
+        {"id": "c1", "text": "first", "doc_id": did, "position": 0},
+        {"id": "c2", "text": "second", "doc_id": did, "position": 1},
+    ])
+    repo = ChunkRepository(
+        milvus_client=milvus, collection="kb_llamaindex", pg=_StubPG(docs={}),
+    )
+    chunks = await repo.aget_chunks_by_doc_id(did)
+    assert [c["position"] for c in chunks] == [0, 1, 2]
+    assert [c["text"] for c in chunks] == ["first", "second", "third"]
 
 
 @pytest.mark.asyncio

@@ -544,6 +544,14 @@ class AgentSettings(BaseSettings):
     # so a fulltext-matched entity (partial name / typo) still contributes
     # its neighbourhood even if graph_search already returned something.
     graph_walk_dual_seed: bool = True
+    # Relation polarity + temporal-validity filtering at RETRIEVAL (#8):
+    # when on (default), the bounded ``graph_walk`` drops relationships the
+    # source text NEGATES (``polarity == 'negated'``) and edges whose
+    # ``valid_to`` is strictly in the past (expired).  NULL/missing polarity
+    # reads as affirmed; NULL ``valid_to`` reads as never-expiring; legacy
+    # edges without these props are unaffected.  Opt-out (set False) if it
+    # ever misbehaves — then negated/expired edges surface as before.
+    graph_walk_filter_polarity_temporal: bool = True
     # ``path_depth`` for the similarity graph_search inside the local
     # pipeline: how many triplet-hops of neighbours aretrieve pulls around
     # each matched entity. Default 1 (current behaviour); raise (≤3) to

@@ -71,6 +71,9 @@ async def _build_graph_retriever_once(embed_model, llm):
         ensure_entity_lookup_indexes(gs)
         return GraphRetriever(
             pg, similarity_top_k=settings.agent.graph_similarity_top_k,
+            filter_polarity_temporal=(
+                settings.agent.graph_walk_filter_polarity_temporal
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(

@@ -4,7 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.workflow.activities.build_property_graph import build_property_graph
+from src.workflow.activities.build_property_graph import (
+    _strip_neo4j_unsafe_metadata,
+    build_property_graph,
+)
+from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
 from src.workflow.contracts import Ctx, KGExtracted, Merged, Parsed
 
 
@@ -49,3 +53,19 @@ async def test_strips_metadata_builds_pg_upserts_entities():
     assert n.metadata.get("safe") == "str"
     assert out.entities == 1
     assert out.relations == 1
+
+
+def test_strip_neo4j_unsafe_removes_augment_key() -> None:
+    """``canonical_identifiers_augment`` must be removed from Chunk node
+    metadata before Neo4j upsert — consistent with fix #5's goal of keeping
+    the augment block out of all stores."""
+    node = MagicMock()
+    node.metadata = {
+        "safe_key": "value",
+        _AUGMENT_METADATA_KEY: "Канонические идентификаторы: +79001234567 (PHONE)",
+        "canonical_identifiers": [{"canonical": "+79001234567"}],
+    }
+    _strip_neo4j_unsafe_metadata([node])
+    assert _AUGMENT_METADATA_KEY not in node.metadata
+    assert "canonical_identifiers" not in node.metadata
+    assert node.metadata.get("safe_key") == "value"
