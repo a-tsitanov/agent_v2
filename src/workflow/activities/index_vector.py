@@ -46,8 +46,15 @@ from src.workflow.staging import build_staging_store
 # (identifiers → inject_canonical, translation → LightRAG).  Stripped
 # for the insert, restored after.  The generic size pass below catches
 # anything this list misses.
+#
+# ``canonical_identifiers_augment`` holds the LLM-instruction augment
+# block; it is already embed-excluded on the node, but the EMBED
+# exclusion does NOT cover the Milvus ``_node_content`` JSON dump (that
+# serialises raw ``node.metadata``), so it must be dropped here too to
+# stay out of the stored scalar/dynamic fields.
 _MILVUS_DROP_KEYS: frozenset[str] = frozenset({
     "canonical_identifiers",
+    "canonical_identifiers_augment",
     "translated_text",
 })
 
