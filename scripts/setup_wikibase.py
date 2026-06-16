@@ -24,12 +24,15 @@ Auth note:
 
 Bot user provisioning:
     The runtime bot account (``WIKIBASE_BOT_USER`` /
-    ``WIKIBASE_BOT_PASSWORD``) is created by the ``wiki-bootstrap``
-    compose one-shot service (runs ``createAndPromote`` inside the
-    wikibase image itself — no host Docker CLI required).  Run it
-    with::
+    ``WIKIBASE_BOT_PASSWORD``) must be created via ``docker exec`` into
+    the already-running wikibase container (a one-shot container cannot
+    run maintenance scripts: the image ENTRYPOINT always launches
+    apache2-foreground and LocalSettings.php is only present in the
+    running container's filesystem).  Run it with::
 
-        docker compose --profile wikibase run --rm wiki-bootstrap
+        docker compose --profile wikibase exec wikibase \
+          php /var/www/html/maintenance/run.php createAndPromote --bot --force \
+          "$WIKIBASE_BOT_USER" "$WIKIBASE_BOT_PASSWORD"
 """
 
 from __future__ import annotations
@@ -335,9 +338,12 @@ def main() -> int:
     _configure_wbi(cfg.base_url, cfg.language)
 
     logger.info(
-        "bot user provisioning is handled by the `wiki-bootstrap` compose "
-        "one-shot: `docker compose --profile wikibase run --rm wiki-bootstrap`. "
-        "This script now only bootstraps the schema over the MediaWiki API.")
+        "bot user provisioning is now an operator step (run on the docker "
+        "host, where the wikibase container is running):\n"
+        "  docker compose --profile wikibase exec wikibase \\\n"
+        "    php /var/www/html/maintenance/run.php createAndPromote --bot --force \\\n"
+        "    \"$WIKIBASE_BOT_USER\" \"$WIKIBASE_BOT_PASSWORD\"\n"
+        "This script bootstraps only the schema (Items/Properties) over the API.")
 
     # WikibaseIntegrator is needed only when we may write — search
     # works against the public API without login.  We still log in

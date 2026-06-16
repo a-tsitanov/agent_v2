@@ -21,8 +21,7 @@ def test_no_host_docker_bot_path():
     # the host-docker bot provisioning path is gone
     assert "_ensure_bot_user" not in text
     assert "_wikibase_container_name" not in text
-    # bot creation now points at the compose one-shot
-    assert "wiki-bootstrap" in text
+    assert "createAndPromote --bot" in text  # operator exec command documented
 
 
 def test_identifier_properties_match_IdentifierType_literal() -> None:
