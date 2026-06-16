@@ -312,6 +312,22 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     restart: unless-stopped
 
+  # ── One-shot schema initialiser (opt-in; never pulled in by default) ──
+  # Run with:  docker compose --profile init up init
+  # Idempotent: safe to re-run.  Creates Postgres tables, MinIO bucket,
+  # and Temporal search-attributes — the same steps as `python -m scripts.setup_db`.
+  init:
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["python", "-m", "scripts.setup_db"]
+    env_file: [.env]
+    restart: "no"
+    profiles: ["init"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      milvus: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      temporal: {condition: service_started}
+
 volumes:
   etcd_data:
   minio_data:
