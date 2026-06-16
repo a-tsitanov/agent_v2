@@ -21,9 +21,9 @@ Resolution cascade (cheapest → most expensive):
      wired, borderline candidates fall through to ``None``
      (conservative — prefer minting a new item over a wrong link).
 
-This is a building block: it is FLAGGED OFF
-(``AgentSettings.canonical_linker_enabled``, default False) and NOT yet
-wired into the ingest path.
+This is a building block: it is NOT yet wired into the ingest path (the
+former ``AgentSettings.canonical_linker_enabled`` flag was removed as dead
+config — re-add a gate when this gets wired in).
 """
 
 from __future__ import annotations

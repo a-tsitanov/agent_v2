@@ -98,7 +98,7 @@ def test_gen_secret_api_key_has_sk_prefix():
 from scripts.make_env import validate, Issue
 
 BASE = {
-    "MILVUS_DIM": "1536", "LITELLM_EMBEDDING_DIM": "1536",
+    "MILVUS_DIM": "1536",
     "LLM_POOL_N": "8",
     "INGEST_ADMISSION_MAX_INFLIGHT": "1",
     "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "18",
@@ -114,11 +114,6 @@ def _levels(issues, needle):
 
 def test_validate_clean_base_has_no_errors():
     assert [i for i in validate(BASE) if i.level == "ERROR"] == []
-
-
-def test_validate_dim_mismatch_errors():
-    v = {**BASE, "LITELLM_EMBEDDING_DIM": "3072"}
-    assert "ERROR" in _levels(validate(v), "DIM")
 
 
 def test_validate_pool_n_temporal_warns_when_below_pool_n():
@@ -222,7 +217,6 @@ LITELLM_MODEL_SMALL=gemma4:e4b
 LITELLM_MODEL_LARGE=gpt-4o-mini
 # ── Vector ──
 MILVUS_DIM=1536
-LITELLM_EMBEDDING_DIM=1536
 NEO4J_PASSWORD=
 """
 

@@ -33,16 +33,14 @@ x-app-env: &app-env
   REDIS_PORT: "6379"
   # ── API + metrics ──
   API_KEYS: ${API_KEYS:-changeme-key}
-  API_HOST: 0.0.0.0
   METRICS_ENABLED: "true"
   METRICS_BIND_ADDRESS: 0.0.0.0:9090
   # ── Models / embeddings — MUST match the external proxy + Milvus.
-  #    EMBEDDING_DIM must equal MILVUS_DIM or Milvus inserts fail. ──
+  #    MILVUS_DIM must equal the embedding model's native dim or inserts fail. ──
   MILVUS_DIM: ${MILVUS_DIM:-1536}
   LITELLM_MODEL_SMALL: ${LITELLM_MODEL_SMALL:-gpt-4o-mini}
   LITELLM_MODEL_LARGE: ${LITELLM_MODEL_LARGE:-gpt-4o-mini}
   LITELLM_EMBEDDING_MODEL: ${LITELLM_EMBEDDING_MODEL:-text-embedding-3-small}
-  LITELLM_EMBEDDING_DIM: ${LITELLM_EMBEDDING_DIM:-1536}
   # ── Concurrency model (K+N): N = max concurrent LLM calls,
   #    K = max in-flight documents (admission, always on). ──
   LLM_POOL_N: ${LLM_POOL_N:-8}
