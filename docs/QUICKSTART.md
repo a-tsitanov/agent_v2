@@ -4,12 +4,16 @@
 
 > TL;DR (всё на дефолтах для локалки):
 > ```bash
-> cp .env.example .env                  # 1. конфиг (отредактируй ключи — см. §2)
-> docker compose up -d                  # 2. инфраструктура (Neo4j/Milvus/Postgres/MinIO/Temporal/LiteLLM)
-> uv run python -m scripts.setup_db     # 3. схемы Postgres + бакет MinIO + search-атрибуты Temporal
-> uv run python -m src.workflow.worker &              # 4. воркер (durable-исполнение)
-> uv run uvicorn src.api.main:app --port 8000 &       # 5. API
+> cp .env.example .env                            # 1. конфиг (отредактируй ключи — см. §2)
+> make up                                         # 2. backends (healthy) + schema init
+> make models                                     # 3. (опц.) префетч reranker-модели (~1 GB BGE)
+> uv run python -m src.workflow.worker &          # 4. воркер (host)
+> uv run uvicorn src.api.main:app --port 8000 &   # 5. API (host)
 > ```
+>
+> `make models` скачивает BGE-reranker (~1 GB) заранее, чтобы первый `/search` не завис на загрузке модели.
+>
+> **Apple Silicon / arm64:** образы `wikibase` и `wdqs` — только amd64. Включи в Docker Desktop «Use Rosetta for x86/amd64 emulation» и выдели Docker ≥ 4–6 GB RAM (Milvus standalone требователен к памяти).
 
 ---
 
@@ -45,8 +49,11 @@ cp .env.example .env
 ## 3. Шаг 2 — поднять инфраструктуру
 
 ```bash
-docker compose up -d
-docker compose ps           # дождись healthy у neo4j / milvus / postgres / minio / temporal / litellm
+make up                     # compose up + schema init (Postgres + MinIO + Temporal attrs) — одна команда
+# или, если нужен полный контроль:
+# docker compose up -d
+# docker compose ps           # дождись healthy у neo4j / milvus / postgres / minio / temporal / litellm
+# make init                   # отдельно инициализировать схемы
 ```
 
 Сервисы и порты:
@@ -69,10 +76,10 @@ docker compose ps           # дождись healthy у neo4j / milvus / postgre
 ## 4. Шаг 3 — инициализировать схемы
 
 ```bash
-uv run python -m scripts.setup_db
+make init
 ```
 
-Создаёт таблицы Postgres (`documents`, `ingest_metrics`), гарантирует бакет MinIO и регистрирует search-атрибуты Temporal. Идемпотентно — безопасно повторять.
+Создаёт таблицы Postgres (`documents`, `ingest_metrics`), гарантирует бакет MinIO и регистрирует search-атрибуты Temporal. Идемпотентно — безопасно повторять. (`make up` уже делает это автоматически; `make init` полезен для повторного прогона без рестарта контейнеров.)
 
 ---
 
@@ -137,16 +144,14 @@ uv run python -m scripts.wipe_db --yes
 Только если нужны wiki-статьи и/или структурный якорь Wikibase:
 
 ```bash
-# Wikibase нужно ~90 сек на первый старт — подними отдельно:
-docker compose up -d wikibase wikibase-mysql
-uv run python -m scripts.setup_wikibase            # bootstrap классов/свойств (идемпотентно)
-
-# создай бот-аккаунт (на docker host, пока wikibase-профиль запущен):
-docker compose --profile wikibase exec wikibase \
-  php /var/www/html/maintenance/run.php createAndPromote --bot --force \
-  "$WIKIBASE_BOT_USER" "$WIKIBASE_BOT_PASSWORD"
+make wiki-setup
+# Одна команда: поднимает wikibase + wikibase-mysql (профиль), создаёт бот-аккаунт
+# внутри контейнера и запускает bootstrap классов/свойств (идемпотентно).
+# Wikibase нужно ~90 сек на первый старт — make wiki-setup ждёт healthy.
 
 uv run python -m scripts.setup_wiki_schedule       # (опц.) Temporal Schedule для авто-свипа редактора
 ```
+
+> **Apple Silicon / arm64:** образы `wikibase` и `wdqs` — только amd64. Убедись, что в Docker Desktop включено «Use Rosetta for x86/amd64 emulation», иначе контейнеры не стартуют.
 
 Детали: [`runbook/wikibase.md`](runbook/wikibase.md), [`runbook/wiki-editor.md`](runbook/wiki-editor.md).
