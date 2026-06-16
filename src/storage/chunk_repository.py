@@ -104,6 +104,18 @@ class ChunkRepository:
     def _query_chunks(
         self, doc_id: str, limit: int, offset: int,
     ) -> list[dict[str, Any]]:
+        # `doc_id` is client-controlled (MCP-2 read_full_document /
+        # get_chunks_by_doc_id tools pass it through).  It is
+        # interpolated into a Milvus filter expression below, so it MUST
+        # be a well-formed UUID — otherwise an attacker could inject
+        # filter syntax (e.g. `" or chunk_id != "`).  Mirror the guard
+        # in `aget_document_path`.  `_escape` stays as defense in depth.
+        try:
+            uuid.UUID(str(doc_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError(
+                f"doc_id must be a valid UUID, got: {doc_id!r}"
+            ) from exc
         # LlamaIndex's MilvusVectorStore stores chunk text under
         # `text` and metadata fields are flat top-level columns when
         # the schema was created with metadata_field_names; with the

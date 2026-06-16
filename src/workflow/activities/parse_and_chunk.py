@@ -52,9 +52,30 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
     activity.logger.info("parse_and_chunk read  docs=%d", len(docs))
     activity.heartbeat({"stage": "read", "docs": len(docs)})
 
+    # Force the source Document id to the *application* doc_id (Postgres
+    # documents.id / ingest job id).  Every chunk inherits this as its
+    # `ref_doc_id`, and MilvusVectorStore writes ref_doc_id into the
+    # scalar `doc_id` column — so `get_chunks_by_doc_id(app_doc_id)`
+    # actually matches.  Without this the scalar holds LlamaIndex's
+    # auto-generated Document uuid and the lookup returns 0 rows.
+    # (KG provenance keys on per-chunk node_id / entity ids, not the
+    # parent Document id_, so this is safe.)
+    for d in docs:
+        d.id_ = ctx.doc_id
+
     nodes = await pipeline.arun(documents=docs)
     activity.logger.info("parse_and_chunk pipeline  chunks=%d", len(nodes))
     activity.heartbeat({"stage": "pipeline", "chunks": len(nodes)})
+
+    # Stamp source-order position + the app doc_id on each chunk so the
+    # chunk store can return them ordered and queryable by doc_id.  The
+    # splitter emits nodes in document order; enumerate preserves it.
+    for i, n in enumerate(nodes):
+        md = getattr(n, "metadata", None)
+        if md is None:
+            md = n.metadata = {}
+        md["position"] = i
+        md["doc_id"] = ctx.doc_id
 
     # Scrub doc-translation scaffolding so it never reaches downstream
     # stores.
