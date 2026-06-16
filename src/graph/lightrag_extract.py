@@ -58,6 +58,30 @@ from src.graph.lightrag_prompts import (
     TUPLE_DELIM,
     render_examples,
 )
+from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
+
+
+def _extraction_text(node: BaseNode) -> str:
+    """Select the text to feed the KG-extraction LLM for *node*.
+
+    Priority: ``translated_text`` metadata (Russian, set by
+    ``TranslateToRussianTransform``) → ``get_content(MetadataMode.LLM)``
+    (raw chunk text + LLM-visible metadata, including the augment block).
+
+    When ``translated_text`` is used, the canonical-identifier augment
+    block stored in ``_AUGMENT_METADATA_KEY`` is appended if present so
+    the KG extractor receives the canonical nudge on the translated path
+    as well.  A substring guard prevents double-inclusion on the
+    ``MetadataMode.LLM`` path (which already carries the augment).
+    """
+    chunk_text = (
+        (node.metadata or {}).get("translated_text")
+        or node.get_content(metadata_mode=MetadataMode.LLM)
+    )
+    augment = (node.metadata or {}).get(_AUGMENT_METADATA_KEY) or ""
+    if augment and augment not in chunk_text:
+        chunk_text = chunk_text + "\n\n" + augment
+    return chunk_text
 
 
 def _default_entity_types() -> list[str]:
@@ -128,14 +152,7 @@ class LightRAGExtractor(TransformComponent):
     # ── per-chunk extract + gleaning ─────────────────────────────────
 
     async def _aextract(self, node: BaseNode) -> BaseNode:
-        # Prefer the translated text (Russian) when the ingest
-        # pipeline ran `TranslateToRussianTransform`; fall back to
-        # raw chunk text when translation was skipped (config off
-        # or chunk already Russian and pipeline noop'd).
-        chunk_text = (
-            (node.metadata or {}).get("translated_text")
-            or node.get_content(metadata_mode=MetadataMode.LLM)
-        )
+        chunk_text = _extraction_text(node)
         entity_types_str = ", ".join(self.entity_types)
         examples_rendered = render_examples(
             self.examples,

@@ -13,8 +13,9 @@ from llama_index.core.graph_stores.types import (
 )
 from llama_index.core.schema import TextNode
 
-from src.graph.lightrag_extract import LightRAGExtractor
+from src.graph.lightrag_extract import LightRAGExtractor, _extraction_text
 from src.graph.lightrag_prompts import COMPLETE_DELIM, TUPLE_DELIM
+from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
 
 
 # ── stub LLM ────────────────────────────────────────────────────────
@@ -252,3 +253,56 @@ async def test_multi_chunk_parallel_extraction() -> None:
     out = await extractor.acall(nodes)
     all_names = {e.name for n in out for e in n.metadata[KG_NODES_KEY]}
     assert all_names == {"E0", "E1", "E2"}
+
+
+# ── _extraction_text: canonical augment on both paths ───────────────
+
+
+def test_extraction_text_appends_augment_on_translated_path() -> None:
+    """When translated_text is set, the augment block must be appended
+    even though it is absent from translated_text itself.  This ensures
+    the KG-extraction LLM receives the canonical-identifier nudge on the
+    common (translated) code path."""
+    augment = "Канонические идентификаторы: +79001234567 (PHONE)"
+    node = TextNode(id_="t1", text="ORIGINAL ENGLISH TEXT")
+    node.metadata["translated_text"] = "RU_TRANSLATED_BODY"
+    node.metadata[_AUGMENT_METADATA_KEY] = augment
+
+    result = _extraction_text(node)
+
+    assert "RU_TRANSLATED_BODY" in result
+    assert augment in result
+    assert "ORIGINAL ENGLISH TEXT" not in result
+
+
+def test_extraction_text_no_duplication_on_llm_metadata_path() -> None:
+    """When there is no translated_text, _extraction_text falls back to
+    get_content(MetadataMode.LLM) — which already includes the augment
+    block via llm-visible metadata.  The augment must appear exactly once
+    (no double-inclusion)."""
+    from llama_index.core.schema import MetadataMode
+
+    augment = "Канонические идентификаторы: 7707083893 (INN)"
+    node = TextNode(id_="t2", text="some chunk text")
+    node.metadata[_AUGMENT_METADATA_KEY] = augment
+    # Make the augment appear in MetadataMode.LLM output by NOT adding it to
+    # excluded_llm_metadata_keys (mirroring production behaviour from
+    # IdentifierCanonicalizationTransform._exclude_augment_from_embed).
+    # Verify the LLM content already contains the augment before asserting
+    # that _extraction_text doesn't double-include it.
+    llm_content = node.get_content(metadata_mode=MetadataMode.LLM)
+    assert augment in llm_content, (
+        "pre-condition: LLM metadata view must already include the augment"
+    )
+
+    result = _extraction_text(node)
+
+    assert result.count(augment) == 1
+
+
+def test_extraction_text_no_augment_unchanged() -> None:
+    """When no augment key is present, output equals the base chunk text."""
+    node = TextNode(id_="t3", text="plain chunk")
+    result = _extraction_text(node)
+    assert "plain chunk" in result
+    assert _AUGMENT_METADATA_KEY not in result

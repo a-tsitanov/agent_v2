@@ -16,6 +16,7 @@ from src.workflow.staging import build_staging_store
 
 _NEO4J_UNSAFE_METADATA_KEYS: frozenset[str] = frozenset({
     "canonical_identifiers",
+    "canonical_identifiers_augment",
 })
 _PRESERVE_METADATA_KEYS: frozenset[str] = frozenset({
     KG_NODES_KEY, KG_RELATIONS_KEY,
