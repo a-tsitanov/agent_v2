@@ -297,6 +297,10 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: ${TEMPORAL_UI_CORS:-http://localhost:3000}
+      # Keep the CSRF cookie Secure (default false) when the UI is served over
+      # HTTPS; set TEMPORAL_UI_CSRF_COOKIE_INSECURE=true only if reached over
+      # plain HTTP (else POST actions fail with "CSRF token missing in headers").
+      TEMPORAL_CSRF_COOKIE_INSECURE: ${TEMPORAL_UI_CSRF_COOKIE_INSECURE:-false}
     ports:
       - "${TEMPORAL_UI_PORT:-8080}:8080"
     depends_on:
