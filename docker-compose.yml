@@ -320,6 +320,15 @@ services:
     build: {context: ., dockerfile: Dockerfile}
     command: ["python", "-m", "scripts.setup_db"]
     env_file: [.env]
+    # The host-oriented `.env` uses localhost for backends (dev app runs on
+    # the host); inside this container they must be the compose-DNS names.
+    # `environment` overrides `env_file`.
+    environment:
+      POSTGRES_HOST: postgres
+      MILVUS_HOST: milvus
+      MINIO_ENDPOINT: minio:9000
+      NEO4J_URI: bolt://neo4j:7687
+      TEMPORAL_HOST: temporal
     restart: "no"
     profiles: ["init"]
     depends_on:
