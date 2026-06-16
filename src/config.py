@@ -79,7 +79,7 @@ class MilvusSettings(BaseSettings):
     port: int = 19530
     collection: str = "kb_llamaindex"
     timeout_s: float = 10.0
-    dim: int = 768
+    dim: int = 1536
 
     # --- ANN index (scale) -------------------------------------------
     # The chunk collection's vector index.  llama-index's MilvusVectorStore
@@ -164,7 +164,7 @@ class LiteLLMSettings(BaseSettings):
     # a model.  Empty ⇒ callers fall back to ``model_small`` via
     # ``effective_base``.  Remove once all readers use the tier fields.
     llm_model: str = ""
-    embedding_model: str = "nomic-embed-text"
+    embedding_model: str = "text-embedding-3-small"
     timeout_s: float = 900.0
     max_retries: int = 2
 
