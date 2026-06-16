@@ -234,6 +234,10 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
+      # Served over plain HTTP locally → the CSRF cookie must NOT be Secure,
+      # else the browser drops it and POST actions (terminate/signal) fail
+      # with "CSRF token missing in headers".
+      TEMPORAL_CSRF_COOKIE_INSECURE: "true"
     ports:
       - "8080:8080"
     depends_on:
