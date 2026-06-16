@@ -200,6 +200,15 @@ async def _run_one(group: str) -> None:
     from src.observability.litellm_models import validate_litellm_models
     validate_litellm_models(source=f"worker:{group}")
 
+    if group == "main":
+        from src.config import settings as _settings
+        problems = _settings.preflight(_settings)
+        if problems:
+            msg = "preflight: " + "; ".join(problems)
+            if _settings.api.env == "production":
+                raise RuntimeError(msg)
+            logger.warning(msg)
+
     runtime = _build_runtime(group)
     client = await Client.connect(
         settings.temporal.target,

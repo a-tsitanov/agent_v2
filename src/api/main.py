@@ -41,6 +41,13 @@ async def lifespan(_: FastAPI):
     # blocks startup) — instead of an opaque 500 mid-ingest.
     from src.observability.litellm_models import validate_litellm_models
     validate_litellm_models(source="api")
+    from src.config import settings as _settings
+    problems = _settings.preflight(_settings)
+    if problems:
+        msg = "preflight found config problems:\n  - " + "\n  - ".join(problems)
+        if _settings.api.env == "production":
+            raise RuntimeError(msg)
+        logger.warning(msg)
     try:
         yield
     finally:

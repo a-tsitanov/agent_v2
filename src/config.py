@@ -660,6 +660,12 @@ class IngestAdmissionSettings(BaseSettings):
 
 # ── composed top-level settings ──────────────────────────────────────
 
+# Known placeholder / default secrets that must NOT appear in production.
+_PREFLIGHT_PLACEHOLDER_SECRETS: frozenset[str] = frozenset({
+    "dev-local-key", "changeme", "change-me", "postgres", "minioadmin",
+    "changemebot", "botpass", "sk-litellm-stub",
+})
+
 
 class Settings(BaseSettings):
     """Single import surface for the rest of the codebase.
@@ -738,6 +744,48 @@ class Settings(BaseSettings):
     @cached_property
     def analytics(self) -> AnalyticsSettings:
         return AnalyticsSettings()
+
+    @staticmethod
+    def preflight(s: "Settings") -> list[str]:
+        """Return a list of actionable config problems (empty == OK).
+
+        Hard problems matter in production (``API_ENV=production``); in dev
+        they're advisory.  Callers decide whether to exit.
+        """
+        problems: list[str] = []
+        prod = s.api.env == "production"
+
+        if prod:
+            checks = {
+                "API_KEYS": s.api.keys,
+                "NEO4J_PASSWORD": s.neo4j.password.get_secret_value(),
+                "POSTGRES_PASSWORD": s.postgres.password.get_secret_value(),
+                "MINIO_ACCESS_KEY": s.minio.access_key.get_secret_value(),
+            }
+            for name, val in checks.items():
+                if val in _PREFLIGHT_PLACEHOLDER_SECRETS:
+                    problems.append(
+                        f"{name} is a placeholder default ({val!r}); set a real "
+                        f"secret in production.")
+
+        n = s.llm_pool.n
+        if s.temporal.llm_activity_concurrency < n:
+            problems.append(
+                f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY "
+                f"({s.temporal.llm_activity_concurrency}) < LLM_POOL_N ({n}); "
+                f"the Temporal cap must be >= N so the pool is the throttle.")
+        if s.temporal.merge_activity_concurrency < n:
+            problems.append(
+                f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY "
+                f"({s.temporal.merge_activity_concurrency}) < LLM_POOL_N ({n}).")
+
+        if s.wiki.enabled or s.wikibase.enabled:
+            bot_pw = s.wikibase.bot_password.get_secret_value()
+            if len(bot_pw) < 8:
+                problems.append(
+                    "WIKIBASE_BOT_PASSWORD must be >= 8 chars when wiki/wikibase "
+                    "is enabled (setup_wikibase refuses to provision the bot).")
+        return problems
 
 
 settings = Settings()
