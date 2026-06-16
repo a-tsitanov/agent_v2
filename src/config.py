@@ -756,11 +756,16 @@ class Settings(BaseSettings):
         prod = s.api.env == "production"
 
         if prod:
+            api_keys = [k.strip() for k in s.api.keys.split(",") if k.strip()]
+            if any(k in _PREFLIGHT_PLACEHOLDER_SECRETS for k in api_keys) or not api_keys:
+                problems.append(
+                    "API_KEYS contains a placeholder/default key; set real "
+                    "key(s) in production.")
             checks = {
-                "API_KEYS": s.api.keys,
                 "NEO4J_PASSWORD": s.neo4j.password.get_secret_value(),
                 "POSTGRES_PASSWORD": s.postgres.password.get_secret_value(),
                 "MINIO_ACCESS_KEY": s.minio.access_key.get_secret_value(),
+                "MINIO_SECRET_KEY": s.minio.secret_key.get_secret_value(),
             }
             for name, val in checks.items():
                 if val in _PREFLIGHT_PLACEHOLDER_SECRETS:
