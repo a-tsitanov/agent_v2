@@ -130,6 +130,87 @@ def is_secret(key: str) -> bool:
     return any(m in k for m in _SECRET_MARKERS)
 
 
+@dataclass
+class EnvVar:
+    env: str
+    default: str       # rendered default ("" for secrets / None / undefined)
+    secret: bool
+    group: str         # settings class name (for grouping)
+
+
+def _render_default(value) -> str:
+    import json
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def iter_app_env_vars() -> list[EnvVar]:
+    """Every env var the app reads, from config.py BaseSettings classes.
+
+    Env name = env_prefix + UPPER(field), or the field's explicit
+    ``validation_alias`` (HFSettings).  Secrets are flagged and emitted with
+    an empty default (never a real secret).
+    """
+    import importlib
+    import inspect
+    from pydantic import SecretStr
+    from pydantic_settings import BaseSettings
+    from pydantic_core import PydanticUndefined
+
+    cfg = importlib.import_module("src.config")
+    rows: list[EnvVar] = []
+    seen: set[str] = set()
+    for name, cls in vars(cfg).items():
+        if not (inspect.isclass(cls) and issubclass(cls, BaseSettings)):
+            continue
+        if cls is BaseSettings or name == "Settings":
+            continue
+        prefix = cls.model_config.get("env_prefix", "") or ""
+        for fname, fld in cls.model_fields.items():
+            alias = getattr(fld, "validation_alias", None)
+            env = (alias if isinstance(alias, str) else (prefix + fname)).upper()
+            if env in seen:
+                continue
+            seen.add(env)
+            if fld.default is not PydanticUndefined and fld.default is not None:
+                raw = fld.default
+            elif fld.default_factory is not None:
+                raw = fld.default_factory()
+            else:
+                raw = None
+            is_sec = isinstance(raw, SecretStr) or is_secret(env)
+            default = "" if (is_sec or isinstance(raw, SecretStr)) else _render_default(raw)
+            rows.append(EnvVar(env=env, default=default, secret=is_sec, group=name))
+    rows.sort(key=lambda r: (r.group, r.env))
+    return rows
+
+
+_REFERENCE_HEADER = (
+    "# Generated from src/config.py by `python -m scripts.make_env --reference`.\n"
+    "# DO NOT EDIT BY HAND. Exhaustive catalog of every app env var.\n"
+    "# Secrets show an empty value (set them yourself).\n"
+)
+
+
+def build_reference() -> str:
+    """Render the exhaustive .env.reference from the config.py catalog."""
+    rows = iter_app_env_vars()
+    out = [_REFERENCE_HEADER.rstrip("\n")]
+    group = None
+    for r in rows:
+        if r.group != group:
+            group = r.group
+            out.append(f"\n# ── {group} ──")
+        suffix = "   # secret" if r.secret else ""
+        out.append(f"{r.env}={r.default}{suffix}")
+    return "\n".join(out) + "\n"
+
+
 def gen_secret(key: str) -> str:
     """Generate a sensible secret for `key` (opt-in per field)."""
     k = key.upper()
@@ -280,7 +361,35 @@ def main(argv: list[str] | None = None) -> int:
                    help="write despite ERROR-level validation")
     p.add_argument("--no-merge", action="store_true",
                    help="ignore an existing .env")
+    p.add_argument("--reference", action="store_true",
+                   help="(re)generate .env.reference from config.py and exit")
+    p.add_argument("--check", action="store_true",
+                   help="verify .env.reference is current (+ report .env.example coverage); exit 1 on stale reference")
     args = p.parse_args(argv)
+
+    ref_path = Path(".env.reference")
+    if args.reference:
+        ref_path.write_text(build_reference())
+        print(f"wrote {ref_path}")
+        return 0
+    if args.check:
+        current = build_reference()
+        on_disk = ref_path.read_text() if ref_path.exists() else ""
+        stale = current != on_disk
+        if stale:
+            print("  [DRIFT] .env.reference is stale — run `python -m scripts.make_env --reference`")
+        # coverage is INFORMATIONAL (do not fail on it in this batch)
+        example_keys = {ln.key for ln in parse_example(Path(args.example).read_text())
+                        if isinstance(ln, KV)}
+        missing = sorted({r.env for r in iter_app_env_vars()} - example_keys)
+        if missing:
+            print(f"  [INFO] {len(missing)} app var(s) not in {args.example} "
+                  f"(documented in .env.reference): {', '.join(missing[:8])}"
+                  + (" ..." if len(missing) > 8 else ""))
+        if stale:
+            return 1
+        print("env check: OK")
+        return 0
 
     example_path = Path(args.example)
     out_path = Path(args.out)
