@@ -40,8 +40,26 @@ from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflo
 router = APIRouter(tags=["search"])
 
 
+_RESERVED_FILTER_FIELDS = (
+    "department", "user_id", "doc_type_filter", "created_after", "created_before",
+)
+
+
+def _warn_reserved_filters(req: SearchRequest) -> None:
+    """Log loudly when a client sends a reserved (unimplemented) filter, so a
+    silently-dropped ``department`` etc. can't be mistaken for real scoping
+    (it is NOT an access boundary).  See audit #11."""
+    used = [f for f in _RESERVED_FILTER_FIELDS if getattr(req, f, None) is not None]
+    if used:
+        logger.warning(
+            "search request set reserved filter(s) {f} — NOT applied "
+            "(no scoping performed)", f=used,
+        )
+
+
 def _local_params(req: SearchRequest) -> OrchestratorParams:
     """Build the local plan-execute workflow input from the request."""
+    _warn_reserved_filters(req)
     return OrchestratorParams(
         query=req.query,
         max_subqueries=settings.agent.max_subqueries,
@@ -59,6 +77,7 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
 
 def _global_params(req: SearchRequest, *, drift_mode: bool = False) -> GlobalSearchParams:
     """Build the GraphRAG global map-reduce workflow input."""
+    _warn_reserved_filters(req)
     return GlobalSearchParams(
         query=req.query,
         level=0,
