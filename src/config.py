@@ -426,7 +426,10 @@ class WikibaseSettings(BaseSettings):
     enabled: bool = False
     base_url: str = "http://localhost:8181"
     bot_user: str = "KbBot"
-    bot_password: SecretStr = SecretStr("botpass")
+    # MUST be >= 8 chars: scripts/setup_wikibase.py refuses to provision the
+    # bot (createAndPromote) below MediaWiki's minimum, so a too-short default
+    # silently breaks the whole Wikibase push path.  Override in prod.
+    bot_password: SecretStr = SecretStr("changemebot")
     language: str = "ru"
     timeout_s: float = 30.0
 

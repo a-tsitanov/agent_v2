@@ -339,6 +339,9 @@ services:
       MW_ADMIN_EMAIL: admin@example.invalid
       MW_WG_SECRET_KEY: ${WIKIBASE_SECRET_KEY:-deadbeefdeadbeefdeadbeefdeadbeef}
       MW_WG_DEFAULT_SKIN: vector
+      # Content language — match WIKIBASE_LANGUAGE the app uses (ru).  The
+      # image defaults to 'en' if unset.
+      MW_SITE_LANG: ${WIKIBASE_LANGUAGE:-ru}
       DB_USER: wikiuser
       DB_PASS: ${WIKIBASE_DB_PASSWORD:-sqlpass}
       DB_NAME: my_wiki
