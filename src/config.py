@@ -55,8 +55,7 @@ class ApiSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="API_", env_file=".env", extra="ignore")
 
-    host: str = "0.0.0.0"
-    port: int = 8000
+    # NB: API host/port are set on the uvicorn command line, not here.
     env: str = "development"
     log_level: str = "info"
     log_json: bool = False
@@ -113,7 +112,6 @@ class Neo4jSettings(BaseSettings):
     user: str = "neo4j"
     password: SecretStr = SecretStr("changeme")
     database: str = "neo4j"
-    timeout_s: float = 30.0
 
 
 class PostgresSettings(BaseSettings):
@@ -167,7 +165,6 @@ class LiteLLMSettings(BaseSettings):
     # ``effective_base``.  Remove once all readers use the tier fields.
     llm_model: str = ""
     embedding_model: str = "nomic-embed-text"
-    embedding_dim: int = 768
     timeout_s: float = 900.0
     max_retries: int = 2
 
@@ -317,7 +314,6 @@ class IngestionSettings(BaseSettings):
     chunk_size: int = 512
     chunk_overlap: int = 50
     breakpoint_percentile: int = 95
-    batch_size: int = 10
     cache_dir: str = "/app/data/ingestion_cache"
     # When True, ingest pipeline runs a per-chunk LLM translation
     # step that fills node.metadata["translated_text"] with a
@@ -426,7 +422,10 @@ class WikibaseSettings(BaseSettings):
     enabled: bool = False
     base_url: str = "http://localhost:8181"
     bot_user: str = "KbBot"
-    bot_password: SecretStr = SecretStr("botpass")
+    # MUST be >= 8 chars: scripts/setup_wikibase.py refuses to provision the
+    # bot (createAndPromote) below MediaWiki's minimum, so a too-short default
+    # silently breaks the whole Wikibase push path.  Override in prod.
+    bot_password: SecretStr = SecretStr("changemebot")
     language: str = "ru"
     timeout_s: float = 30.0
 
@@ -460,11 +459,10 @@ class WikiSettings(BaseSettings):
 
 
 class AgentSettings(BaseSettings):
-    """Knobs for the agentic search endpoints (`/agent`, `/selfrag`)."""
+    """Knobs for the search endpoints (`/api/v1/search/*`)."""
 
     model_config = SettingsConfigDict(env_prefix="AGENT_", env_file=".env", extra="ignore")
 
-    top_k: int = 10
     # Conversation history (client-managed multi-turn): when enabled, prior
     # turns supplied on the request are used to contextualise the query into
     # a standalone form before retrieval.  Empty history = single-shot.
@@ -499,19 +497,6 @@ class AgentSettings(BaseSettings):
     # Neighbours fetched per new entity from the ER vector index when
     # native kNN is on.
     er_vector_knn_k: int = Field(default=20, ge=1, le=100)
-    # Process-wide concurrency cap for LLM calls (search-side).
-    # Applied via BoundedLLM wrapper in DI — all callers (ReAct, Self-RAG,
-    # graph_search's LLMSynonymRetriever, judge) share this gate.
-    # Bump up when LLM proxy / OpenAI quotas allow; default 8 leaves
-    # headroom for ingest's pool-governed LLM activity budget.
-    # DEPRECATED: no longer read by production paths — LLM concurrency is
-    # now owned by LLMPool (see LLMPoolSettings / src/retrieval/llm_pool.py).
-    # Kept to avoid breaking envs that still set AGENT_LLM_MAX_CONCURRENT.
-    llm_max_concurrent: int = Field(default=8, ge=1, le=64)
-    # Hard cap (chars) on any single observation written into the
-    # reasoning history — backstop even when distillation is off or the
-    # distilled text is still long.
-    observation_max_chars: int = Field(default=6000, ge=500)
     # Pre-submit coverage check: when the agent picks submit_answer, an
     # LLM first judges whether the gathered evidence fully covers the
     # question; if not, the named gap is fed back and one more retrieval
@@ -561,13 +546,6 @@ class AgentSettings(BaseSettings):
     # from the LlamaIndex default so a named entity isn't ranked out of the
     # result set on a large graph.
     graph_similarity_top_k: int = Field(default=20, ge=1, le=100)
-    # Canonical entity linking (Task 6): when enabled, ingest resolves
-    # each mention to an existing Wikibase QID via exact-alias →
-    # embedding-kNN → optional LLM verify before deciding to mint a new
-    # item (see `src/graph/canonical_linker.py`).  Default OFF — the
-    # linker + alias storage ship as building blocks and are NOT yet
-    # wired into the ingest activity.
-    canonical_linker_enabled: bool = False
     # Community build: how many Leiden dendrogram levels to materialise.
     # 1 = single-level (today's cost/behaviour); raise to build the
     # hierarchy (offline, additive). Safety-capped.
@@ -664,9 +642,6 @@ class ClassifierSettings(BaseSettings):
     )
     preview_chars: int = 4000
     llm_enabled: bool = True
-    # Bumped whenever the prompt changes; snapshotted into IngestParams at
-    # submit so a replay can't silently re-decide with a newer prompt.
-    prompt_version: str = "v1"
 
 
 class IngestAdmissionSettings(BaseSettings):

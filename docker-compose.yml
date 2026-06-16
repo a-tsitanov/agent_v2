@@ -26,8 +26,12 @@ services:
   minio:
     image: minio/minio:latest
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      # Current MinIO honors MINIO_ROOT_USER/PASSWORD; the old
+      # MINIO_ACCESS_KEY/SECRET_KEY are ignored → rotated creds were silently
+      # dropped (MinIO stayed on default minioadmin).  Source value from the
+      # same ${MINIO_ACCESS_KEY} the app/Milvus use so all three match.
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - minio_data:/data
     command: minio server /data --console-address ":9001"
@@ -48,6 +52,12 @@ services:
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
+      # Milvus must authenticate to MinIO with the SAME creds (else, after a
+      # MinIO cred rotation, rootcoord/datacoord crash on object-storage init
+      # and never register → "failed to get client address: find no available
+      # rootcoord" loops forever).  Env names per milvus.yaml.
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
@@ -131,6 +141,9 @@ services:
       MW_ADMIN_EMAIL: admin@example.invalid
       MW_WG_SECRET_KEY: ${WIKIBASE_SECRET_KEY:-deadbeefdeadbeefdeadbeefdeadbeef}
       MW_WG_DEFAULT_SKIN: vector
+      # Content language — match WIKIBASE_LANGUAGE the app uses (ru).  The
+      # image defaults to 'en' if unset.
+      MW_SITE_LANG: ${WIKIBASE_LANGUAGE:-ru}
       DB_USER: wikiuser
       DB_PASS: ${WIKIBASE_DB_PASSWORD:-sqlpass}
       DB_NAME: my_wiki

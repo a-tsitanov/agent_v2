@@ -33,16 +33,14 @@ x-app-env: &app-env
   REDIS_PORT: "6379"
   # ── API + metrics ──
   API_KEYS: ${API_KEYS:-changeme-key}
-  API_HOST: 0.0.0.0
   METRICS_ENABLED: "true"
   METRICS_BIND_ADDRESS: 0.0.0.0:9090
   # ── Models / embeddings — MUST match the external proxy + Milvus.
-  #    EMBEDDING_DIM must equal MILVUS_DIM or Milvus inserts fail. ──
+  #    MILVUS_DIM must equal the embedding model's native dim or inserts fail. ──
   MILVUS_DIM: ${MILVUS_DIM:-1536}
   LITELLM_MODEL_SMALL: ${LITELLM_MODEL_SMALL:-gpt-4o-mini}
   LITELLM_MODEL_LARGE: ${LITELLM_MODEL_LARGE:-gpt-4o-mini}
   LITELLM_EMBEDDING_MODEL: ${LITELLM_EMBEDDING_MODEL:-text-embedding-3-small}
-  LITELLM_EMBEDDING_DIM: ${LITELLM_EMBEDDING_DIM:-1536}
   # ── Concurrency model (K+N): N = max concurrent LLM calls,
   #    K = max in-flight documents (admission, always on). ──
   LLM_POOL_N: ${LLM_POOL_N:-8}
@@ -170,8 +168,12 @@ services:
   minio:
     image: minio/minio:latest
     environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      # Current MinIO honors MINIO_ROOT_USER/PASSWORD; the old
+      # MINIO_ACCESS_KEY/SECRET_KEY are ignored → a rotated prod cred was
+      # silently dropped (MinIO stayed on default minioadmin), then the app
+      # and Milvus could not authenticate.
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - minio_data:/data
     command: minio server /data --console-address ":9001"
@@ -191,6 +193,12 @@ services:
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
+      # Milvus must authenticate to MinIO with the SAME creds (else, after a
+      # MinIO cred rotation, rootcoord/datacoord crash on object-storage init
+      # and never register → "failed to get client address: find no available
+      # rootcoord" loops forever).  Env names per milvus.yaml.
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - milvus_data:/var/lib/milvus
     depends_on:
@@ -339,6 +347,9 @@ services:
       MW_ADMIN_EMAIL: admin@example.invalid
       MW_WG_SECRET_KEY: ${WIKIBASE_SECRET_KEY:-deadbeefdeadbeefdeadbeefdeadbeef}
       MW_WG_DEFAULT_SKIN: vector
+      # Content language — match WIKIBASE_LANGUAGE the app uses (ru).  The
+      # image defaults to 'en' if unset.
+      MW_SITE_LANG: ${WIKIBASE_LANGUAGE:-ru}
       DB_USER: wikiuser
       DB_PASS: ${WIKIBASE_DB_PASSWORD:-sqlpass}
       DB_NAME: my_wiki

@@ -158,12 +158,6 @@ def validate(values: dict[str, str]) -> list[Issue]:
     """Cross-field checks; returns ERROR/WARN issues (empty == clean)."""
     issues: list[Issue] = []
 
-    if "MILVUS_DIM" in values and "LITELLM_EMBEDDING_DIM" in values:
-        if _int(values, "MILVUS_DIM") != _int(values, "LITELLM_EMBEDDING_DIM"):
-            issues.append(Issue("ERROR",
-                "MILVUS_DIM must equal LITELLM_EMBEDDING_DIM "
-                f"({values['MILVUS_DIM']} != {values['LITELLM_EMBEDDING_DIM']})"))
-
     # K + N pool model: N = LLM_POOL_N (global semaphore), K = INGEST_ADMISSION_MAX_INFLIGHT
     pool_n = _int(values, "LLM_POOL_N", 8)
     llm_cap = _int(values, "TEMPORAL_LLM_ACTIVITY_CONCURRENCY", 0)
