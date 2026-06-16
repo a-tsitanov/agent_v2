@@ -208,6 +208,24 @@ def test_write_env_no_backup_when_absent(tmp_path):
     assert not (tmp_path / ".env.bak").exists()
 
 
+from scripts.make_env import iter_app_env_vars
+
+
+def test_iter_app_env_vars_covers_known_fields():
+    rows = iter_app_env_vars()
+    envs = {r.env for r in rows}
+    assert "MILVUS_DIM" in envs
+    assert "LLM_POOL_N" in envs
+    assert "TEMPORAL_LLM_ACTIVITY_CONCURRENCY" in envs
+    assert "WIKI_ENABLED" in envs
+    assert "HF_OFFLINE" in envs          # validation_alias path (no prefix)
+    by = {r.env: r for r in rows}
+    assert by["NEO4J_PASSWORD"].secret is True
+    assert by["NEO4J_PASSWORD"].default == ""   # secrets never emit a real default
+    assert "AGENT_TOP_K" not in envs     # removed dead field stays gone
+    assert "API_HOST" not in envs
+
+
 from scripts.make_env import main
 
 
