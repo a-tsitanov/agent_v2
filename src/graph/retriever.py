@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field
+from datetime import date
 
 from llama_index.core import PropertyGraphIndex
 from llama_index.core.schema import NodeWithScore
@@ -37,6 +38,42 @@ GRAPH_WALK_EDGE_CAP = 100
 # many triplet-hops of neighbours ``aretrieve`` pulls around each matched
 # entity). Bounds rel-map blow-up the same way the walk caps bound awalk.
 GRAPH_PATH_DEPTH_MAX = 3
+
+# ── relation polarity / temporal validity filtering (#8) ─────────────
+# merge.py stores a logical ``polarity`` (majority vote) and an opaque ISO
+# validity window (``valid_from`` / ``valid_to``) on each relationship.
+# lightrag_parse normalises polarity to exactly one of these three values;
+# anything missing/unrecognised reads as "affirmed". Edges in
+# EXCLUDED_POLARITIES are dropped at retrieval; 'uncertain' is KEPT by
+# default (it is a hedge, not a denial). Override the set here to change.
+EXCLUDED_POLARITIES = frozenset({"negated"})
+
+
+def _relation_is_live(rel: dict, *, now_iso: str) -> bool:
+    """True if a walk-relation dict should be surfaced to the agent.
+
+    Drops edges the source text NEGATES (``polarity`` in
+    ``EXCLUDED_POLARITIES``) and edges whose ``valid_to`` is strictly
+    before ``now_iso`` (expired). NULL/missing polarity ⇒ affirmed; NULL
+    ``valid_to`` ⇒ never-expiring; legacy edges lacking both props pass.
+
+    Temporal compare is lexicographic on ISO strings, which is correct for
+    same-shaped ISO dates ("2020" < "2026-06-16", "2020-01-01" <
+    "2026-06-16"). Mixed precision compares by common prefix, which keeps
+    a year-only ``valid_to`` of a past year correctly expired.
+    """
+    polarity = rel.get("polarity")
+    if polarity is not None and str(polarity).strip().lower() in EXCLUDED_POLARITIES:
+        return False
+    valid_to = rel.get("valid_to")
+    if valid_to:
+        # Compare on the overlapping prefix length so "2020" vs
+        # "2026-06-16" doesn't mis-rank on length.
+        vt = str(valid_to)
+        cmp = now_iso[: len(vt)]
+        if vt < cmp:
+            return False
+    return True
 
 
 @dataclass
@@ -73,7 +110,10 @@ RETURN
     [rel IN rels | {{
         src: startNode(rel).name,
         tgt: endNode(rel).name,
-        label: type(rel)
+        label: type(rel),
+        polarity: rel.polarity,
+        valid_from: rel.valid_from,
+        valid_to: rel.valid_to
     }}] AS relations
 """
 
@@ -94,7 +134,8 @@ RETURN
     [l IN labels(m) WHERE l <> '__Entity__' AND l <> '__Node__'] AS m_labels,
     coalesce(m.description, '') AS m_description,
     [rel IN r | {{src: startNode(rel).name, tgt: endNode(rel).name,
-                  label: type(rel)}}] AS rels
+                  label: type(rel), polarity: rel.polarity,
+                  valid_from: rel.valid_from, valid_to: rel.valid_to}}] AS rels
 """
 
 
@@ -137,11 +178,16 @@ class GraphRetriever:
         similarity_top_k: int = 10,
         path_depth: int = 1,
         include_text: bool = True,
+        filter_polarity_temporal: bool = True,
     ) -> None:
         self._pg_index = pg_index
         self._similarity_top_k = similarity_top_k
         self._include_text = include_text
         self._default_path_depth = path_depth
+        # #8: drop negated / expired relations from awalk results. Resolved
+        # at construction (activity-runtime code) so it's snapshot-stable
+        # for the life of the retriever; opt-out via AgentSettings.
+        self._filter_polarity_temporal = filter_polarity_temporal
         self._retriever = pg_index.as_retriever(
             similarity_top_k=similarity_top_k,
             path_depth=path_depth,
@@ -311,8 +357,28 @@ class GraphRetriever:
         out.entities = _dedupe_entities(out.entities)
         return out
 
-    @staticmethod
-    def _map_walk_rows(rows: list[dict] | None) -> RoundGraphData:
+    def _map_rel(self, rel: dict) -> dict | None:
+        """Map one walk-relation dict → mapped row, or ``None`` if it is
+        filtered out (negated / expired) and filtering is enabled.
+
+        Exposes ``polarity`` / ``valid_from`` / ``valid_to`` on the kept
+        rows so downstream can still reason over a hedged ('uncertain')
+        edge even though negated/expired ones never reach it.
+        """
+        if self._filter_polarity_temporal and not _relation_is_live(
+            rel, now_iso=date.today().isoformat(),
+        ):
+            return None
+        return {
+            "src_id": rel.get("src") or "",
+            "tgt_id": rel.get("tgt") or "",
+            "label": rel.get("label") or "",
+            "polarity": rel.get("polarity"),
+            "valid_from": rel.get("valid_from"),
+            "valid_to": rel.get("valid_to"),
+        }
+
+    def _map_walk_rows(self, rows: list[dict] | None) -> RoundGraphData:
         """Map the APOC-path Cypher result into ``RoundGraphData``.
 
         Defensive caps re-applied here in case the store ignored the
@@ -330,17 +396,14 @@ class GraphRetriever:
                     "description": ent.get("description") or "",
                 })
             for rel in (row.get("relations") or []):
-                out.relations.append({
-                    "src_id": rel.get("src") or "",
-                    "tgt_id": rel.get("tgt") or "",
-                    "label": rel.get("label") or "",
-                })
+                mapped = self._map_rel(rel)
+                if mapped is not None:
+                    out.relations.append(mapped)
         out.entities = _dedupe_entities(out.entities)[:GRAPH_WALK_NODE_CAP]
         out.relations = _dedupe_relations(out.relations)[:GRAPH_WALK_EDGE_CAP]
         return out
 
-    @staticmethod
-    def _map_no_apoc_rows(rows: list[dict] | None) -> RoundGraphData:
+    def _map_no_apoc_rows(self, rows: list[dict] | None) -> RoundGraphData:
         """Map the per-path (no-APOC) Cypher result into RoundGraphData."""
         out = RoundGraphData()
         for row in rows or []:
@@ -361,11 +424,9 @@ class GraphRetriever:
                     "description": row.get("m_description") or "",
                 })
             for rel in (row.get("rels") or []):
-                out.relations.append({
-                    "src_id": rel.get("src") or "",
-                    "tgt_id": rel.get("tgt") or "",
-                    "label": rel.get("label") or "",
-                })
+                mapped = self._map_rel(rel)
+                if mapped is not None:
+                    out.relations.append(mapped)
         out.entities = _dedupe_entities(out.entities)[:GRAPH_WALK_NODE_CAP]
         out.relations = _dedupe_relations(out.relations)[:GRAPH_WALK_EDGE_CAP]
         return out
