@@ -292,3 +292,17 @@ def test_build_reference_groups_and_marks_secrets():
 
 def test_reference_is_deterministic():
     assert build_reference() == build_reference()
+
+
+def test_every_env_var_has_russian_description():
+    from scripts.make_env import iter_app_env_vars, _ENV_DESCRIPTIONS
+    missing = [r.env for r in iter_app_env_vars() if r.env not in _ENV_DESCRIPTIONS]
+    assert missing == [], f"env vars without a description: {missing}"
+
+
+def test_reference_emits_description_comments():
+    text = build_reference()
+    # Each var's description appears as a '# ...' line above it.
+    assert "# Размерность вектора в Milvus" in text
+    assert "MILVUS_DIM=1536" in text
+    assert "# N в модели K+N" in text

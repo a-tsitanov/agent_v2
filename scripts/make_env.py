@@ -197,8 +197,162 @@ _REFERENCE_HEADER = (
 )
 
 
+# Russian one-line description per env var.  Curated here (not hand-edited
+# into the generated file) so `--check` keeps the reference in sync.  Source
+# of truth is the inline comments / field names in src/config.py.  A coverage
+# guard test asserts EVERY iter_app_env_vars() var has an entry here.
+_ENV_DESCRIPTIONS: dict[str, str] = {
+    # ── AgentSettings (AGENT_*) — ручки search-эндпоинтов ────────────
+    "AGENT_COMMUNITY_DYNAMIC_SELECTION": "Стратегия выбора сообществ для global/drift: lexical (по умолчанию) | semantic (kNN по report_vec) | descent (спуск по иерархии).",
+    "AGENT_COMMUNITY_MAX_LEVELS": "Сколько уровней дендрограммы Leiden материализовать при build сообществ; 1 = одноуровневый, выше = иерархия (offline). Капа 1..10.",
+    "AGENT_CONVERSATION_HISTORY_ENABLED": "Учитывать историю диалога (мультитёрн): прежние реплики переписывают запрос в standalone-форму перед поиском. Пустая история = single-shot.",
+    "AGENT_COVERAGE_CHECK_ENABLED": "Pre-submit coverage-check: перед ответом LLM судит, покрывают ли собранные данные вопрос; при пробеле делается ещё один раунд поиска.",
+    "AGENT_ER_ENABLED": "Entity Resolution: дополнительный шаг между merge_kg_extraction и PropertyGraphIndex, схлопывающий семантические дубликаты в один canonical-сущность.",
+    "AGENT_ER_JUDGE_BATCH_SIZE": "Сколько пар за один вызов LLM-судьи, когда ER маршрутизирует пограничных кандидатов. Капа 1..50.",
+    "AGENT_ER_USE_NATIVE_VECTOR_KNN": "Opt-in: для ER использовать нативный Neo4j vector-index kNN вместо окна на 5000 сущностей. Требует backfill_er_vector.py. По умолчанию off.",
+    "AGENT_ER_VECTOR_KNN_K": "Сколько соседей тянуть на новую сущность из ER vector-index, когда включён нативный kNN. Капа 1..100.",
+    "AGENT_ER_VERDICT_CACHE_ENABLED": "Кэш вердиктов ER в Neo4j (:ERVerdict): повторяющиеся пары пропускают LLM. Опционально и fail-safe: при ошибке Neo4j откат на чистое LLM-судейство.",
+    "AGENT_GLOBAL_MAX_COMMUNITIES": "Сколько summary сообществ максимум входит в (параллельный) MAP-шаг global-поиска, чтобы корпус не разлетался безгранично. Капа 1..200.",
+    "AGENT_GRAPH_SEARCH_PATH_DEPTH": "path_depth для similarity graph_search: сколько triplet-хопов соседей тянуть вокруг каждой найденной сущности. По умолчанию 1, капа 1..3.",
+    "AGENT_GRAPH_SIMILARITY_TOP_K": "top_k кандидатов для graph-ретривера (VectorContextRetriever); поднят, чтобы именованная сущность не выпадала из выдачи на большом графе. Капа 1..100.",
+    "AGENT_GRAPH_WALK_DUAL_SEED": "Сеять graph_walk сразу от топ-сущности graph_search И от топ find_entity_by_name (fulltext), когда они различаются — добавляет окрестность fulltext-совпадения.",
+    "AGENT_GRAPH_WALK_ENABLED": "Multi-hop seeding: после graph_search авто-засеять bounded graph_walk от топ-сущности (без LLM tool-pick). Fail-open: ошибка walk проглатывается.",
+    "AGENT_GRAPH_WALK_FILTER_POLARITY_TEMPORAL": "Фильтрация на retrieval: graph_walk выкидывает отрицаемые (polarity=negated) связи и рёбра с истёкшим valid_to. Opt-out, если мешает.",
+    "AGENT_GRAPH_WALK_HOPS": "Запрошенное число хопов для graph_walk (инструмент клампит к GRAPH_WALK_MAX_HOPS). По умолчанию 2, капа 1..3.",
+    "AGENT_HISTORY_MAX_CHARS": "Лимит символов истории диалога, передаваемой в контекстуализацию запроса. 0 = без истории. Капа >= 0.",
+    "AGENT_HISTORY_MAX_TURNS": "Сколько последних реплик истории учитывать при контекстуализации запроса. 0 = single-shot. Капа 0..40.",
+    "AGENT_MAX_COVERAGE_ROUNDS": "Макс. число доп. раундов coverage-check в plan-execute: на найденный пробел запускается ещё один SubQueryRetrievalWorkflow. Капа 0..3.",
+    "AGENT_MAX_SUBQUERIES": "Макс. число подвопросов, которые может выдать планировщик — ограничивает параллельный fan-out SubQueryRetrievalWorkflow и стоимость планировщика. Капа 1..20.",
+    # ── AnalyticsSettings (ANALYTICS_*) — теги версий ingest-метрик ───
+    "ANALYTICS_DEFAULT_VERSION_TAG": "Версия-тег по умолчанию, если на /ingest не пришёл заголовок X-Version-Tag; пишется в ingest_metrics / Temporal search attributes.",
+    "ANALYTICS_ENV_NAME": "Имя окружения-деплоя для меток (Temporal search attributes и строки Postgres ingest_metrics).",
+    # ── ApiSettings (API_*) — поверхность FastAPI ────────────────────
+    "API_CORS_ORIGINS": "Разрешённые CORS-origin через запятую; '*' = любой.",
+    "API_ENV": "Окружение приложения (development|production); в production preflight жёстко требует реальные секреты.",
+    "API_KEYS": "Ключи API через запятую (клиенты шлют в заголовке X-API-Key). В проде задать реальные, не плейсхолдеры. Секрет.",
+    "API_LOG_JSON": "Логировать в JSON (true) или в человекочитаемом виде (false).",
+    "API_LOG_LEVEL": "Уровень логирования FastAPI (info|debug|warning|...).",
+    "API_UPLOAD_DIR": "Каталог для загруженных файлов на стороне API.",
+    # ── ClassifierSettings (CLASSIFIER_*) — фильтр входных документов ─
+    "CLASSIFIER_ENABLED": "Включить классификатор входных документов (отсев мусора до пайплайна). По умолчанию off; fail-soft: ошибка → INGEST.",
+    "CLASSIFIER_LLM_ENABLED": "Включить LLM-слой классификатора поверх детерминированных правил (оценка по ограниченному preview).",
+    "CLASSIFIER_MAX_SIZE_MB": "Максимальный размер документа (МБ); крупнее — отсев детерминированным правилом.",
+    "CLASSIFIER_MIN_SIZE_BYTES": "Минимальный размер документа (байт); мельче — отсев (пустышка/мусор).",
+    "CLASSIFIER_PREVIEW_CHARS": "Сколько символов превью документа подаётся LLM-слою классификатора.",
+    "CLASSIFIER_SKIP_EXTENSIONS": "JSON-список расширений, отсекаемых детерминированным правилом (exe, zip, png, mp4 и т.п.).",
+    # ── HFSettings (явные имена без префикса) — offline HF-модели ─────
+    "HF_CACHE_DIR": "Путь к локальному HF-кэшу для air-gapped деплоя; пусто = дефолт HF. Связано с download_models.py / configure_hf.",
+    "HF_OFFLINE": "Включить offline-режим HuggingFace (читать только из локального кэша, без обращений к Hub).",
+    "HF_RERANK_MODEL": "Имя BGE cross-encoder reranker-модели (по умолчанию BAAI/bge-reranker-v2-m3) для unified graph+vector rerank.",
+    # ── IngestAdmissionSettings (INGEST_ADMISSION_*) — допуск документов
+    "INGEST_ADMISSION_MAX_INFLIGHT": "K в модели K+N: максимум документов в работе одновременно (FIFO-допуск через singleton IngestSchedulerWorkflow). Капа >= 1.",
+    # ── IngestionSettings (INGESTION_*) — пайплайн ингеста ───────────
+    "INGESTION_BREAKPOINT_PERCENTILE": "Перцентиль расстояния для границ в semantic chunking (выше = реже резать). Действует при INGESTION_SEMANTIC_CHUNKING=true.",
+    "INGESTION_CACHE_DIR": "Каталог кэша ingest-пайплайна.",
+    "INGESTION_CHUNK_OVERLAP": "Перекрытие соседних чанков (в токенах) для SentenceSplitter.",
+    "INGESTION_CHUNK_SIZE": "Размер чанка (в токенах) для SentenceSplitter.",
+    "INGESTION_GLINER_MODEL": "GLiNER span-NER модель для opt-in режимов gliner / gliner+llm; требует extra 'gliner'. Дефолтный путь (lightrag) её не трогает.",
+    "INGESTION_SEMANTIC_CHUNKING": "Вместо SentenceSplitter использовать SemanticSplitter (резать по сдвигам темы). Доп. embedding-вызовы за лучшую точность retrieval. По умолчанию off.",
+    "INGESTION_TRANSLATE_TO_RUSSIAN": "Per-chunk LLM-перевод в metadata['translated_text'] (исходный текст не меняется); KG-экстрактор читает перевод → сущности по-русски для кросс-язычного дедупа.",
+    "INGESTION_TRANSLATION_CONCURRENCY": "Сколько LLM-вызовов перевода идут параллельно.",
+    "INGESTION_TRANSLATION_DOC_THRESHOLD_CHARS": "Мягкий лимит символов для перевода документа одним вызовом; выше — режется на абзац-выровненные окна. Дефолт 30k под Ollama qwen3 32k-контекст.",
+    "INGESTION_TRANSLATION_STRATEGY": "Как делить работу перевода: per_document | per_chunk | auto (по умолчанию; per_document под порогом, иначе per_chunk).",
+    # ── LLMPoolSettings (LLM_POOL_*) — пул LLM-конкуренции ───────────
+    "LLM_POOL_N": "N в модели K+N: максимум одновременных LLM-вызовов на процесс (единый глобальный семафор на все роли). Капа >= 1.",
+    # ── LiteLLMSettings (LITELLM_*) — подключение к LiteLLM-прокси ────
+    "LITELLM_API_KEY": "Ключ к LiteLLM-прокси (OpenAI-совместимый). Секрет.",
+    "LITELLM_BASE_URL": "Base URL LiteLLM-прокси (или любого OpenAI-совместимого эндпоинта).",
+    "LITELLM_EMBEDDING_MODEL": "Имя embedding-модели; её native-dim ДОЛЖНА совпадать с MILVUS_DIM (text-embedding-3-small → 1536).",
+    "LITELLM_LLM_MODEL": "DEPRECATED-алиас no-role legacy-пути; пусто ⇒ откат на model_small. Удалить, когда все читатели перейдут на tier-поля.",
+    "LITELLM_MAX_RETRIES": "Сколько повторов на сетевую/временную ошибку LLM-вызова.",
+    "LITELLM_MODEL_LARGE": "Имя 'large'-модели: только финальный user-facing synthesis (дефолт gpt-4o-mini).",
+    "LITELLM_MODEL_SMALL": "Имя 'small'-модели: локальная высоконагруженная (extraction/judge/search/plan/...).",
+    "LITELLM_ROLE_TIERS": "JSON-override карты роль→tier; мёржится поверх дефолтов, можно эскалировать одну роль, напр. {\"plan\":\"large\"}.",
+    "LITELLM_TIMEOUT_S": "Таймаут LLM-вызова в секундах (дефолт 900 — под медленный локальный inference).",
+    # ── MetricsSettings (METRICS_*) — Prometheus-экспортёр воркера ────
+    "METRICS_BIND_ADDRESS": "Адрес:порт, на котором воркер поднимает Prometheus-листенер; Prometheus скрейпит через host.docker.internal:<port>.",
+    "METRICS_ENABLED": "Включить worker-side Prometheus-экспортёр (Temporal Runtime + PrometheusConfig).",
+    # ── MilvusSettings (MILVUS_*) — векторное хранилище ──────────────
+    "MILVUS_COLLECTION": "Имя коллекции чанков в Milvus.",
+    "MILVUS_DIM": "Размерность вектора в Milvus; ДОЛЖНА совпадать с native-dim embedding-модели (1536 для text-embedding-3-small, 768 для nomic-embed-text).",
+    "MILVUS_HNSW_EF_CONSTRUCTION": "HNSW build-time search width: выше → лучше recall, медленнее build. Действует при создании коллекции с index_type=HNSW.",
+    "MILVUS_HNSW_EF_SEARCH": "HNSW query-time search width (ef): выше → лучше recall, медленнее запрос. Должно быть >= search top_k.",
+    "MILVUS_HNSW_M": "Степень HNSW-графа (M): выше → лучше recall, больше памяти.",
+    "MILVUS_HOST": "Хост Milvus (внутри compose — DNS-имя сервиса, напр. milvus).",
+    "MILVUS_INDEX_TYPE": "Тип ANN-индекса коллекции: HNSW (по умолчанию, approximate) или FLAT (точный перебор). Действует только при (пере)создании коллекции.",
+    "MILVUS_PORT": "Порт Milvus (по умолчанию 19530).",
+    "MILVUS_TIMEOUT_S": "Таймаут обращений к Milvus в секундах.",
+    # ── MinioSettings (MINIO_*) — S3-совместимое хранилище загрузок ──
+    "MINIO_ACCESS_KEY": "Access key MinIO/S3. Секрет; в проде задать реальный.",
+    "MINIO_BUCKET": "Бакет для пользовательских загрузок (kb-uploads).",
+    "MINIO_DOWNLOAD_DIR": "Куда воркер стейджит скачанные файлы перед обработкой; чистится активити cleanup_local после run.",
+    "MINIO_ENDPOINT": "Endpoint MinIO/S3 (host:port).",
+    "MINIO_REGION": "Регион S3 (для совместимых клиентов).",
+    "MINIO_SECRET_KEY": "Secret key MinIO/S3. Секрет; в проде задать реальный.",
+    "MINIO_SECURE": "Использовать TLS (https) при обращении к MinIO/S3.",
+    # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
+    "NEO4J_DATABASE": "Имя базы Neo4j.",
+    "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",
+    "NEO4J_URI": "Bolt-URI Neo4j (напр. bolt://localhost:7687).",
+    "NEO4J_USER": "Пользователь Neo4j.",
+    # ── PostgresSettings (POSTGRES_*) — метаданные / ingest_metrics ──
+    "POSTGRES_CONNECT_TIMEOUT_S": "Таймаут подключения к Postgres в секундах.",
+    "POSTGRES_DB": "Имя базы Postgres.",
+    "POSTGRES_HOST": "Хост Postgres.",
+    "POSTGRES_PASSWORD": "Пароль Postgres. Секрет; в проде сменить дефолт 'postgres'.",
+    "POSTGRES_PORT": "Порт Postgres (по умолчанию 5432).",
+    "POSTGRES_USER": "Пользователь Postgres.",
+    # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
+    "TEMPORAL_ACTIVITY_CONCURRENCY": "Слотов активити на основной очереди kb-ingest.",
+    "TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY": "Число GDS-потоков для прогона Leiden; держать умеренным, чтобы rebuild не голодил Neo4j. >= 1.",
+    "TEMPORAL_COMMUNITY_LEIDEN_GAMMA": "Resolution Leiden: >1 → больше мелких сообществ, <1 → меньше крупных. Только детекция, не query-путь. > 0.",
+    "TEMPORAL_COMMUNITY_MIN_SIZE": "Сообщества мельче этого порога игнорируются (слишком мелкие для осмысленного summary — шум).",
+    "TEMPORAL_COMMUNITY_SUMMARY_PARALLELISM": "Bounded-параллелизм fan-out суммаризации сообществ внутри CommunityBuildWorkflow (независимо от worker-капа активити).",
+    "TEMPORAL_GRAPH_BUILD_ACTIVITY_CONCURRENCY": "Слотов на выделенной очереди kb-graph-build (offline build сообществ). Намеренно низкий, чтобы не флудить LLM-прокси.",
+    "TEMPORAL_GRAPH_BUILD_TASK_QUEUE": "Имя очереди для offline graph-community build (GDS Leiden + per-community summary); не трогает query hot-path.",
+    "TEMPORAL_HOST": "Хост Temporal.",
+    "TEMPORAL_LARGE_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-search-large; намеренно НИЗКИЙ — тяжёлая large-модель не должна обслуживать много параллельных сессий.",
+    "TEMPORAL_LARGE_TASK_QUEUE": "Имя очереди для large-tier финального synthesis (synthesize_answer пинится сюда).",
+    "TEMPORAL_LLM_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-ingest-llm; должно быть >= LLM_POOL_N, чтобы троттлил пул, а не Temporal.",
+    "TEMPORAL_LLM_TASK_QUEUE": "Имя очереди для LLM-bound активити extract_kg (отдельно от основного ингеста).",
+    "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-ingest-merge; должно быть >= LLM_POOL_N (иначе Temporal троттлит раньше пула).",
+    "TEMPORAL_MERGE_TASK_QUEUE": "Имя очереди merge-стадии (merge_and_resolve + build_property_graph) — отдельно, чтобы merge не голодал за burst-ом extract.",
+    "TEMPORAL_NAMESPACE": "Namespace Temporal.",
+    "TEMPORAL_PORT": "Порт Temporal (по умолчанию 7233).",
+    "TEMPORAL_RERANK_TOP_N": "top-N bge cross-encoder для unified graph+vector rerank перед дорогим large-tier synthesis.",
+    "TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-search-small (plan-execute поток: planner + параллельный retrieval подвопросов). >= 1.",
+    "TEMPORAL_SEARCH_TASK_QUEUE": "Имя очереди search-активити small-tier (plan/retrieve/coverage_check/rerank); раньше kb-search-llm.",
+    "TEMPORAL_STAGING_BUCKET": "Имя staging-бакета Temporal.",
+    "TEMPORAL_TASK_QUEUE": "Имя основной очереди ингеста (kb-ingest).",
+    # ── WikiSettings (WIKI_*) — непрерывный редактор wiki-статей ─────
+    "WIKI_ACTIVITY_CONCURRENCY": "Слотов активити на очереди kb-wiki (редактор статей). >= 1.",
+    "WIKI_CITATIONS_TOP_K": "Сколько источников-цитат подтягивать в статью. >= 1.",
+    "WIKI_DOCS_BASE_URL": "Base URL ссылок на документы-источники в секции 'Источники' (GET {docs_base_url}/documents/{doc_id}).",
+    "WIKI_ENABLED": "Включить редактор wiki-статей (Project A): генерирует per-entity MediaWiki-страницы из графа Neo4j. По умолчанию off.",
+    "WIKI_MAX_RELATIONS": "Капа 1-hop связей в промпте статьи (ранжируются по mention_count соседа). Ограничивает размер промпта для hub-сущностей. >= 1.",
+    "WIKI_MEDIAWIKI_API_URL": "URL MediaWiki Action API; пусто → выводится из wikibase.base_url + '/w/api.php'.",
+    "WIKI_SITE_GLOBAL_ID": "Site global id MediaWiki для sitelinks; должен совпадать с реальным id вики (дефолт под dev-compose).",
+    "WIKI_SWEEP_BATCH": "Размер пачки сущностей за один проход sweep. >= 1.",
+    "WIKI_SWEEP_INTERVAL_MINUTES": "Интервал sweep-прохода редактора статей (минуты). >= 1.",
+    "WIKI_TASK_QUEUE": "Имя очереди Temporal для редактора wiki-статей (kb-wiki).",
+    # ── WikibaseSettings (WIKIBASE_*) — наполнитель Wikibase ─────────
+    "WIKIBASE_BASE_URL": "Base URL self-hosted Wikibase.",
+    "WIKIBASE_BOT_PASSWORD": "Пароль бота Wikibase (>= 8 символов); им логинится push_wikibase. Создание бота — scripts/setup_wikibase.py. Секрет.",
+    "WIKIBASE_BOT_USER": "Имя бот-пользователя Wikibase (по умолчанию KbBot).",
+    "WIKIBASE_ENABLED": "Включить push в Wikibase после успешного graph build (canonical-сущности + связи + identifier-statements). По умолчанию off.",
+    "WIKIBASE_LANGUAGE": "Язык лейблов/описаний в Wikibase (по умолчанию ru).",
+    "WIKIBASE_TIMEOUT_S": "Таймаут обращений к Wikibase API в секундах.",
+}
+
+
 def build_reference() -> str:
-    """Render the exhaustive .env.reference from the config.py catalog."""
+    """Render the exhaustive .env.reference from the config.py catalog.
+
+    Each variable is preceded by its Russian description (from
+    ``_ENV_DESCRIPTIONS``) as a ``#`` comment line; a var missing an entry is
+    emitted without a description (never crashes), but the coverage guard test
+    ensures every var is covered.
+    """
     rows = iter_app_env_vars()
     out = [_REFERENCE_HEADER.rstrip("\n")]
     group = None
@@ -206,6 +360,9 @@ def build_reference() -> str:
         if r.group != group:
             group = r.group
             out.append(f"\n# ── {group} ──")
+        desc = _ENV_DESCRIPTIONS.get(r.env)
+        if desc:
+            out.append(f"# {desc}")
         suffix = "   # secret" if r.secret else ""
         out.append(f"{r.env}={r.default}{suffix}")
     return "\n".join(out) + "\n"
