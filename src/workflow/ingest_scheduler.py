@@ -45,6 +45,14 @@ class IngestSchedulerWorkflow:
         self._params[params.doc_id] = params
         self._state.submit(params.doc_id)
 
+    @workflow.signal
+    def set_max_inflight(self, n: int) -> None:
+        """Live-update K (admission ceiling). The run loop's wait_condition
+        re-evaluates _has_free_slot() and admits more docs immediately when
+        raised; lowering it just stops admitting until inflight drains.
+        Persists across continue_as_new (run() carries _state.max_inflight)."""
+        self._state.max_inflight = max(1, n)
+
     @workflow.run
     async def run(self, cfg: SchedulerParams) -> None:
         self._state.max_inflight = max(1, cfg.max_inflight)

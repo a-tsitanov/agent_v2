@@ -65,5 +65,26 @@ INGEST_ADMISSION_MAX_INFLIGHT=1
 проверь на живом сервере: пробуждение `wait_condition` завершением дочернего,
 `continue_as_new` в покое, сигнал в момент recycle.
 
+## Изменение K в рантайме
+
+`INGEST_ADMISSION_MAX_INFLIGHT` в `.env` применяется только к **новому** экземпляру
+scheduler: поскольку `/ingest` использует `USE_EXISTING`, запущенный синглтон
+сохраняет свой K. Перезапуск воркера **не обновляет** K живого workflow.
+
+**Живое изменение** (без terminate):
+
+```bash
+uv run python -m scripts.set_admission <N>
+```
+
+Команда посылает сигнал `set_max_inflight` синглтону `ingest-scheduler`.
+Значение сохраняется через `continue_as_new` (передаётся в `SchedulerParams.max_inflight`).
+При повышении K `wait_condition` немедленно допускает ожидающие документы;
+при понижении scheduler просто прекращает допуск, пока inflight не опустится до нового K.
+
+**Полный сброс** (когда scheduler простаивает):
+terminate `ingest-scheduler` в Temporal UI — следующий `/ingest` создаст
+новый синглтон со значением из `.env`.
+
 ## Откат
 `INGEST_ADMISSION_ENABLED=false` → прямой старт, scheduler не используется.
