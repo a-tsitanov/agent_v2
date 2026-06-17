@@ -60,3 +60,14 @@ def test_pending_ids_preserves_order_for_carryover():
         s.submit(d)
     s.admit_ready()         # a → inflight
     assert s.pending == ["b", "c"]   # carryover order for continue_as_new
+
+
+def test_scheduler_set_max_inflight_signal_updates_state():
+    """The set_max_inflight signal live-updates K on the running singleton."""
+    from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
+    wf = IngestSchedulerWorkflow()           # __init__ sets plain attrs, no Temporal ctx
+    assert wf._state.max_inflight == 1       # initial
+    wf.set_max_inflight(5)
+    assert wf._state.max_inflight == 5
+    wf.set_max_inflight(0)                    # clamped to >= 1
+    assert wf._state.max_inflight == 1
