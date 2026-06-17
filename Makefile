@@ -28,9 +28,11 @@ models:  ## Prefetch HF models (BGE reranker + GLiNER) to avoid first-request st
 	$(PY) -m scripts.download_models
 
 wiki-setup:  ## Bootstrap Wikibase: create bot (in running container) + schema over API
-	$(COMPOSE) --profile wikibase exec wikibase \
-	  php /var/www/html/maintenance/run.php createAndPromote --bot --force \
-	  "$${WIKIBASE_BOT_USER:-KbBot}" "$${WIKIBASE_BOT_PASSWORD:?set WIKIBASE_BOT_PASSWORD}"
+	@WB_USER=$$(sed -n 's/^WIKIBASE_BOT_USER=//p' .env 2>/dev/null); \
+	 WB_PASS=$$(sed -n 's/^WIKIBASE_BOT_PASSWORD=//p' .env 2>/dev/null); \
+	 $(COMPOSE) --profile wikibase exec -T wikibase \
+	   php /var/www/html/maintenance/run.php createAndPromote --bot --force \
+	   "$${WB_USER:-KbBot}" "$${WB_PASS:?set WIKIBASE_BOT_PASSWORD in .env (>= 8 chars)}"
 	$(PY) -m scripts.setup_wikibase
 
 up-prod: env-check  ## Prod: build + up the full app stack (init runs automatically)
