@@ -21,7 +21,15 @@ from src.config import settings
 from src.graph.store import build_neo4j_graph_store
 from src.storage.wikibase import AsyncWikibase, push_entities
 from src.workflow.contracts import Merged, WikibasePushed
+from src.workflow.heartbeat import heartbeat_every
 from src.workflow.staging import build_staging_store
+
+# push_entities makes one sequential Wikibase REST round-trip per owner
+# and per relation; it emits no heartbeats of its own.  Pulse on this
+# interval while it runs so a slow-but-progressing batch is never mistaken
+# for a dead worker.  Comfortably under heartbeat_timeout (2 min) — see
+# document_ingest.py.
+_HEARTBEAT_INTERVAL_S = 20.0
 
 
 @activity.defn
@@ -62,11 +70,20 @@ async def push_wikibase(merged: Merged) -> WikibasePushed:
         wb_client = await AsyncWikibase.from_settings(settings.wikibase)
         activity.heartbeat({"stage": "pushing", "entities": len(entities)})
 
-        counts = await push_entities(
-            entities=entities, relations=relations,
-            neo4j_store=graph_store, wb_client=wb_client,
-            base_class_qids=base_class_qids, property_pids=property_pids,
-        )
+        # Keep the heartbeat alive across the whole push: push_entities is a
+        # sequential per-owner/per-relation REST loop with no pulses of its
+        # own, so a real batch easily outruns heartbeat_timeout.  Without
+        # this the activity is cancelled mid-push and retried from scratch
+        # — the retry storm that made it succeed only after ~26 attempts.
+        async with heartbeat_every(
+            _HEARTBEAT_INTERVAL_S,
+            {"stage": "pushing", "entities": len(entities)},
+        ):
+            counts = await push_entities(
+                entities=entities, relations=relations,
+                neo4j_store=graph_store, wb_client=wb_client,
+                base_class_qids=base_class_qids, property_pids=property_pids,
+            )
         activity.heartbeat({"stage": "pushed", **counts})
 
         # Detect the silent-no-op case: there were owner entities to
