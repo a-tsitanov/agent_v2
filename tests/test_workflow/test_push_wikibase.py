@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -197,6 +198,72 @@ async def test_empty_input_returns_ok(monkeypatch):
         out = await push_wikibase(_fake_merged())
 
     assert out.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_heartbeats_pulse_during_push_entities(monkeypatch):
+    """push_entities makes one sequential Wikibase REST round-trip per
+    owner/relation and emits no heartbeats of its own; a real batch can
+    easily outrun the 2-min heartbeat_timeout.  The activity must pulse
+    on a timer *while push_entities runs* so a slow-but-progressing push
+    is never mistaken for a dead worker and retried.
+
+    Regression for the heartbeat-gap retry storm that made push_wikibase
+    succeed only after ~26 attempts.
+    """
+    from temporalio.testing import ActivityEnvironment
+
+    import sys
+
+    import src.workflow.activities.push_wikibase  # noqa: F401  (ensure import)
+    from src.config import settings
+
+    # The activities package __init__ rebinds the name ``push_wikibase`` to
+    # the *function*, shadowing the submodule attribute — so reach the real
+    # module object via sys.modules to patch its globals.
+    mod = sys.modules["src.workflow.activities.push_wikibase"]
+
+    monkeypatch.setattr(settings.wikibase, "enabled", True, raising=False)
+    # Shrink the pulse interval so the test runs in fractions of a second.
+    monkeypatch.setattr(mod, "_HEARTBEAT_INTERVAL_S", 0.05, raising=False)
+
+    staging = MagicMock()
+    staging.read_pickle.return_value = ([MagicMock(name="ent-1")], [], [])
+    gs = MagicMock()
+    gs.structured_query.side_effect = [
+        [{"label": "Person", "qid": "Q1"}],
+        [{"label": "PhoneNumber", "pid": "P4"}],
+    ]
+    fake_counts = {
+        "created_items": 1, "updated_items": 0,
+        "external_id_statements": 0, "relation_statements": 0,
+        "new_properties_created": 0,
+    }
+
+    async def slow_push(*_a, **_k):
+        await asyncio.sleep(0.3)  # outlasts several 0.05s pulse intervals
+        return fake_counts
+
+    wb_client = MagicMock()
+    beats: list[tuple] = []
+    with patch.object(mod, "build_staging_store", return_value=staging), \
+         patch.object(mod, "build_neo4j_graph_store", return_value=gs), \
+         patch.object(mod, "AsyncWikibase") as wb_factory, \
+         patch.object(mod, "push_entities", new=slow_push):
+        wb_factory.from_settings = AsyncMock(return_value=wb_client)
+        env = ActivityEnvironment()
+        env.on_heartbeat = lambda *args: beats.append(args)
+        out = await env.run(mod.push_wikibase, _fake_merged())
+
+    assert out.status == "ok"
+    pushing_beats = [
+        b for b in beats if b and isinstance(b[0], dict)
+        and b[0].get("stage") == "pushing"
+    ]
+    assert len(pushing_beats) >= 3, (
+        "no timer heartbeats fired during push_entities — a slow push "
+        "will hit heartbeat_timeout and be retried"
+    )
 
 
 @pytest.mark.asyncio
