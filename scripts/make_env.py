@@ -263,6 +263,8 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "LITELLM_API_KEY": "Ключ к LiteLLM-прокси (OpenAI-совместимый). Секрет.",
     "LITELLM_BASE_URL": "Base URL LiteLLM-прокси (или любого OpenAI-совместимого эндпоинта).",
     "LITELLM_EMBEDDING_MODEL": "Имя embedding-модели; её native-dim ДОЛЖНА совпадать с MILVUS_DIM (text-embedding-3-small → 1536).",
+    "LITELLM_EXTRA_BODY": "JSON доп.полей тела КАЖДОГО chat-запроса (через OpenAI extra_body), напр. {\"think\": false} чтобы выключить chain-of-thought Qwen3. Пусто ⇒ запрос не меняется.",
+    "LITELLM_EXTRA_BODY_ROLES": "JSON per-role override'ов extra_body; shallow-мёрж поверх LITELLM_EXTRA_BODY, ключи роли побеждают. Напр. {\"synthesis\": {\"think\": true}} — оставить thinking только для финального ответа.",
     "LITELLM_LLM_MODEL": "DEPRECATED-алиас no-role legacy-пути; пусто ⇒ откат на model_small. Удалить, когда все читатели перейдут на tier-поля.",
     "LITELLM_MAX_RETRIES": "Сколько повторов на сетевую/временную ошибку LLM-вызова.",
     "LITELLM_MODEL_LARGE": "Имя 'large'-модели: только финальный user-facing synthesis (дефолт gpt-4o-mini).",
