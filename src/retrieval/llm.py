@@ -11,6 +11,7 @@ we don't break callers that haven't migrated yet.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from llama_index.core.llms import LLM
 from llama_index.llms.openai_like import OpenAILike
@@ -27,8 +28,15 @@ def _fc_flag() -> bool:
     ).lower() not in {"0", "false", "no"}
 
 
-def _build(model: str) -> LLM:
+def _build(model: str, extra_body: dict[str, Any] | None = None) -> LLM:
     cfg = settings.litellm
+    # ``extra_body`` carries backend-specific request fields (e.g. Qwen3
+    # ``think=false``).  The OpenAI SDK forwards anything under its
+    # ``extra_body`` kwarg verbatim into the JSON body; OpenAILike merges
+    # ``additional_kwargs`` into the call, so nesting it here is how the
+    # params reach the wire.  Omit entirely when empty so default callers
+    # send an unchanged request.
+    additional_kwargs = {"extra_body": extra_body} if extra_body else {}
     return OpenAILike(
         model=model,
         api_base=cfg.base_url,
@@ -37,6 +45,7 @@ def _build(model: str) -> LLM:
         max_retries=cfg.max_retries,
         is_chat_model=True,
         is_function_calling_model=_fc_flag(),
+        additional_kwargs=additional_kwargs,
     )
 
 
@@ -50,7 +59,7 @@ def build_llm(role: LLMRole | None = None) -> LLM:
     """
     cfg = settings.litellm
     model = cfg.model_for(role) if role else cfg.effective_base
-    return _build(model)
+    return _build(model, cfg.extra_body_for(role))
 
 
 def build_extraction_llm() -> LLM:

@@ -12,10 +12,10 @@ the existing project can navigate this one without surprises.
 from __future__ import annotations
 
 from functools import cached_property
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Two physical model tiers operators actually manage:
 #   * ``small`` — local, high-volume (extraction, judge, search, plan, …)
@@ -167,6 +167,39 @@ class LiteLLMSettings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     timeout_s: float = 900.0
     max_retries: int = 2
+    # ── extra request-body params ────────────────────────────────────
+    # Backend-specific fields injected verbatim into every chat request
+    # body (via OpenAILike ``additional_kwargs={"extra_body": ...}``).
+    # The OpenAI SDK rejects unknown top-level kwargs, so these MUST ride
+    # in ``extra_body`` — that's where the SDK forwards arbitrary JSON.
+    # Example: disable Qwen3 chain-of-thought for every call with
+    #   LITELLM_EXTRA_BODY='{"think": false}'
+    # ``extra_body_roles`` shallow-merges per-role overrides on top, e.g.
+    #   LITELLM_EXTRA_BODY_ROLES='{"synthesis": {"think": true}}'
+    # to keep thinking on for the final-answer role only.  Resolve the
+    # effective dict for a role via ``extra_body_for(role)``.
+    # ``NoDecode`` hands the raw env string to ``_parse_extra_body`` below
+    # instead of pydantic-settings JSON-decoding it in the source — that
+    # lets an empty ``LITELLM_EXTRA_BODY=`` mean "no params" instead of a
+    # JSON parse error.
+    extra_body: Annotated[dict[str, Any], NoDecode] = Field(default_factory=dict)
+    extra_body_roles: Annotated[dict[str, dict[str, Any]], NoDecode] = Field(
+        default_factory=dict
+    )
+
+    @field_validator("extra_body", "extra_body_roles", mode="before")
+    @classmethod
+    def _parse_extra_body(cls, v: object) -> object:
+        """Accept a JSON string (pydantic-settings env), a dict, or an
+        empty/None value (⇒ no params).  Mirrors ``role_tiers`` so an
+        empty ``LITELLM_EXTRA_BODY=`` doesn't blow up JSON parsing."""
+        if v is None:
+            return {}
+        if isinstance(v, str):
+            import json
+
+            return json.loads(v) if v.strip() else {}
+        return v
 
     @field_validator("role_tiers", mode="before")
     @classmethod
@@ -199,6 +232,17 @@ class LiteLLMSettings(BaseSettings):
     def model_for(self, role: LLMRole) -> str:
         """Resolve ``role`` → tier → one of the two physical models."""
         return self.model_large if self.tier_for(role) == "large" else self.model_small
+
+    def extra_body_for(self, role: LLMRole | None) -> dict[str, Any]:
+        """Effective extra request-body params for ``role``: the global
+        ``extra_body`` default, shallow-merged with any per-role override
+        from ``extra_body_roles`` (override keys win).  ``role=None``
+        (legacy no-role path) gets the global default only.  Returns a
+        fresh dict so callers can't mutate the stored settings."""
+        merged = dict(self.extra_body)
+        if role is not None:
+            merged.update(self.extra_body_roles.get(role, {}))
+        return merged
 
 
 class TemporalSettings(BaseSettings):
