@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 from dishka.integrations.fastapi import FromDishka, inject
@@ -153,6 +154,14 @@ async def upload_document(
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
             start_signal="submit",
             start_signal_args=[params],
+            # Defense-in-depth for the always-on singleton: the workflow
+            # bounds its own history via drain-then-continue_as_new
+            # (see IngestSchedulerWorkflow), but give a cold replay extra
+            # headroom over the 10s default so a one-off larger history
+            # (e.g. right after a deploy) can't time out the workflow task
+            # and wedge admission.  Only applies to a freshly-started
+            # singleton; USE_EXISTING reuses the running one untouched.
+            task_timeout=timedelta(seconds=30),
         )
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is

@@ -71,3 +71,47 @@ def test_scheduler_set_max_inflight_signal_updates_state():
     assert wf._state.max_inflight == 5
     wf.set_max_inflight(0)                    # clamped to >= 1
     assert wf._state.max_inflight == 1
+
+
+# ── history-bounding recycle (drain-then-continue_as_new) ─────────────
+# Regression: the singleton scheduler must recycle (continue_as_new) on a
+# HISTORY threshold even while documents are in flight / queued.  The old
+# guard required full quiescence (`not running and not pending`), which
+# under sustained ingest never arrives → history grows unbounded → replay
+# eventually exceeds the workflow-task timeout → the workflow wedges and
+# "everything stalls".
+
+def test_should_recycle_fires_at_threshold_despite_active_work():
+    from src.workflow.ingest_scheduler import (
+        IngestSchedulerWorkflow,
+        _HISTORY_RECYCLE_THRESHOLD,
+    )
+    wf = IngestSchedulerWorkflow()
+    # Simulate a busy scheduler: one doc in flight, one queued.
+    wf._state.submit("a")
+    wf._state.admit_ready()                   # a → inflight
+    wf._state.submit("b")                     # b pending
+    wf._running["a"] = object()               # pretend child task is live
+
+    # Below threshold: keep running, no recycle.
+    assert wf._should_recycle(_HISTORY_RECYCLE_THRESHOLD - 1) is False
+    # At/over threshold: recycle even though work is active — the OLD
+    # `not running and not pending` guard would have blocked forever here.
+    assert wf._should_recycle(_HISTORY_RECYCLE_THRESHOLD) is True
+    assert wf._should_recycle(_HISTORY_RECYCLE_THRESHOLD + 10_000) is True
+
+
+def test_carry_forward_preserves_pending_params_in_fifo_order():
+    """continue_as_new must hand the still-queued docs to the next run
+    so nothing is dropped on recycle."""
+    from src.workflow.contracts import IngestParams
+    from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
+    wf = IngestSchedulerWorkflow()
+    for d in ("a", "b", "c"):
+        wf._params[d] = IngestParams(doc_id=d, path=f"/{d}")
+        wf._state.submit(d)
+    wf._state.admit_ready()                   # a → inflight; b, c pending
+    carried = wf._carry_forward()
+    assert [p.doc_id for p in carried] == ["b", "c"]
+    # in-flight doc is NOT re-queued (it finishes during drain before recycle)
+    assert "a" not in [p.doc_id for p in carried]

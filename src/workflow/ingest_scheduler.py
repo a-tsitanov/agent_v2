@@ -63,21 +63,33 @@ class IngestSchedulerWorkflow:
 
         while True:
             await workflow.wait_condition(
-                lambda: self._has_free_slot() or self._ready_to_recycle()
+                lambda: self._has_free_slot()
+                or self._should_recycle(
+                    workflow.info().get_current_history_length()
+                )
             )
-            for doc_id in self._state.admit_ready():
-                self._start_child(doc_id)
 
-            if self._ready_to_recycle():
-                carry = [
-                    self._params[d] for d in self._state.pending
-                    if d in self._params
-                ]
+            if self._should_recycle(
+                workflow.info().get_current_history_length()
+            ):
+                # Drain before recycling: stop admitting and let the
+                # in-flight children finish so continue_as_new doesn't
+                # orphan/terminate them (default ParentClosePolicy).  The
+                # wait is bounded by the remaining runtime of at most
+                # ``max_inflight`` documents — NOT the unbounded "no new
+                # work ever arrives" quiescence the old guard required.
+                # While we drain, no children start, so history accrues
+                # only the few child-completion events.
+                await workflow.wait_condition(lambda: not self._running)
                 workflow.continue_as_new(
                     SchedulerParams(
-                        max_inflight=self._state.max_inflight, pending=carry,
+                        max_inflight=self._state.max_inflight,
+                        pending=self._carry_forward(),
                     )
                 )
+
+            for doc_id in self._state.admit_ready():
+                self._start_child(doc_id)
 
     # ── helpers ──────────────────────────────────────────────────────
 
@@ -85,14 +97,27 @@ class IngestSchedulerWorkflow:
         free = self._state.max_inflight - len(self._state.inflight)
         return free > 0 and bool(self._state.pending)
 
-    def _ready_to_recycle(self) -> bool:
-        # Only recycle when fully quiescent so no in-flight child is lost.
-        return (
-            not self._running
-            and not self._state.pending
-            and workflow.info().get_current_history_length()
-            >= _HISTORY_RECYCLE_THRESHOLD
-        )
+    def _should_recycle(self, history_len: int) -> bool:
+        """Recycle (continue_as_new) once event history crosses the
+        threshold — regardless of in-flight/pending work.
+
+        The run loop DRAINS in-flight children first, then carries the
+        still-queued docs forward via :meth:`_carry_forward`, so nothing
+        is lost and the K ceiling is never exceeded.  Recycling on the
+        threshold alone (not on full quiescence) is what keeps the
+        always-on singleton's history bounded under sustained load — an
+        unbounded history makes a cold replay exceed the workflow-task
+        timeout and wedges the workflow (see module docstring)."""
+        return history_len >= _HISTORY_RECYCLE_THRESHOLD
+
+    def _carry_forward(self) -> list[IngestParams]:
+        """Still-queued documents handed to the next run on recycle.
+        In-flight docs are NOT included — they finish during the drain
+        before continue_as_new fires."""
+        return [
+            self._params[d] for d in self._state.pending
+            if d in self._params
+        ]
 
     def _start_child(self, doc_id: str) -> None:
         params = self._params[doc_id]
