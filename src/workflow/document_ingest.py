@@ -8,9 +8,12 @@ makes the four graph activities best-effort.
 
 ## Retry policy
 
-Every activity is configured to **retry indefinitely** on transient
-failure (``maximum_attempts=0``).  Backoff is exponential, capped at a
-per-profile maximum interval so retries don't stretch out to hours.
+Every activity retries on transient failure, **bounded to
+``_MAX_INGEST_ATTEMPTS`` (50) attempts** — enough that a long proxy
+outage is ridden out (under saturation each attempt is long, so 50
+attempts span well past 48h), but a permanently-failing document gives
+up and frees its admission slot instead of looping forever.  Backoff is
+exponential, capped at a per-profile maximum interval.
 The hard stop is ``schedule_to_close_timeout`` — the overall wall-clock
 budget for an activity (sum of all attempts + waits).  Once that
 ceiling is reached Temporal fails the activity with a timeout error,
@@ -26,10 +29,10 @@ otherwise we'd loop for the full budget on a known-dead document.
 
 Two retry profiles:
 
-* ``_FAST_FOREVER`` — IO / embedding / Neo4j MERGE / PG UPDATE.
-  1s → 2s → 4s → … capped at 60s, forever.
-* ``_HEAVY_FOREVER`` — LLM-bound (``extract_kg``, ``merge_and_resolve``).
-  2min → 4min → … capped at 30min, forever.
+* ``_FAST_RETRY`` — IO / embedding / Neo4j MERGE / PG UPDATE.
+  1s → 2s → 4s → … capped at 60s, up to 50 attempts.
+* ``_HEAVY_RETRY`` — LLM-bound (``extract_kg``, ``merge_and_resolve``).
+  2min → 4min → … capped at 30min, up to 50 attempts.
 """
 
 from __future__ import annotations
@@ -76,17 +79,25 @@ def _wiki_dirty_targets(merged: "Merged") -> tuple[list[str], list[str]]:
 # Forever-retry profiles.  ``maximum_attempts=0`` means no cap on
 # attempts; the activity stops only when ``schedule_to_close_timeout``
 # fires or a non-retryable ``ApplicationError`` is raised inside.
-_FAST_FOREVER = RetryPolicy(
+# Cap retries per activity so a PERMANENTLY-failing document (corrupt input,
+# a doc the model deterministically rejects) eventually gives up and frees its
+# admission slot, instead of retrying forever and starving ingest at scale.
+# This is an ATTEMPT cap, NOT a wall-clock cap: under a long proxy outage each
+# attempt is long, so 50 attempts span well past 48h — the wall-clock
+# schedule_to_close that caused the prod "fail at 48h" incident stays gone (see
+# tests/test_workflow/test_completion_no_walltime_cap.py).
+_MAX_INGEST_ATTEMPTS = 50
+_FAST_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=60),
-    maximum_attempts=0,
+    maximum_attempts=_MAX_INGEST_ATTEMPTS,
 )
-_HEAVY_FOREVER = RetryPolicy(
+_HEAVY_RETRY = RetryPolicy(
     initial_interval=timedelta(minutes=2),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=30),
-    maximum_attempts=0,
+    maximum_attempts=_MAX_INGEST_ATTEMPTS,
 )
 # Best-effort wiki dirty-mark: capped (don't delay ingest if it fails).
 _WIKI_BESTEFFORT = RetryPolicy(
@@ -121,7 +132,7 @@ class DocumentIngestWorkflow:
                 result_type=Ctx,
                 start_to_close_timeout=timedelta(minutes=5),
                 schedule_to_close_timeout=timedelta(hours=1),
-                retry_policy=_FAST_FOREVER,
+                retry_policy=_FAST_RETRY,
             )
             log.info(
                 "← fetch_source  local=%s  cleanup_dir=%s",
@@ -142,7 +153,7 @@ class DocumentIngestWorkflow:
                     result_type=ClassifyResult,
                     start_to_close_timeout=timedelta(minutes=5),
                     schedule_to_close_timeout=timedelta(hours=1),
-                    retry_policy=_FAST_FOREVER,
+                    retry_policy=_FAST_RETRY,
                 )
                 if not verdict.ingest:
                     log.info("document skipped by classifier: %s", verdict.reason)
@@ -155,7 +166,7 @@ class DocumentIngestWorkflow:
                         result_type=IngestResult,
                         start_to_close_timeout=timedelta(minutes=5),
                         schedule_to_close_timeout=timedelta(hours=1),
-                        retry_policy=_FAST_FOREVER,
+                        retry_policy=_FAST_RETRY,
                     )
 
             workflow.upsert_memo({"stage": "parse_and_chunk"})
@@ -168,7 +179,7 @@ class DocumentIngestWorkflow:
                 start_to_close_timeout=timedelta(minutes=30),
                 heartbeat_timeout=timedelta(minutes=15),
                 schedule_to_close_timeout=timedelta(hours=6),
-                retry_policy=_FAST_FOREVER,
+                retry_policy=_FAST_RETRY,
             )
             log.info(
                 "← parse_and_chunk  chunks=%d  nodes_uri=%s",
@@ -183,7 +194,7 @@ class DocumentIngestWorkflow:
                 start_to_close_timeout=timedelta(hours=1),
                 heartbeat_timeout=timedelta(minutes=2),
                 schedule_to_close_timeout=timedelta(hours=24),
-                retry_policy=_FAST_FOREVER,
+                retry_policy=_FAST_RETRY,
             )
             log.info("← index_vector  inserted=%d", indexed.count)
 
@@ -199,12 +210,14 @@ class DocumentIngestWorkflow:
                 injected = await workflow.execute_activity(
                     "inject_canonical", parsed,
                     result_type=Injected,
-                    # embedding kNN + optional LLM verify — give the LLM
-                    # path a 1h single-attempt ceiling (matches the other
-                    # LLM activities) so a slow proxy isn't killed early.
+                    # Neo4j canonical-entity upsert — 1h single-attempt
+                    # ceiling. The activity heartbeats throughout the
+                    # blocking upsert, so a 2m heartbeat_timeout catches a
+                    # stuck connection fast instead of waiting the full 1h.
                     start_to_close_timeout=timedelta(hours=1),
+                    heartbeat_timeout=timedelta(minutes=2),
                     schedule_to_close_timeout=timedelta(hours=12),
-                    retry_policy=_FAST_FOREVER,
+                    retry_policy=_FAST_RETRY,
                 )
                 log.info("← inject_canonical  count=%d", injected.count)
 
@@ -225,8 +238,9 @@ class DocumentIngestWorkflow:
                     # saturation must never permanently fail ingest.
                     # extract_kg now heartbeats throughout extractor.acall,
                     # so an attempt can't silently die mid-work; retry until
-                    # success (infinite by attempts via _HEAVY_FOREVER).
-                    retry_policy=_HEAVY_FOREVER,
+                    # success, bounded to _MAX_INGEST_ATTEMPTS via _HEAVY_RETRY
+                    # so a permanently-failing doc frees its admission slot.
+                    retry_policy=_HEAVY_RETRY,
                 )
                 log.info(
                     "← extract_kg  nodes_with_kg_uri=%s",
@@ -296,7 +310,7 @@ class DocumentIngestWorkflow:
                     start_to_close_timeout=timedelta(minutes=15),
                     heartbeat_timeout=timedelta(minutes=2),
                     schedule_to_close_timeout=timedelta(hours=6),
-                    retry_policy=_FAST_FOREVER,
+                    retry_policy=_FAST_RETRY,
                 )
                 log.info(
                     "← push_wikibase  status=%s  created=%d  updated=%d  "
@@ -344,7 +358,7 @@ class DocumentIngestWorkflow:
                 result_type=IngestResult,
                 start_to_close_timeout=timedelta(minutes=10),
                 schedule_to_close_timeout=timedelta(hours=12),
-                retry_policy=_FAST_FOREVER,
+                retry_policy=_FAST_RETRY,
             )
             log.info(
                 "workflow done  doc_id=%s  chunks=%d  status=%s  "
@@ -365,6 +379,6 @@ class DocumentIngestWorkflow:
                 MarkFailedIn(ctx=ctx, params=params, error=str(exc)),
                 start_to_close_timeout=timedelta(minutes=10),
                 schedule_to_close_timeout=timedelta(hours=12),
-                retry_policy=_FAST_FOREVER,
+                retry_policy=_FAST_RETRY,
             )
             raise

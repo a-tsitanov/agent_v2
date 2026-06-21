@@ -1,10 +1,19 @@
-"""Guard: LLM-bound ingest activities must retry until success.
+"""Guard: LLM-bound ingest activities are bounded by ATTEMPT COUNT, not
+wall-clock.
 
-Under LLM-proxy saturation an extract_kg / merge_and_resolve attempt can
-take a long time; a wall-clock ``schedule_to_close_timeout`` made such a
-task permanently fail (the prod symptom: "падают в fail на 48ч").  With
-the heartbeat fix in place the retry storm is gone, so these activities
-should retry until they succeed — no overall wall-clock cap.
+History (two incidents, two opposite failure modes — this is the middle
+ground):
+  1. A wall-clock ``schedule_to_close_timeout`` once made tasks permanently
+     fail under proxy saturation ("падают в fail на 48ч").  → that wall
+     stays GONE on the LLM stages.
+  2. Pure infinite-by-attempts then let a PERMANENTLY-failing document
+     (corrupt input / a doc the model deterministically rejects) retry
+     forever and hold its admission slot, starving ingest at scale.
+
+So the retry policies are now bounded to ``_MAX_INGEST_ATTEMPTS`` (50):
+a truly broken doc gives up and frees its slot, while a long transient
+outage still survives far past 48h because under saturation each attempt
+is long (50 long attempts span many days). Attempt cap, NOT wall-clock cap.
 """
 
 from __future__ import annotations
@@ -25,8 +34,8 @@ def test_extract_kg_has_no_walltime_cap():
     block = _activity_block(
         inspect.getsource(di), "result_type=KGExtracted", "← extract_kg",
     )
-    assert "schedule_to_close_timeout" not in block
-    assert "_HEAVY_FOREVER" in block  # still infinite-by-attempts
+    assert "schedule_to_close_timeout" not in block  # no wall-clock cap (incident #1)
+    assert "_HEAVY_RETRY" in block                    # bounded-attempts profile
 
 
 def test_merge_and_resolve_has_no_walltime_cap():
@@ -34,4 +43,14 @@ def test_merge_and_resolve_has_no_walltime_cap():
         inspect.getsource(gb), '"merge_and_resolve", kg', "← merge_and_resolve",
     )
     assert "schedule_to_close_timeout" not in block
-    assert "_HEAVY_FOREVER" in block
+    assert "_HEAVY_RETRY" in block
+
+
+def test_retry_policies_bounded_to_max_attempts():
+    """Permanently-failing docs must give up and free their slot (incident #2)."""
+    assert di._MAX_INGEST_ATTEMPTS == 50
+    assert gb._MAX_INGEST_ATTEMPTS == 50
+    assert di._HEAVY_RETRY.maximum_attempts == 50
+    assert di._FAST_RETRY.maximum_attempts == 50
+    assert gb._HEAVY_RETRY.maximum_attempts == 50
+    assert gb._FAST_RETRY.maximum_attempts == 50

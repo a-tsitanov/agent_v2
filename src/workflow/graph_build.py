@@ -34,17 +34,22 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
-_HEAVY_FOREVER = RetryPolicy(
+# Bounded per-activity retries (mirror of document_ingest._MAX_INGEST_ATTEMPTS):
+# a permanently-failing doc gives up and frees its admission slot instead of
+# looping forever. Attempt cap, NOT wall-clock — the LLM stages keep no
+# schedule_to_close (see tests/test_workflow/test_completion_no_walltime_cap.py).
+_MAX_INGEST_ATTEMPTS = 50
+_HEAVY_RETRY = RetryPolicy(
     initial_interval=timedelta(minutes=2),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(minutes=30),
-    maximum_attempts=0,
+    maximum_attempts=_MAX_INGEST_ATTEMPTS,
 )
-_FAST_FOREVER = RetryPolicy(
+_FAST_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=60),
-    maximum_attempts=0,
+    maximum_attempts=_MAX_INGEST_ATTEMPTS,
 )
 
 
@@ -73,7 +78,7 @@ class GraphBuildWorkflow:
             # until success rather than permanently fail under a transient
             # proxy saturation.  merge_and_resolve heartbeats throughout
             # merge_kg_extraction, so an attempt can't silently die mid-work.
-            retry_policy=_HEAVY_FOREVER,
+            retry_policy=_HEAVY_RETRY,
         )
         log.info("← merge_and_resolve  uri=%s", merged.merged_entities_uri)
 
@@ -91,7 +96,7 @@ class GraphBuildWorkflow:
             start_to_close_timeout=timedelta(hours=1),
             heartbeat_timeout=timedelta(minutes=5),
             schedule_to_close_timeout=timedelta(hours=24),
-            retry_policy=_FAST_FOREVER,
+            retry_policy=_FAST_RETRY,
         )
         log.info(
             "graph_build done  entities=%d  relations=%d",
