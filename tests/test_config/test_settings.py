@@ -30,6 +30,18 @@ def test_settings_defaults_load() -> None:
     assert settings.agent.max_subqueries >= 1
 
 
+def test_er_native_vector_knn_on_by_default() -> None:
+    """ER uses native Neo4j vector-index kNN by default (no 5000-entity
+    window ceiling) — the windowed path silently loses cross-doc matches
+    as the graph grows past the window.  Fail-safe: the native path
+    degrades to within-batch ER when the index/er_vec isn't populated
+    yet, so flipping the default can't crash a fresh deploy.  Env-
+    independent assertion on the declared default."""
+    from src.config import AgentSettings
+
+    assert AgentSettings.model_fields["er_use_native_vector_knn"].default is True
+
+
 def test_merge_queue_defaults() -> None:
     """Dedicated merge queue (decouples GraphBuildWorkflow's merge stage
     from a burst of extract_kg on kb-ingest-llm)."""

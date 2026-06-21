@@ -1,0 +1,37 @@
+# LiteLLM router for the SCALED Ollama tier (Phase 2, Path A).
+#
+# Fronts 8× Ollama instances (one per A16 GPU) all serving the SAME exact
+# QAT model `gemma4:e4b-qat`, under one logical model_name. LiteLLM's router
+# load-balances across deployments with the same model_name (least-busy),
+# so the per-process LLMPool fans out across the whole GPU fleet instead of
+# hammering one endpoint.
+#
+# Each Ollama runs on 127.0.0.1:1143{4..} with OLLAMA_NUM_PARALLEL set (see
+# docs/scale_phase2_3.md §Path A). Replace host/ports with your GPU host(s).
+#
+# Set LITELLM_MODEL_SMALL=gemma4:e4b-qat in the app .env so every
+# high-volume role (extraction/judge/search/plan) resolves here.
+
+model_list:
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11434}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11435}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11436}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11437}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11438}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11439}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11440}}
+  - {model_name: gemma4:e4b-qat, litellm_params: {model: ollama_chat/gemma4:e4b-qat, api_base: http://gpu-host:11441}}
+
+  # Embeddings — keep on whatever serves them today (OpenAI or a local embed
+  # model). MUST stay 1536-dim to match MILVUS_DIM.
+  - {model_name: text-embedding-3-small, litellm_params: {model: openai/text-embedding-3-small, api_key: os.environ/OPENAI_API_KEY}}
+
+router_settings:
+  routing_strategy: least-busy
+  num_retries: 1
+  timeout: 600
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false   # flip true (or LITELLM_LOG=DEBUG) to see request bodies incl. extra_body
+  num_retries: 0

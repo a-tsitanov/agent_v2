@@ -532,12 +532,19 @@ class AgentSettings(BaseSettings):
     # docs skip the LLM.  OPTIONAL + FAIL-SAFE: any Neo4j error or a
     # missing store falls back to pure LLM judging.
     er_verdict_cache_enabled: bool = True
-    # Opt-in: native Neo4j vector-index kNN for ER instead of the bounded
+    # Native Neo4j vector-index kNN for ER instead of the bounded
     # 5000-entity window.  Removes the window ceiling (at 200k canonicals
     # the window reaches only ~2% of true nearest matches; native kNN
-    # ~96%).  REQUIRES running `scripts/backfill_er_vector.py` first to
-    # populate `er_vec` + build the index.  Default off.
-    er_use_native_vector_knn: bool = False
+    # ~96%) — essential under high-volume ingest where the graph outgrows
+    # the window fast and the windowed path silently stops finding
+    # cross-doc duplicates.  ON by default.  FAIL-SAFE: the native loader
+    # idempotently builds `er_embedding_vec` and returns [] (→ within-batch
+    # ER only) when `er_vec` isn't populated yet, so this can't crash a
+    # fresh deploy.  For EXISTING graphs run `scripts/backfill_er_vector.py`
+    # to populate `er_vec` on prior entities; without it, pre-backfill
+    # entities won't be found until re-ingested.  Set false to force the
+    # legacy window.
+    er_use_native_vector_knn: bool = True
     # Neighbours fetched per new entity from the ER vector index when
     # native kNN is on.
     er_vector_knn_k: int = Field(default=20, ge=1, le=100)

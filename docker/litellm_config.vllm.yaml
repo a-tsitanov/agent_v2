@@ -1,0 +1,51 @@
+# LiteLLM router config for the SCALED inference tier (Phase 2).
+#
+# Fronts 8× vLLM replicas (one per A16 GPU) serving gemma4:e4b-qat under
+# ONE logical model_name `gemma4:e4b-qat`. LiteLLM's router load-balances
+# across all deployments with the same model_name (default: simple
+# shuffle; set routing_strategy for least-busy). This is what lets the
+# per-process LLMPool fan out across the whole GPU fleet instead of one
+# Ollama endpoint.
+#
+# Swap docker/litellm_config.yaml → this file once the vLLM replicas are
+# up (see docs/scale_phase2_3.md for the vLLM launch commands).
+#
+# Each api_base points at a vLLM OpenAI server. Replace host/ports with
+# your GPU host(s). vLLM ignores the api_key but LiteLLM wants one set.
+
+model_list:
+  # ── SMALL tier: gemma4:e4b across 8 vLLM replicas (data-parallel) ──
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8001/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8002/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8003/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8004/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8005/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8006/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8007/v1, api_key: vllm}
+  - model_name: gemma4:e4b-qat
+    litellm_params: {model: openai/gemma4-e4b, api_base: http://gpu-host:8008/v1, api_key: vllm}
+
+  # Embeddings — keep on whatever currently serves them (OpenAI or a
+  # local embed model). MUST stay 1536-dim to match MILVUS_DIM.
+  - model_name: text-embedding-3-small
+    litellm_params: {model: openai/text-embedding-3-small, api_key: os.environ/OPENAI_API_KEY}
+
+router_settings:
+  # least-busy routing keeps GPUs evenly loaded under continuous batching.
+  routing_strategy: least-busy
+  # Allow many concurrent in-flight requests per deployment — vLLM batches
+  # them. Tune alongside vLLM --max-num-seqs.
+  num_retries: 1
+  timeout: 600
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false   # flip true (or LITELLM_LOG=DEBUG) to see request bodies incl. extra_body
+  num_retries: 0

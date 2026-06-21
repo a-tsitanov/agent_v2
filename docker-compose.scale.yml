@@ -1,0 +1,68 @@
+# Phase 3 scale-out OVERRIDE — splits the single all-pools `worker` into
+# per-group services with replicas, so the ingest-hot pools (llm, merge,
+# main) scale independently. Apply ON TOP of the prod compose:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.scale.yml up -d
+#
+# Uses `extends` (NOT YAML anchors — those don't cross files) to inherit
+# build + base env from the prod `worker` service. `extends` does NOT copy
+# depends_on, so it's re-declared per service.
+#
+# Replica counts below are STARTING POINTS — load-test (Phase 6) and
+# adjust so the GPU fleet, not the workers, is the ceiling. Keep:
+#   TEMPORAL_LLM_ACTIVITY_CONCURRENCY  >= LLM_POOL_N   (preflight-enforced)
+#   TEMPORAL_MERGE_ACTIVITY_CONCURRENCY >= LLM_POOL_N
+#
+# ⚠ METRICS CAVEAT: each pool binds Prometheus on base+index inside its
+# container. With replicas, host-port scraping collides — scrape via
+# compose DNS/SD, or set METRICS_ENABLED=false on replicated services
+# (metrics bind is fail-soft, so it won't crash either way).
+
+services:
+  # Neutralize the monolithic all-pools worker (it would double-run pools).
+  worker:
+    deploy: {replicas: 0}
+
+  worker-llm:                    # extract_kg — the LLM-bound hot path
+    extends: {file: docker-compose.prod.yml, service: worker}
+    environment:
+      WORKER_GROUPS: "llm"
+      LLM_POOL_N: "16"
+      TEMPORAL_LLM_ACTIVITY_CONCURRENCY: "20"
+      METRICS_ENABLED: "false"
+    deploy: {replicas: 4}        # 4 × 16 = 64 concurrent extract calls
+    depends_on:
+      temporal: {condition: service_started}
+      init: {condition: service_completed_successfully}
+
+  worker-merge:                  # merge_and_resolve + build_property_graph
+    extends: {file: docker-compose.prod.yml, service: worker}
+    environment:
+      WORKER_GROUPS: "merge"
+      LLM_POOL_N: "16"
+      TEMPORAL_MERGE_ACTIVITY_CONCURRENCY: "20"
+      METRICS_ENABLED: "false"
+    deploy: {replicas: 2}
+    depends_on:
+      neo4j: {condition: service_healthy}
+      temporal: {condition: service_started}
+
+  worker-main:                   # fetch/parse/index/canonical/finalize + scheduler singleton
+    extends: {file: docker-compose.prod.yml, service: worker}
+    environment:
+      WORKER_GROUPS: "main"
+      TEMPORAL_ACTIVITY_CONCURRENCY: "16"
+      METRICS_ENABLED: "false"
+    deploy: {replicas: 2}
+    depends_on:
+      postgres: {condition: service_healthy}
+      milvus: {condition: service_healthy}
+      temporal: {condition: service_started}
+
+  worker-misc:                   # search/large/graph_build/wiki — not ingest-hot
+    extends: {file: docker-compose.prod.yml, service: worker}
+    environment:
+      WORKER_GROUPS: "search,large,graph_build,wiki"
+    deploy: {replicas: 1}
+    depends_on:
+      temporal: {condition: service_started}

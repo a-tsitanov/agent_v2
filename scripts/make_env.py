@@ -209,7 +209,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "AGENT_COVERAGE_CHECK_ENABLED": "Pre-submit coverage-check: перед ответом LLM судит, покрывают ли собранные данные вопрос; при пробеле делается ещё один раунд поиска.",
     "AGENT_ER_ENABLED": "Entity Resolution: дополнительный шаг между merge_kg_extraction и PropertyGraphIndex, схлопывающий семантические дубликаты в один canonical-сущность.",
     "AGENT_ER_JUDGE_BATCH_SIZE": "Сколько пар за один вызов LLM-судьи, когда ER маршрутизирует пограничных кандидатов. Капа 1..50.",
-    "AGENT_ER_USE_NATIVE_VECTOR_KNN": "Opt-in: для ER использовать нативный Neo4j vector-index kNN вместо окна на 5000 сущностей. Требует backfill_er_vector.py. По умолчанию off.",
+    "AGENT_ER_USE_NATIVE_VECTOR_KNN": "Для ER нативный Neo4j vector-index kNN вместо окна на 5000 сущностей (окно теряет кросс-док совпадения по мере роста графа). По умолчанию ON, fail-safe. Для СУЩЕСТВУЮЩИХ графов прогнать backfill_er_vector.py. false → вернуть legacy-окно.",
     "AGENT_ER_VECTOR_KNN_K": "Сколько соседей тянуть на новую сущность из ER vector-index, когда включён нативный kNN. Капа 1..100.",
     "AGENT_ER_VERDICT_CACHE_ENABLED": "Кэш вердиктов ER в Neo4j (:ERVerdict): повторяющиеся пары пропускают LLM. Опционально и fail-safe: при ошибке Neo4j откат на чистое LLM-судейство.",
     "AGENT_GLOBAL_MAX_COMMUNITIES": "Сколько summary сообществ максимум входит в (параллельный) MAP-шаг global-поиска, чтобы корпус не разлетался безгранично. Капа 1..200.",

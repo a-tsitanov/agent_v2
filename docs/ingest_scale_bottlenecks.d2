@@ -1,0 +1,88 @@
+# kb-llamaindex — ingest pipeline @ ~15k docs/hr (4.2 docs/sec)
+# Bottleneck map. Color = severity. See docs/ for the written audit.
+direction: down
+
+classes: {
+  crit:  { style: { fill: "#fdecea"; stroke: "#c0392b"; stroke-width: 2 } }
+  high:  { style: { fill: "#fef5e7"; stroke: "#e67e22"; stroke-width: 2 } }
+  med:   { style: { fill: "#fef9e7"; stroke: "#b7950b"; stroke-width: 1 } }
+  ok:    { style: { fill: "#eafaf1"; stroke: "#27ae60"; stroke-width: 1 } }
+  fixed: { style: { fill: "#eaf2fb"; stroke: "#2471a3"; stroke-width: 2 } }
+  note:  { style: { fill: "#f4f6f7"; stroke: "#85929e"; font-size: 11; stroke-dash: 3 } }
+}
+
+legend: Legend {
+  near: top-right
+  c1: "🔴 CRITICAL — hard blocker" { class: crit }
+  c2: "🟠 HIGH" { class: high }
+  c3: "🟡 MED" { class: med }
+  c4: "🔵 FIXED / now default" { class: fixed }
+  c5: "🟢 OK" { class: ok }
+}
+
+api: Client / API  {
+  ingest: "POST /ingest\n(ingest.py)"
+  upload: "MinIO put_object\n+ Postgres insert_pending\n🟡 synchronous, full file in RAM,\nclient built per-request" { class: med }
+  sws: "signal-with-start → ingest-scheduler\n🟡 4.2 signals/sec to ONE workflow\n(near Temporal per-wf ceiling)" { class: med }
+  ingest -> upload -> sws
+}
+
+temporal: Temporal (kb-ingest)  {
+  sched: "IngestSchedulerWorkflow (singleton)\n🔴 K = max_inflight = 1\n→ docs run ONE-AT-A-TIME\nneed K≈380 for 4.2/s @ T≈90s\n🟡 shares 'main' pool w/ DocIngest;\ncontinue_as_new drain pauses @ high K" { class: crit }
+
+  doc: DocumentIngestWorkflow  {
+    s1: "fetch_source" { class: ok }
+    s2: "parse_and_chunk\n(+ translation LLM)" { class: ok }
+    s3: "index_vector → Milvus" { class: ok }
+    s4: "inject_canonical\n🟡 no heartbeat (only long stage w/o one)" { class: med }
+    s5: "extract_kg\n🔴 1 LLM call / chunk (≈12) — dominant\n♾ infinite retry, NO schedule_to_close" { class: crit }
+    s1 -> s2 -> s3 -> s4 -> s5
+  }
+
+  gb: GraphBuildWorkflow (kb-ingest-merge)  {
+    m1: "merge_and_resolve (ER)\n♾ infinite retry, NO schedule_to_close" { class: high }
+    m2: "build_property_graph → Neo4j" { class: ok }
+    m1 -> m2
+  }
+
+  fin: "finalize\n(status + ingest_metrics)" { class: ok }
+
+  sched -> doc.s1: admit (K=1)
+  doc.s5 -> gb.m1: child wf
+  gb.m2 -> fin
+}
+
+workers: Worker topology  {
+  w: "🔴 1 process per pool, NO replicas\n(docker-compose.prod.yml: no deploy.replicas)\nmain activity_concurrency = 4 🟠\nllm=18  merge=14 (≥ pool N, OK)" { class: crit }
+}
+
+llm: LLM serving  {
+  pool: "LLMPool — Semaphore(N)\n🔴 LLM_POOL_N = 8 PER PROCESS\n~15 calls/doc → need 38–92 calls/s\n→ ~0.1–0.5 doc/s/proc = 8–40× short" { class: crit }
+  think: "extra_body think=false\n🔵 wired but was OFF →\nCoT tokens generated then stripped (waste)\nbiggest cheap latency win" { class: fixed }
+  proxy: "LiteLLM proxy (single)\n🟡 max_retries=2 + 900s timeout\n= retry/slot amplifier under load" { class: med }
+  gpu: "8× A16 GPU · gemma4:e4b-qat\n(real ceiling = aggregate GPU throughput)" { class: note }
+  pool -> think -> proxy -> gpu
+}
+
+stores: Datastores  {
+  milvus: "Milvus\n🔵 HNSW default — but only on REBUILD\n⚠ verify live collection index type" { class: fixed }
+  neo4j: "Neo4j\n🟠 FIRST to saturate: no driver-pool tuning,\nstore built per-activity,\nhub-node MERGE lock contention (cumulative)" { class: high }
+  er: "Entity Resolution\n🔵 native vector kNN now DEFAULT ON\n(was 5000-window → recall→0 as graph grows)\n⚠ run backfill_er_vector.py for existing data" { class: fixed }
+  pg: "Postgres\n🟡 NO connection pool — ~17 connect/sec churn\n(psycopg connect per call)" { class: med }
+  minio: "MinIO claim-check\n🟢 ~5 round-trips/doc, cleanup correct" { class: ok }
+  neo4j -> er: ER reads/writes
+}
+
+temporal.server: "Temporal server\n🟡 auto-setup image, shares Postgres w/ app" { class: med }
+
+# cross-cutting wires
+api.sws -> temporal.sched
+temporal.doc.s3 -> stores.milvus
+temporal.doc.s5 -> llm.pool: every extract call
+temporal.gb.m1 -> stores.er
+temporal.gb.m1 -> llm.pool: ER judge/verify
+temporal.gb.m2 -> stores.neo4j
+temporal.fin -> stores.pg
+temporal.doc -> workers.w: runs on { style.stroke-dash: 4 }
+temporal.gb -> workers.w: runs on { style.stroke-dash: 4 }
+llm.pool -> workers.w: per-process { style.stroke-dash: 4 }
