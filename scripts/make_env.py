@@ -323,6 +323,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "TEMPORAL_PORT": "Порт Temporal (по умолчанию 7233).",
     "TEMPORAL_RERANK_TOP_N": "top-N bge cross-encoder для unified graph+vector rerank перед дорогим large-tier synthesis.",
     "TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-search-small (plan-execute поток: planner + параллельный retrieval подвопросов). >= 1.",
+    "TEMPORAL_SCHEDULER_TASK_QUEUE": "Имя очереди singleton-планировщика допуска (IngestSchedulerWorkflow); отдельный пул, чтобы его churn не мешал DocumentIngestWorkflow на main. Дети ингеста всё равно идут на TEMPORAL_TASK_QUEUE.",
     "TEMPORAL_SEARCH_TASK_QUEUE": "Имя очереди search-активити small-tier (plan/retrieve/coverage_check/rerank); раньше kb-search-llm.",
     "TEMPORAL_STAGING_BUCKET": "Имя staging-бакета Temporal.",
     "TEMPORAL_TASK_QUEUE": "Имя основной очереди ингеста (kb-ingest).",

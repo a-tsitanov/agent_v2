@@ -47,7 +47,7 @@ services:
       neo4j: {condition: service_healthy}
       temporal: {condition: service_started}
 
-  worker-main:                   # fetch/parse/index/canonical/finalize + scheduler singleton
+  worker-main:                   # fetch/parse/index/canonical/finalize (DocumentIngestWorkflow)
     extends: {file: docker-compose.prod.yml, service: worker}
     environment:
       WORKER_GROUPS: "main"
@@ -58,6 +58,18 @@ services:
       postgres: {condition: service_healthy}
       milvus: {condition: service_healthy}
       temporal: {condition: service_started}
+
+  worker-scheduler:              # IngestSchedulerWorkflow singleton — isolated pool
+    extends: {file: docker-compose.prod.yml, service: worker}
+    environment:
+      WORKER_GROUPS: "scheduler"
+      METRICS_ENABLED: "false"
+    # Singleton workflow: a handful of replicas only (Temporal routes the
+    # single workflow's tasks to one at a time; extras are warm standby).
+    deploy: {replicas: 1}
+    depends_on:
+      temporal: {condition: service_started}
+      init: {condition: service_completed_successfully}
 
   worker-misc:                   # search/large/graph_build/wiki — not ingest-hot
     extends: {file: docker-compose.prod.yml, service: worker}

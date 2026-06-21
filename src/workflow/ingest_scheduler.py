@@ -22,6 +22,7 @@ from temporalio import workflow
 from temporalio.common import WorkflowIDReusePolicy
 
 with workflow.unsafe.imports_passed_through():
+    from src.config import settings
     from src.workflow.admission import AdmissionState
     from src.workflow.contracts import IngestParams, SchedulerParams
     from src.workflow.document_ingest import DocumentIngestWorkflow
@@ -128,6 +129,11 @@ class IngestSchedulerWorkflow:
                     DocumentIngestWorkflow.run,
                     params,
                     id=f"ingest-{doc_id}",
+                    # Pin children to the MAIN queue: the scheduler now runs on
+                    # its own queue, whose pool does NOT register
+                    # DocumentIngestWorkflow. Without this the child would
+                    # inherit the scheduler queue and never get picked up.
+                    task_queue=settings.temporal.task_queue,
                     id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
                 )
             except Exception as exc:  # noqa: BLE001

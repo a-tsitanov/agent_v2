@@ -88,7 +88,9 @@ async def test_ingest_uploads_to_minio_and_inserts_s3_uri() -> None:
     call = fake_client.start_workflow.call_args
     assert call.kwargs.get("id") == "ingest-scheduler"
     assert call.kwargs.get("start_signal") == "submit"
-    assert call.kwargs.get("task_queue") == settings.temporal.task_queue
+    # Scheduler singleton runs on its OWN queue (Phase 4a isolation), not the
+    # main ingest queue.
+    assert call.kwargs.get("task_queue") == settings.temporal.scheduler_task_queue
     # The submitted IngestParams is in start_signal_args[0].
     params = call.kwargs["start_signal_args"][0]
     assert params.doc_id == job_id

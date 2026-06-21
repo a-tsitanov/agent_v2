@@ -257,6 +257,14 @@ class TemporalSettings(BaseSettings):
     activity_concurrency: int = 4
     staging_bucket: str = "kb-staging"
 
+    # The always-on IngestSchedulerWorkflow singleton runs on its OWN queue
+    # so its churn (a submit signal per doc + frequent continue_as_new at
+    # high K) can't contend with DocumentIngestWorkflow task processing on
+    # the `main` pool. The scheduler still starts DocumentIngestWorkflow
+    # CHILDREN on `task_queue` (main) — the scheduler pool doesn't register
+    # that workflow. Run a small pool here (1-2 replicas — it's a singleton).
+    scheduler_task_queue: str = "kb-ingest-scheduler"
+
     # LLM-bound extract_kg activities run on a separate task queue.
     # LLMPool owns LLM concurrency via a single global semaphore (LLM_POOL_N).
     # This Temporal cap must be >= LLM_POOL_N so the in-process pool (not

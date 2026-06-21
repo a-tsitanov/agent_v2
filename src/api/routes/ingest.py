@@ -150,7 +150,9 @@ async def upload_document(
             IngestSchedulerWorkflow.run,
             SchedulerParams(max_inflight=settings.ingest_admission.max_inflight),
             id="ingest-scheduler",
-            task_queue=settings.temporal.task_queue,
+            # Dedicated queue: the scheduler runs on its own worker pool,
+            # isolated from DocumentIngestWorkflow on `task_queue` (main).
+            task_queue=settings.temporal.scheduler_task_queue,
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
             start_signal="submit",
             start_signal_args=[params],

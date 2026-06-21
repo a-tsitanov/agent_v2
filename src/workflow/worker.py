@@ -74,6 +74,7 @@ from src.workflow.wiki.wiki_sweep import (
 # process's Prometheus port offset.
 WORKER_GROUPS: list[str] = [
     "main", "llm", "merge", "search", "large", "graph_build", "wiki",
+    "scheduler",
 ]
 
 
@@ -144,9 +145,18 @@ def _build_worker(client: Client, group: str) -> Worker:
     if group == "main":
         return Worker(
             client, task_queue=t.task_queue,
-            workflows=[DocumentIngestWorkflow, IngestSchedulerWorkflow],
+            workflows=[DocumentIngestWorkflow],
             activities=MAIN_ACTIVITIES,
             max_concurrent_activities=t.activity_concurrency,
+        )
+    if group == "scheduler":
+        # Singleton admission scheduler, isolated from the `main` pool so its
+        # signal + continue_as_new churn doesn't starve DocumentIngestWorkflow
+        # task processing. Workflow-only (no activities); it starts the
+        # DocumentIngestWorkflow CHILDREN on `task_queue` (main).
+        return Worker(
+            client, task_queue=t.scheduler_task_queue,
+            workflows=[IngestSchedulerWorkflow],
         )
     if group == "llm":
         # extract_kg only — concurrency throttled further by the LLMPool.
