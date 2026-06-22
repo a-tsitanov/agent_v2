@@ -1,0 +1,67 @@
+input {
+  file {
+    path => "/data/*.csv"          # путь к вашим CSV-файлам
+    start_position => "beginning"
+    mode => "read"                 # режим разовой обработки файлов (не tail)
+    sincedb_path => "/dev/null"    # чтобы не запоминать прочитанное (удобно при тестах)
+
+    # что делать с файлом после обработки: "log" / "delete" / "move"
+    file_completed_action => "log"
+    file_completed_log_path => "/data/processed.log"
+  }
+}
+
+filter {
+  csv {
+    separator => ","
+    # ВАШ ЗАГОЛОВОК — порядок колонок должен совпадать с порядком в файле
+    columns => ["id", "name", "age", "city", "created_at"]
+    skip_empty_columns => true
+    # quote_char => "\""           # раскомментируйте, если поля в кавычках
+  }
+
+  # Приведение типов (опционально, по необходимости)
+  mutate {
+    convert => {
+      "age" => "integer"
+    }
+  }
+
+  # Парсинг даты в @timestamp (опционально)
+  date {
+    match => ["created_at", "yyyy-MM-dd HH:mm:ss", "ISO8601"]
+    target => "@timestamp"
+  }
+
+  # Убираем служебные поля Logstash, чтобы не засорять документ
+  mutate {
+    remove_field => ["message", "host", "path", "log", "event", "@version"]
+  }
+}
+
+output {
+  opensearch {
+    hosts    => ["https://opensearch:9200"]   # адрес вашего OpenSearch
+    index    => "my-index-%{+YYYY.MM.dd}"      # имя индекса
+    user     => "admin"
+    password => "admin"
+
+    ssl => true
+    ssl_certificate_verification => false      # false, если самоподписанный сертификат
+
+    # Параметры bulk-заливки (можно тюнить под объём данных)
+    # document_id => "%{id}"                   # раскомментируйте, чтобы id был ключом документа
+  }
+
+  # для отладки — печать в консоль, потом уберите
+  # stdout { codec => rubydebug }
+}
+
+
+
+docker run --rm \
+  --name logstash \
+  --network opensearch-net \
+  -v "$(pwd)/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro" \
+  -v "$(pwd)/data:/data" \
+  your-logstash-image:tag
