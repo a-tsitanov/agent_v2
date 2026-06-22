@@ -79,3 +79,46 @@ def extract_entity_edges(
         e=len(edges), n=len(names),
     )
     return edges, names
+
+
+def build_graph(
+    edges: list[tuple[str, str, float]], node_names: list[str],
+) -> tuple[Any, list[str]]:
+    """Build an undirected weighted igraph; parallel edges summed."""
+    import igraph as ig
+
+    names: list[str] = list(dict.fromkeys(
+        list(node_names) + [e[0] for e in edges] + [e[1] for e in edges],
+    ))
+    idx = {n: i for i, n in enumerate(names)}
+    g = ig.Graph(n=len(names), directed=False)
+    elist = [(idx[s], idx[t]) for s, t, _ in edges if s in idx and t in idx]
+    weights = [w for s, t, w in edges if s in idx and t in idx]
+    g.add_edges(elist)
+    if weights:
+        g.es["weight"] = weights
+    # Collapse parallel/self edges (GDS undirected projection is simple).
+    # NB: simplify() mutates in place — do NOT reassign (it can return None).
+    g.simplify(multiple=True, loops=True, combine_edges={"weight": "sum"})
+    return g, names
+
+
+def single_level_rows(
+    edges: list[tuple[str, str, float]], node_names: list[str],
+    *, gamma: float, seed: int = 19,
+) -> list[dict]:
+    """Flat leidenalg partition → rows ``[{name, communityId, ids:[cid]}]``."""
+    import leidenalg as la
+
+    g, names = build_graph(edges, node_names)
+    weights = g.es["weight"] if "weight" in g.es.attributes() else None
+    part = la.find_partition(
+        g, la.RBConfigurationVertexPartition,
+        weights=weights, resolution_parameter=gamma, seed=seed,
+    )
+    membership = part.membership  # community index per vertex
+    rows: list[dict] = []
+    for i, name in enumerate(names):
+        cid = str(membership[i])
+        rows.append({"name": name, "communityId": cid, "ids": [cid]})
+    return rows
