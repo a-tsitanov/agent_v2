@@ -46,9 +46,12 @@ def extract_entity_edges(
             break
         for row in page:
             n = row.get("name")
-            if n:
+            if n is not None:
                 names.append(str(n))
-        after = names[-1] if names else after
+        last_name = page[-1].get("name")
+        if last_name is None or not (str(last_name) > after):
+            break
+        after = str(last_name)
         if len(page) < batch_size:
             break
 
@@ -62,9 +65,12 @@ def extract_entity_edges(
             break
         for row in page:
             s, t = row.get("src"), row.get("tgt")
-            if s and t:
+            if s is not None and t is not None:
                 edges.append((str(s), str(t), float(row.get("weight") or 1.0)))
-        after = str(page[-1].get("cursor") or after)
+        last_cursor = page[-1].get("cursor")
+        if last_cursor is None or not (str(last_cursor) > after):
+            break
+        after = str(last_cursor)
         if len(page) < batch_size:
             break
 
