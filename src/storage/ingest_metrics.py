@@ -13,13 +13,14 @@ is the heavy consumer, not analytics writes).
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Iterable
 
 import psycopg
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.config import settings
+from src.storage.pg_pool import get_pg_pool
 
 
 class MetricRow(BaseModel):
@@ -54,7 +55,8 @@ class AsyncIngestMetrics:
     """
 
     def __init__(self, dsn: str | None = None) -> None:
-        self._dsn = dsn or settings.postgres.dsn
+        # None → shared per-process pool; explicit dsn → legacy connect.
+        self._dsn = dsn
 
     async def insert_metrics(self, rows: Iterable[MetricRow]) -> int:
         """Bulk-insert measurement rows, returning the count of
@@ -80,7 +82,7 @@ class AsyncIngestMetrics:
         if not payload:
             return 0
 
-        async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
+        async with self._conn() as conn:
             async with conn.cursor() as cur:
                 await cur.executemany(
                     """
@@ -99,6 +101,16 @@ class AsyncIngestMetrics:
                 inserted = cur.rowcount
             await conn.commit()
         return inserted
+
+    @asynccontextmanager
+    async def _conn(self) -> AsyncIterator[psycopg.AsyncConnection]:
+        if self._dsn is None:
+            pool = await get_pg_pool()
+            async with pool.connection() as conn:
+                yield conn
+        else:
+            async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
+                yield conn
 
 
 def build_ingest_metrics_store() -> AsyncIngestMetrics:

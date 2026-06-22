@@ -231,7 +231,11 @@ async def _run_one(group: str) -> None:
         "worker[{g}]  started  target={t}  pid={p}",
         g=group, t=settings.temporal.target, p=os.getpid(),
     )
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        from src.storage.pg_pool import close_pg_pool
+        await close_pg_pool()
 
 
 def _child_main(group: str) -> None:
