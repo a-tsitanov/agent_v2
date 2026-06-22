@@ -29,3 +29,14 @@ FAST_RETRY = RetryPolicy(
 # reads, GDS) keep their own tighter timeouts.
 LLM_START_TO_CLOSE = timedelta(hours=1)
 LLM_SCHEDULE_TO_CLOSE = timedelta(hours=3)
+
+# Detect-communities is heavy and resource-bound: a true OOM/resource error
+# will recur on retry and only pile load onto Neo4j/the worker, so it is
+# non-retryable.  Transient transport errors still get a couple of tries.
+DETECT_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=30),
+    maximum_attempts=2,
+    non_retryable_error_types=["MemoryError"],
+)

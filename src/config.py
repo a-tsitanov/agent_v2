@@ -332,6 +332,12 @@ class TemporalSettings(BaseSettings):
     community_leiden_gamma: float = Field(default=1.0, gt=0)
     community_leiden_concurrency: int = Field(default=4, ge=1)
 
+    # Community-detection backend.  "gds" = in-Neo4j GDS Leiden (legacy);
+    # "leidenalg" = in-worker leidenalg/igraph (memory off Neo4j).  Default
+    # stays "gds" until the strict-parity benchmark passes (project policy:
+    # benchmark before adopting).
+    community_backend: Literal["gds", "leidenalg"] = "gds"
+
     @property
     def target(self) -> str:
         return f"{self.host}:{self.port}"

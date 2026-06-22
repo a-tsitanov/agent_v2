@@ -40,7 +40,10 @@ with workflow.unsafe.imports_passed_through():
         SummarizeCommunityResult,
     )
     from src.workflow.search._retry import (
-        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+        DETECT_RETRY,
+        FAST_RETRY,
+        LLM_SCHEDULE_TO_CLOSE,
+        LLM_START_TO_CLOSE,
     )
 
 
@@ -111,9 +114,10 @@ class CommunityBuildWorkflow:
             "detect_communities_activity",
             params,
             result_type=DetectCommunitiesResult,
-            start_to_close_timeout=timedelta(minutes=20),
-            schedule_to_close_timeout=timedelta(minutes=30),
-            retry_policy=FAST_RETRY,
+            start_to_close_timeout=timedelta(minutes=60),
+            heartbeat_timeout=timedelta(minutes=2),
+            schedule_to_close_timeout=timedelta(minutes=90),
+            retry_policy=DETECT_RETRY,
         )
         specs = build_summarize_specs(detect)
         self._state["detected"] = len(specs)
