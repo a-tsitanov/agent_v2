@@ -24,10 +24,10 @@ LIMIT $limit
 
 _EDGES_CYPHER = """
 MATCH (s:__Entity__)-[r]->(t:__Entity__)
-WHERE $after = '' OR s.name > $after
+WHERE $after = '' OR elementId(r) > $after
 RETURN s.name AS src, t.name AS tgt,
-       coalesce(r.weight, 1.0) AS weight, s.name AS cursor
-ORDER BY s.name
+       coalesce(r.weight, 1.0) AS weight, elementId(r) AS cursor
+ORDER BY elementId(r)
 LIMIT $limit
 """
 
@@ -55,6 +55,10 @@ def extract_entity_edges(
         if len(page) < batch_size:
             break
 
+    # Edge pagination uses elementId(r) as cursor — elementId is unique per
+    # relationship, so the cursor strictly advances every page regardless of
+    # how many edges share the same source node.  A source with more edges
+    # than batch_size is therefore never silently truncated.
     edges: list[tuple[str, str, float]] = []
     after = ""
     while True:
