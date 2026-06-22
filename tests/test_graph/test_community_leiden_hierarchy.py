@@ -19,6 +19,28 @@ def test_ids_are_finest_to_coarsest_and_nested():
     # contract: communityId == ids[-1]
     for r in rows:
         assert r["communityId"] == r["ids"][-1]
+    # non-vacuous: a real multi-level hierarchy must be produced
+    assert any(len(r["ids"]) > 1 for r in rows), "expected >1 hierarchy level"
+    # meaningful nesting: at least two nodes with DIFFERENT finest ids
+    # share the SAME coarser id at some deeper level — distinct fine
+    # communities actually merge into a common coarser community.
+    found_merge = False
+    for i, n1 in enumerate(nodes):
+        for n2 in nodes[i + 1 :]:
+            ids1, ids2 = by_name[n1], by_name[n2]
+            if ids1[0] != ids2[0]:  # different finest community
+                for depth in range(1, min(len(ids1), len(ids2))):
+                    if ids1[depth] == ids2[depth]:
+                        found_merge = True
+                        break
+            if found_merge:
+                break
+        if found_merge:
+            break
+    assert found_merge, (
+        "hierarchy is flat: no two nodes from different fine communities "
+        "merge into a common coarser community"
+    )
     # nesting: nodes sharing the finest id share every coarser id
     for n1 in nodes:
         for n2 in nodes:

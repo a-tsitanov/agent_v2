@@ -179,8 +179,6 @@ def hierarchy_rows(
             nxt.add_edges(list(agg_w.keys()))
             nxt.es["weight"] = list(agg_w.values())
         cur, current_members = nxt, next_members
-        if ncomm <= 1:
-            break
 
     # path is finest->coarsest already (level 0 appended first).
     rows: list[dict] = []
