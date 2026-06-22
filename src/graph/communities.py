@@ -38,6 +38,12 @@ from typing import Any
 
 from loguru import logger
 
+from src.config import settings
+from src.graph.community_leiden import (
+    extract_entity_edges,
+    hierarchy_rows,
+    single_level_rows,
+)
 from src.workflow.contracts import CommunityRef
 
 # Prefix for the transient in-memory GDS projection.  The actual name is
@@ -235,7 +241,7 @@ async def _read_old_reports(store: Any | None) -> dict[tuple[int, str], dict]:
         return {}
     try:
         rows = await asyncio.to_thread(_run_query, store, _READ_OLD_REPORTS_CYPHER)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("communities: read old reports failed: {e}", e=exc)
         return {}
     out: dict[tuple[int, str], dict] = {}
@@ -365,6 +371,26 @@ def _coarsest_from_rows(
     return out
 
 
+async def _leiden_rows(
+    store: Any, *, gamma: float, max_levels: int, seed: int = 19,
+) -> list[dict]:
+    """leidenalg backend: stream edges + cluster in-worker (off Neo4j heap).
+
+    Returns the SAME rows shape as the GDS leiden stream
+    (``[{name, communityId, ids}]``).  CPU-bound clustering runs in a
+    thread so the activity event loop (and its heartbeat) stays live.
+    """
+    edges, names = await asyncio.to_thread(extract_entity_edges, store)
+    if max_levels > 1:
+        return await asyncio.to_thread(
+            hierarchy_rows, edges, names,
+            gamma=gamma, max_levels=max_levels, seed=seed,
+        )
+    return await asyncio.to_thread(
+        single_level_rows, edges, names, gamma=gamma, seed=seed,
+    )
+
+
 async def detect_communities(
     store: Any | None,
     *,
@@ -390,28 +416,35 @@ async def detect_communities(
         logger.info("communities: no graph store — skipping detection")
         return []
 
-    # Unique per-call projection name so concurrent rebuilds don't collide.
-    graph_name = _new_graph_name()
-
-    try:
-        # Re-project from scratch: drop any stale projection first, then
-        # build a fresh one (a leftover projection from a crashed run would
-        # otherwise make gds.graph.project fail with "already exists").
-        await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
-        proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
-        stats = _projection_stats(proj_rows)
-        rows = await asyncio.to_thread(
-            _run_query, store,
-            _leiden_stream_cypher(graph_name, gamma=gamma, concurrency=concurrency),
-        )
-    except Exception as exc:  # noqa: BLE001
-        # A genuine GDS/Cypher ERROR (vs an empty graph) — surfaced loudly
-        # so "0 communities" is never silently mistaken for an infra fault.
-        logger.error("communities: GDS Leiden detection FAILED: {e}", e=exc)
-        # Best-effort cleanup so we don't leak the projection.
-        with contextlib.suppress(Exception):
+    if settings.temporal.community_backend == "leidenalg":
+        try:
+            rows = await _leiden_rows(store, gamma=gamma, max_levels=1)
+            stats = {"nodes": len({r["name"] for r in rows}), "rels": -1}
+        except Exception as exc:
+            logger.error("communities: leidenalg detection FAILED: {e}", e=exc)
+            return []
+    else:
+        # Unique per-call projection name so concurrent rebuilds don't collide.
+        graph_name = _new_graph_name()
+        try:
+            # Re-project from scratch: drop any stale projection first, then
+            # build a fresh one (a leftover projection from a crashed run would
+            # otherwise make gds.graph.project fail with "already exists").
             await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
-        return []
+            proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+            stats = _projection_stats(proj_rows)
+            rows = await asyncio.to_thread(
+                _run_query, store,
+                _leiden_stream_cypher(graph_name, gamma=gamma, concurrency=concurrency),
+            )
+        except Exception as exc:
+            # A genuine GDS/Cypher ERROR (vs an empty graph) — surfaced loudly
+            # so "0 communities" is never silently mistaken for an infra fault.
+            logger.error("communities: GDS Leiden detection FAILED: {e}", e=exc)
+            # Best-effort cleanup so we don't leak the projection.
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+            return []
 
     if not rows:
         logger.warning(
@@ -456,13 +489,14 @@ async def detect_communities(
                     "carry_summarized_at": None,
                 },
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("communities: :Community write failed: {e}", e=exc)
         # Detection still succeeded; surface what we grouped so the
         # workflow can at least attempt summaries.
     finally:
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+        if settings.temporal.community_backend != "leidenalg":
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
 
     return communities
 
@@ -496,23 +530,32 @@ async def detect_hierarchy(
         logger.info("communities: no graph store — skipping hierarchy detection")
         return []
 
-    graph_name = _new_graph_name()
-
-    try:
-        await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
-        proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
-        stats = _projection_stats(proj_rows)
-        rows = await asyncio.to_thread(
-            _run_query, store,
-            _leiden_stream_cypher(graph_name, gamma=gamma, concurrency=concurrency),
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "communities: GDS Leiden hierarchy detection FAILED: {e}", e=exc,
-        )
-        with contextlib.suppress(Exception):
+    if settings.temporal.community_backend == "leidenalg":
+        try:
+            rows = await _leiden_rows(store, gamma=gamma, max_levels=max_levels)
+            stats = {"nodes": len({r["name"] for r in rows}), "rels": -1}
+        except Exception as exc:
+            logger.error(
+                "communities: leidenalg hierarchy detection FAILED: {e}", e=exc,
+            )
+            return []
+    else:
+        graph_name = _new_graph_name()
+        try:
             await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
-        return []
+            proj_rows = await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
+            stats = _projection_stats(proj_rows)
+            rows = await asyncio.to_thread(
+                _run_query, store,
+                _leiden_stream_cypher(graph_name, gamma=gamma, concurrency=concurrency),
+            )
+        except Exception as exc:
+            logger.error(
+                "communities: GDS Leiden hierarchy detection FAILED: {e}", e=exc,
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+            return []
 
     if not rows:
         logger.warning(
@@ -607,11 +650,12 @@ async def detect_hierarchy(
                         **carry,
                     },
                 )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("communities: :Community hierarchy write failed: {e}", e=exc)
     finally:
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
+        if settings.temporal.community_backend != "leidenalg":
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
 
     return communities
 
