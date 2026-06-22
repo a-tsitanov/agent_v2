@@ -31,6 +31,8 @@ dependencies = [
     "psycopg[binary]>=3.2,<4",
     "pymilvus>=2.4,<3",
     "neo4j>=5.27,<7",
+    "python-igraph>=0.11,<0.12",
+    "leidenalg>=0.10,<0.11",
     "minio>=7.2,<8",
     # Wikibase REST + bot API client.
     "wikibaseintegrator>=0.12,<1.0",
