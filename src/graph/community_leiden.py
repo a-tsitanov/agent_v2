@@ -122,3 +122,69 @@ def single_level_rows(
         cid = str(membership[i])
         rows.append({"name": name, "communityId": cid, "ids": [cid]})
     return rows
+
+
+def hierarchy_rows(
+    edges: list[tuple[str, str, float]], node_names: list[str],
+    *, gamma: float, max_levels: int, seed: int = 19,
+) -> list[dict]:
+    """Build a Leiden dendrogram by iterative aggregation.
+
+    Returns rows ``[{name, communityId, ids:[finest..coarsest]}]`` matching
+    the GDS ``intermediateCommunityIds`` contract.
+    """
+    import igraph as ig
+    import leidenalg as la
+
+    if max_levels <= 1:
+        return single_level_rows(edges, node_names, gamma=gamma, seed=seed)
+
+    g, names = build_graph(edges, node_names)
+
+    # path[name] accumulates community ids finest->coarsest.
+    path: dict[str, list[str]] = {n: [] for n in names}
+    # current_members[super_idx] = list of ORIGINAL node names it represents.
+    current_members: list[list[str]] = [[n] for n in names]
+    cur = g
+
+    for _level in range(max_levels):
+        weights = cur.es["weight"] if "weight" in cur.es.attributes() else None
+        part = la.find_partition(
+            cur, la.RBConfigurationVertexPartition,
+            weights=weights, resolution_parameter=gamma, seed=seed,
+        )
+        membership = part.membership
+        ncomm = len(set(membership))
+        # Stamp this level's community id onto every original node.
+        for super_idx, comm in enumerate(membership):
+            cid = str(comm)
+            for orig in current_members[super_idx]:
+                path[orig].append(cid)
+        if ncomm <= 1:
+            break
+        # Aggregate: one supernode per community; sum inter-community weights.
+        next_members: list[list[str]] = [[] for _ in range(ncomm)]
+        for super_idx, comm in enumerate(membership):
+            next_members[comm].extend(current_members[super_idx])
+        agg_w: dict[tuple[int, int], float] = {}
+        ew = cur.es["weight"] if "weight" in cur.es.attributes() else None
+        for eidx, e in enumerate(cur.es):
+            cu, cv = membership[e.source], membership[e.target]
+            if cu == cv:
+                continue
+            key = (min(cu, cv), max(cu, cv))
+            agg_w[key] = agg_w.get(key, 0.0) + (ew[eidx] if ew else 1.0)
+        nxt = ig.Graph(n=ncomm, directed=False)
+        if agg_w:
+            nxt.add_edges(list(agg_w.keys()))
+            nxt.es["weight"] = list(agg_w.values())
+        cur, current_members = nxt, next_members
+        if ncomm <= 1:
+            break
+
+    # path is finest->coarsest already (level 0 appended first).
+    rows: list[dict] = []
+    for name in names:
+        ids = path[name] or ["0"]
+        rows.append({"name": name, "communityId": ids[-1], "ids": ids})
+    return rows
