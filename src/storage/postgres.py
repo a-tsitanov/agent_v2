@@ -7,6 +7,8 @@ Schema is the one initialised by ``scripts/setup_db.py`` (Stage 1).
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -14,7 +16,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from src.config import settings
+from src.storage.pg_pool import get_pg_pool
 
 
 @dataclass
@@ -47,19 +49,32 @@ class DocumentRow:
 class AsyncPostgres:
     """Thin async wrapper around the document-status table.
 
-    Uses ``psycopg.AsyncConnection`` per call — connection pooling is
-    not in scope for the prototype (LlamaIndex is the heavy
-    consumer; document-table calls are infrequent).
+    Connections come from the per-process pool
+    (``src/storage/pg_pool.py``) so high-volume status updates reuse
+    connections instead of opening one per call.  Passing an explicit
+    ``dsn`` (e.g. a one-off script pointed at another database) keeps
+    the legacy connect-per-call path.
     """
 
     def __init__(self, dsn: str | None = None) -> None:
-        self._dsn = dsn or settings.postgres.dsn
+        # None → shared pool; explicit dsn → legacy direct connect.
+        self._dsn = dsn
+
+    @asynccontextmanager
+    async def _conn(self) -> AsyncIterator[psycopg.AsyncConnection]:
+        if self._dsn is None:
+            pool = await get_pg_pool()
+            async with pool.connection() as conn:
+                yield conn
+        else:
+            async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
+                yield conn
 
     async def insert_pending(
         self, doc_id: uuid.UUID, path: str,
         department: str = "", doc_type: str = "",
     ) -> None:
-        async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
+        async with self._conn() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
@@ -78,7 +93,7 @@ class AsyncPostgres:
         error: str = "",
         summary: str = "",
     ) -> None:
-        async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
+        async with self._conn() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
@@ -98,17 +113,18 @@ class AsyncPostgres:
 
         Used by the legacy `doc_id` backfill to map a chunk's stored
         `file_path` back to its document id."""
-        async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT id, path FROM documents")
-                rows = await cur.fetchall()
+        async with self._conn() as conn, conn.cursor() as cur:
+            await cur.execute("SELECT id, path FROM documents")
+            rows = await cur.fetchall()
         return [(str(r[0]), r[1]) for r in rows]
 
     async def get(self, doc_id: uuid.UUID) -> DocumentRow | None:
-        async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
-                    "SELECT * FROM documents WHERE id = %s", (str(doc_id),),
-                )
-                row = await cur.fetchone()
+        async with (
+            self._conn() as conn,
+            conn.cursor(row_factory=dict_row) as cur,
+        ):
+            await cur.execute(
+                "SELECT * FROM documents WHERE id = %s", (str(doc_id),),
+            )
+            row = await cur.fetchone()
         return DocumentRow.from_dict(row) if row else None

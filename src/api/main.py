@@ -50,6 +50,8 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        from src.storage.pg_pool import close_pg_pool
+        await close_pg_pool()
         await _container.close()
 
 

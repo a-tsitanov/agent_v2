@@ -302,6 +302,9 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "POSTGRES_DB": "Имя базы Postgres.",
     "POSTGRES_HOST": "Хост Postgres.",
     "POSTGRES_PASSWORD": "Пароль Postgres. Секрет; в проде сменить дефолт 'postgres'.",
+    "POSTGRES_POOL_MAX_SIZE": "Макс. размер пула коннектов приложения к Postgres НА ПРОЦЕСС; суммарный спрос ≈ значение × число процессов-воркеров — держать ниже max_connections с запасом под Temporal.",
+    "POSTGRES_POOL_MIN_SIZE": "Мин. размер пула коннектов приложения; 0 → не держать простаивающих коннектов (создаются по требованию).",
+    "POSTGRES_POOL_TIMEOUT_S": "Сколько секунд ждать свободный коннект из пула, прежде чем упасть с ошибкой.",
     "POSTGRES_PORT": "Порт Postgres (по умолчанию 5432).",
     "POSTGRES_USER": "Пользователь Postgres.",
     # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
@@ -320,6 +323,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-ingest-merge; должно быть >= LLM_POOL_N (иначе Temporal троттлит раньше пула).",
     "TEMPORAL_MERGE_TASK_QUEUE": "Имя очереди merge-стадии (merge_and_resolve + build_property_graph) — отдельно, чтобы merge не голодал за burst-ом extract.",
     "TEMPORAL_NAMESPACE": "Namespace Temporal.",
+    "TEMPORAL_NAMESPACE_RETENTION_DAYS": "Срок хранения истории завершённых воркфлоу (setup_db применяет на init); ограничивает рост Postgres за счёт per-doc историй DocumentIngest/GraphBuild. 0 → не менять namespace.",
     "TEMPORAL_PORT": "Порт Temporal (по умолчанию 7233).",
     "TEMPORAL_RERANK_TOP_N": "top-N bge cross-encoder для unified graph+vector rerank перед дорогим large-tier synthesis.",
     "TEMPORAL_SEARCH_ACTIVITY_CONCURRENCY": "Слотов на очереди kb-search-small (plan-execute поток: planner + параллельный retrieval подвопросов). >= 1.",

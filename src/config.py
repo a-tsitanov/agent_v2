@@ -124,6 +124,16 @@ class PostgresSettings(BaseSettings):
     password: SecretStr = SecretStr("postgres")
     connect_timeout_s: int = 10
 
+    # Per-process connection pool (src/storage/pg_pool.py).  Sized
+    # CONSERVATIVELY: the deployment runs ~10 processes (8 worker pools
+    # + API) against a single shared Postgres, so total app demand is
+    # pool_max_size * n_processes and must leave headroom under
+    # ``max_connections`` for Temporal (512 shards) on the same DB.
+    # min_size=0 → no idle connections reserved per process.
+    pool_min_size: int = 0
+    pool_max_size: int = 4
+    pool_timeout_s: float = 30.0
+
     @cached_property
     def dsn(self) -> str:
         return (
@@ -256,6 +266,12 @@ class TemporalSettings(BaseSettings):
     task_queue: str = "kb-ingest"
     activity_concurrency: int = 4
     staging_bucket: str = "kb-staging"
+
+    # Closed-workflow history retention.  Without an explicit value the
+    # namespace keeps the stock default, letting per-doc DocumentIngest /
+    # GraphBuild histories accumulate in the shared Postgres.  setup_db
+    # enforces this on init (idempotent).  0 → leave the namespace as-is.
+    namespace_retention_days: int = 3
 
     # The always-on IngestSchedulerWorkflow singleton runs on its OWN queue
     # so its churn (a submit signal per doc + frequent continue_as_new at

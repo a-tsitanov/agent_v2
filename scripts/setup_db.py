@@ -143,6 +143,51 @@ def setup_temporal_search_attributes() -> None:
     asyncio.run(_register())
 
 
+def setup_temporal_retention() -> None:
+    """Enforce the configured closed-workflow retention on the namespace.
+
+    Bounds Postgres history growth: without this, per-document
+    DocumentIngest / GraphBuild histories pile up in the shared DB.
+    Idempotent (UpdateNamespace is a no-op when the TTL already
+    matches); failures are warnings so init never blocks on it.
+    ``namespace_retention_days <= 0`` leaves the namespace untouched.
+    """
+    days = settings.temporal.namespace_retention_days
+    if days <= 0:
+        logger.info("temporal retention unset (days<=0) — leaving namespace as-is")
+        return
+
+    import asyncio
+    from google.protobuf.duration_pb2 import Duration
+    from temporalio.api.namespace.v1 import NamespaceConfig
+    from temporalio.api.workflowservice.v1 import UpdateNamespaceRequest
+    from temporalio.client import Client
+
+    async def _update() -> None:
+        client = await Client.connect(
+            settings.temporal.target,
+            namespace=settings.temporal.namespace,
+        )
+        req = UpdateNamespaceRequest(
+            namespace=settings.temporal.namespace,
+            config=NamespaceConfig(
+                workflow_execution_retention_ttl=Duration(
+                    seconds=days * 24 * 3600,
+                ),
+            ),
+        )
+        try:
+            await client.workflow_service.update_namespace(req)
+            logger.info(
+                "temporal retention set  namespace={ns}  days={d}",
+                ns=settings.temporal.namespace, d=days,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("temporal retention update failed  err={e}", e=exc)
+
+    asyncio.run(_update())
+
+
 def setup_postgres() -> None:
     pg = settings.postgres
     logger.info(
@@ -204,6 +249,7 @@ def main() -> None:
     setup_milvus()
     setup_minio()
     setup_temporal_search_attributes()
+    setup_temporal_retention()
     logger.info("setup_db  all done")
 
 

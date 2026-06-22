@@ -263,6 +263,23 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kb_llamaindex}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    # Connection-budget tuning.  The stock image ships max_connections=100,
+    # which a single shared instance cannot satisfy: Temporal (per-service
+    # SQL_MAX_CONNS=20 + SQL_VIS_MAX_CONNS=10, several services) alone can
+    # demand >100, before the app's pool.  Raise the ceiling and size the
+    # caches for the 32+-core / RAM-rich host.  Budget at 300:
+    # Temporal (capped below) + app pool (~10 procs x POSTGRES_POOL_MAX_SIZE)
+    # + grafana/misc, with headroom.  Recreate the container to apply.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=300"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -288,6 +305,14 @@ services:
       DBNAME: temporal
       VISIBILITY_DBNAME: temporal_visibility
       NUM_HISTORY_SHARDS: ${TEMPORAL_NUM_HISTORY_SHARDS:-512}
+      # Explicit, BOUNDED persistence pools (auto-setup defaults: 20/20 main,
+      # 10/10 visibility — per service, several services → easily >100 conns).
+      # Pin them so the connection budget against Postgres max_connections is
+      # visible and tunable instead of drifting on stock defaults.
+      SQL_MAX_CONNS: ${TEMPORAL_SQL_MAX_CONNS:-30}
+      SQL_MAX_IDLE_CONNS: ${TEMPORAL_SQL_MAX_IDLE_CONNS:-10}
+      SQL_VIS_MAX_CONNS: ${TEMPORAL_SQL_VIS_MAX_CONNS:-15}
+      SQL_VIS_MAX_IDLE_CONNS: ${TEMPORAL_SQL_VIS_MAX_IDLE_CONNS:-5}
     depends_on:
       postgres: {condition: service_healthy}
     restart: unless-stopped
