@@ -267,6 +267,12 @@ class TemporalSettings(BaseSettings):
     activity_concurrency: int = 4
     staging_bucket: str = "kb-staging"
 
+    # Closed-workflow history retention.  Without an explicit value the
+    # namespace keeps the stock default, letting per-doc DocumentIngest /
+    # GraphBuild histories accumulate in the shared Postgres.  setup_db
+    # enforces this on init (idempotent).  0 → leave the namespace as-is.
+    namespace_retention_days: int = 3
+
     # The always-on IngestSchedulerWorkflow singleton runs on its OWN queue
     # so its churn (a submit signal per doc + frequent continue_as_new at
     # high K) can't contend with DocumentIngestWorkflow task processing on
