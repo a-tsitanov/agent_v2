@@ -69,3 +69,4 @@ staging, пул LLM и т. д. Читайте CONCEPTS.md, чтобы понят
 | [0012](0012-wikibase-anchor-continuous-wiki.md) | Канонический якорь Wikibase + непрерывный wiki-редактор | Принято |
 | [0013](0013-multi-model-role-tier-selection.md) | Мультимодельный выбор role/tier + снимки на момент отправки | Принято |
 | [0014](0014-source-download-stable-endpoint.md) | Скачивание исходников через стабильный API-endpoint         | Принято |
+| [0015](0015-community-detection-backend-leidenalg.md) | Бэкенд детекции сообществ — in-worker leidenalg (вынос из Neo4j GDS) | Принято |

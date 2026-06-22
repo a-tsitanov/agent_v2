@@ -4,8 +4,16 @@ DECOUPLED / OFFLINE only — runs from the ``CommunityBuildWorkflow`` on
 the dedicated ``kb-graph-build`` queue (admin endpoint / schedule), NEVER
 on the query hot path.
 
-``detect_communities`` runs Neo4j GDS Leiden over the ``__Entity__``
-sub-graph and materialises ``:Community`` nodes:
+The Leiden COMPUTE backend is pluggable via ``community_backend``
+(ADR-0015): ``"gds"`` (default) runs ``gds.leiden.stream`` inside Neo4j;
+``"leidenalg"`` streams the edges out and runs hierarchical Leiden in this
+worker (``src/graph/community_leiden.py``) — moving the memory off Neo4j's
+JVM heap.  Both backends emit the SAME ``rows`` (``[{name, communityId,
+ids}]``), so the grouping + ``:Community`` materialisation below are
+backend-agnostic.
+
+``detect_communities`` runs Leiden over the ``__Entity__`` sub-graph and
+materialises ``:Community`` nodes (GDS path shown):
 
   1. Project the ``__Entity__`` nodes + their relationships into an
      in-memory GDS graph (Cypher projection — works for the arbitrary
