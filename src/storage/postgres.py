@@ -58,15 +58,17 @@ class AsyncPostgres:
     async def insert_pending(
         self, doc_id: uuid.UUID, path: str,
         department: str = "", doc_type: str = "",
+        doc_date: str | None = None,
     ) -> None:
         async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    INSERT INTO documents (id, path, department, doc_type, status)
-                    VALUES (%s, %s, %s, %s, 'pending')
+                    INSERT INTO documents
+                        (id, path, department, doc_type, doc_date, status)
+                    VALUES (%s, %s, %s, %s, %s, 'pending')
                     """,
-                    (str(doc_id), path, department, doc_type),
+                    (str(doc_id), path, department, doc_type, doc_date),
                 )
             await conn.commit()
 

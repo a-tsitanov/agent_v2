@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS documents (
                                    'vector_only', 'failed')),
     error        TEXT DEFAULT '',
     summary      TEXT DEFAULT '',
+    doc_date     DATE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -51,7 +52,13 @@ CREATE INDEX IF NOT EXISTS documents_status_idx
 
 CREATE INDEX IF NOT EXISTS documents_department_idx
     ON documents (department);
+
+CREATE INDEX IF NOT EXISTS documents_doc_date_idx
+    ON documents (doc_date);
 """
+
+
+_DOCUMENTS_MIGRATE = "ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_date DATE;"
 
 
 _INGEST_METRICS_DDL = """
@@ -154,6 +161,7 @@ def setup_postgres() -> None:
     ) as conn:
         with conn.cursor() as cur:
             cur.execute(_DOCUMENTS_DDL)
+            cur.execute(_DOCUMENTS_MIGRATE)
             cur.execute(_INGEST_METRICS_DDL)
     logger.info("postgres setup  done")
 
