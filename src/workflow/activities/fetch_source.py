@@ -38,6 +38,8 @@ async def fetch_source(params: IngestParams) -> Ctx:
             local_path=params.path,
             cleanup_dir=None,
             workflow_run_id=info.workflow_run_id,
+            doc_date_epoch=params.doc_date_epoch,
+            inserted_at_epoch=params.inserted_at_epoch,
         )
 
     storage = build_minio_storage()
@@ -63,4 +65,6 @@ async def fetch_source(params: IngestParams) -> Ctx:
         local_path=str(target),
         cleanup_dir=str(target.parent),
         workflow_run_id=info.workflow_run_id,
+        doc_date_epoch=params.doc_date_epoch,
+        inserted_at_epoch=params.inserted_at_epoch,
     )

@@ -24,6 +24,7 @@ from urllib3.exceptions import MaxRetryError
 
 from src.api.auth import require_api_key
 from src.config import settings
+from src.retrieval.date_filters import iso_to_epoch_days, today_epoch_days
 from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
 from src.workflow.client import get_temporal_client
@@ -60,10 +61,25 @@ async def upload_document(
     file: UploadFile = File(...),
     department: str = Form(default=""),
     force: bool = Form(default=False),
+    document_date: str | None = Form(default=None),
     x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
     if not file.filename:
         raise HTTPException(400, "filename required")
+
+    # Optional client document date (ISO YYYY-MM-DD) for date-filtered
+    # search.  Validate up front so a malformed value 422s before any
+    # upload/enqueue work.  inserted_at is stamped now (UTC).
+    doc_date_epoch: int | None = None
+    if document_date:
+        try:
+            doc_date_epoch = iso_to_epoch_days(document_date)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"document_date must be ISO YYYY-MM-DD: {exc}",
+            ) from exc
+    inserted_at_epoch = today_epoch_days()
 
     doc_id = uuid.uuid4()
     # Object key keeps the original filename so the worker can pick the
@@ -105,6 +121,7 @@ async def upload_document(
     doc_type = Path(file.filename).suffix.lstrip(".").lower()
     await pg.insert_pending(
         doc_id, s3_uri, department=department, doc_type=doc_type,
+        doc_date=document_date or None,
     )
 
     # Analytics labels: explicit header wins, else AnalyticsSettings default.
@@ -139,6 +156,10 @@ async def upload_document(
         # ship the operator's force override.
         classifier_enabled=settings.classifier.enabled,
         force=force,
+        # Date-filter snapshots (computed above, outside the sandbox).
+        doc_date=document_date or "",
+        doc_date_epoch=doc_date_epoch,
+        inserted_at_epoch=inserted_at_epoch,
     )
     # Admission is always on: hand the document to the configured backlog
     # backend (INGEST_QUEUE_BACKEND).  Default `temporal` = signal-with-start

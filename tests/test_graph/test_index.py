@@ -183,6 +183,43 @@ def test_ensure_entity_lookup_indexes_name_and_mention_count_and_failopen():
     assert ensure_entity_lookup_indexes(_BoomStore()) is False
 
 
+def test_ensure_chunk_date_indexes_cypher_and_failopen():
+    from src.graph.index import (
+        CHUNK_DOC_DATE_INDEX_CYPHER,
+        CHUNK_INSERTED_AT_INDEX_CYPHER,
+        ensure_chunk_date_indexes,
+    )
+
+    # Range indexes on the per-chunk date epochs (date-filter feature).
+    assert "CREATE INDEX chunk_doc_date_epoch IF NOT EXISTS" in CHUNK_DOC_DATE_INDEX_CYPHER
+    assert "FOR (c:Chunk) ON (c.doc_date_epoch)" in CHUNK_DOC_DATE_INDEX_CYPHER
+    assert (
+        "CREATE INDEX chunk_inserted_at_epoch IF NOT EXISTS"
+        in CHUNK_INSERTED_AT_INDEX_CYPHER
+    )
+    assert "ON (c.inserted_at_epoch)" in CHUNK_INSERTED_AT_INDEX_CYPHER
+
+    class _Store:
+        def __init__(self):
+            self.ran: list[str] = []
+
+        def structured_query(self, cypher):
+            self.ran.append(cypher)
+
+    store = _Store()
+    assert ensure_chunk_date_indexes(store) is True
+    assert store.ran == [
+        CHUNK_DOC_DATE_INDEX_CYPHER, CHUNK_INSERTED_AT_INDEX_CYPHER,
+    ]
+
+    class _BoomStore:
+        def structured_query(self, cypher):
+            raise RuntimeError("no index support")
+
+    # Fail-open: returns False, never raises.
+    assert ensure_chunk_date_indexes(_BoomStore()) is False
+
+
 def test_build_property_graph_index_threads_llm(monkeypatch):
     # The index's llm must be the project (LiteLLM) model so the default
     # retriever's LLMSynonymRetriever doesn't fall back to Settings.llm

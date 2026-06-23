@@ -185,6 +185,34 @@ def ensure_community_indexes(store) -> bool:
     return ok
 
 
+# Range indexes on the per-chunk date epochs (search date-filter feature).
+# Chunks carry ``doc_date_epoch`` / ``inserted_at_epoch`` (stamped in
+# parse_and_chunk); the graph post-filter reads them off retrieved chunks,
+# and these indexes keep any future chunk-level date predicate scalable.
+CHUNK_DOC_DATE_INDEX_CYPHER = (
+    "CREATE INDEX chunk_doc_date_epoch IF NOT EXISTS "
+    "FOR (c:Chunk) ON (c.doc_date_epoch)"
+)
+CHUNK_INSERTED_AT_INDEX_CYPHER = (
+    "CREATE INDEX chunk_inserted_at_epoch IF NOT EXISTS "
+    "FOR (c:Chunk) ON (c.inserted_at_epoch)"
+)
+
+
+def ensure_chunk_date_indexes(store) -> bool:
+    """Idempotent range indexes on ``:Chunk(doc_date_epoch)`` and
+    ``:Chunk(inserted_at_epoch)`` for date-filtered search.  Fail-open
+    like the other ensure-index helpers."""
+    ok = True
+    for cypher in (CHUNK_DOC_DATE_INDEX_CYPHER, CHUNK_INSERTED_AT_INDEX_CYPHER):
+        try:
+            store.structured_query(cypher)
+        except Exception as exc:  # broad by design — fail-open
+            logger.warning("ensure_chunk_date_indexes failed: {e}", e=exc)
+            ok = False
+    return ok
+
+
 def _parse_triplets_strip_thinking(response: str, **kwargs):
     """Wrap the upstream parser with a `<think>...</think>` stripper.
 

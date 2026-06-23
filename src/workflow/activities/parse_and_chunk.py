@@ -76,6 +76,13 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
             md = n.metadata = {}
         md["position"] = i
         md["doc_id"] = ctx.doc_id
+        # Date-filter epochs (search filters on these per chunk). Stamp
+        # only when provided so documents without a date stay unfiltered
+        # by doc-date (and are excluded by any doc-date filter).
+        if ctx.doc_date_epoch is not None:
+            md["doc_date_epoch"] = ctx.doc_date_epoch
+        if ctx.inserted_at_epoch is not None:
+            md["inserted_at_epoch"] = ctx.inserted_at_epoch
 
     # Scrub doc-translation scaffolding so it never reaches downstream
     # stores.

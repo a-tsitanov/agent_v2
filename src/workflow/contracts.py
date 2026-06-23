@@ -72,6 +72,14 @@ class IngestParams(_Frozen):
     # classifier's deterministic rules and ingest anyway.
     classifier_enabled: bool = False
     force: bool = False
+    # Date-filter fields (see 2026-06-22-search-date-filters spec).
+    # Client document date (ISO YYYY-MM-DD) + its epoch-days form, plus the
+    # ingest-time epoch. Snapshotted at /ingest (outside the Temporal
+    # sandbox) and propagated via Ctx → parse_and_chunk, which stamps the
+    # epochs onto every chunk for date-filtered search.
+    doc_date: str = ""
+    doc_date_epoch: int | None = None
+    inserted_at_epoch: int | None = None
 
 
 class Ctx(_Frozen):
@@ -79,6 +87,10 @@ class Ctx(_Frozen):
     local_path: str
     cleanup_dir: str | None
     workflow_run_id: str
+    # Epoch-days carried from IngestParams so parse_and_chunk can stamp
+    # them onto each chunk (date-filter feature). None ⇒ not provided.
+    doc_date_epoch: int | None = None
+    inserted_at_epoch: int | None = None
 
 
 class SchedulerParams(_Frozen):

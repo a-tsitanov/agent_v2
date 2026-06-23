@@ -125,6 +125,61 @@ async def test_sets_doc_id_and_sequential_position(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_stamps_date_epochs_from_ctx_when_present(tmp_path: Path):
+    """Date-filter feature: parse_and_chunk stamps doc_date_epoch /
+    inserted_at_epoch on every chunk from ctx — and OMITS doc_date_epoch
+    when ctx carries None (document without a date stays unfiltered)."""
+    local = tmp_path / "doc.pdf"
+    local.write_bytes(b"PDF")
+    ctx = Ctx(
+        doc_id="d", local_path=str(local), cleanup_dir=str(tmp_path),
+        workflow_run_id="run-d",
+        doc_date_epoch=None,        # no document date provided
+        inserted_at_epoch=20000,    # but ingest date always stamped
+    )
+
+    nodes = []
+    for i in range(2):
+        n = MagicMock()
+        n.node_id = f"n{i}"
+        n.metadata = {}
+        n.relationships = {}
+        nodes.append(n)
+
+    fake_pipeline = MagicMock()
+    fake_pipeline.arun = AsyncMock(return_value=nodes)
+    staging = MagicMock()
+    staging.write_pickle.return_value = "s3://kb-staging/run-d/parsed.pkl"
+    doc = MagicMock()
+    doc.metadata = {"file_path": str(local)}
+
+    with patch(
+        "src.workflow.activities.parse_and_chunk.read_documents",
+        return_value=[doc],
+    ), patch(
+        "src.workflow.activities.parse_and_chunk.build_ingestion_pipeline",
+        return_value=fake_pipeline,
+    ), patch(
+        "src.workflow.activities.parse_and_chunk.get_llm_pool",
+        return_value=MagicMock(**{"get.return_value": MagicMock()}),
+    ), patch(
+        "src.workflow.activities.parse_and_chunk.build_embedding_model",
+        return_value=MagicMock(),
+    ), patch(
+        "src.workflow.activities.parse_and_chunk.build_staging_store",
+        return_value=staging,
+    ), patch(
+        "src.workflow.activities.parse_and_chunk.activity"
+    ) as mock_activity:
+        mock_activity.heartbeat = MagicMock()
+        await parse_and_chunk(ctx)
+
+    # inserted_at_epoch stamped on all chunks; doc_date_epoch omitted (None).
+    assert all(n.metadata["inserted_at_epoch"] == 20000 for n in nodes)
+    assert all("doc_date_epoch" not in n.metadata for n in nodes)
+
+
+@pytest.mark.asyncio
 async def test_raises_when_reader_does_not_find_file(tmp_path: Path):
     local = tmp_path / "doc.pdf"
     local.write_bytes(b"PDF")

@@ -102,11 +102,13 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
         activity.heartbeat({"stage": "relations_upserted", "count": len(relations)})
 
     from src.graph.index import (
+        ensure_chunk_date_indexes,
         ensure_entity_fulltext_index,
         ensure_entity_lookup_indexes,
     )
     await asyncio.to_thread(ensure_entity_fulltext_index, graph_store)
     await asyncio.to_thread(ensure_entity_lookup_indexes, graph_store)
+    await asyncio.to_thread(ensure_chunk_date_indexes, graph_store)
     activity.heartbeat({"stage": "indexes_ensured"})
 
     logger.info(

@@ -289,3 +289,81 @@ async def test_ingest_always_starts_scheduler() -> None:
     assert signal_args, "start_signal_args must not be empty"
     params = signal_args[0]
     assert params.path == "s3://kb-uploads/abc/report.pdf"
+
+
+@pytest.mark.asyncio
+async def test_ingest_document_date_propagates_epochs() -> None:
+    """A valid `document_date` is converted to epoch-days and snapshotted
+    onto IngestParams; the ISO date is written to documents.doc_date."""
+    from src.api.main import app
+    from src.retrieval.date_filters import iso_to_epoch_days
+    from src.storage.postgres import AsyncPostgres
+
+    stub_storage = _stub_minio("s3://kb-uploads/abc/file.txt")
+    fake_client = _stub_temporal_client()
+
+    with (
+        patch(
+            "src.api.routes.ingest.build_minio_storage",
+            return_value=stub_storage,
+        ),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
+        patch(
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("file.txt", b"hello", "text/plain")},
+                data={"document_date": "2025-01-15"},
+            )
+
+    assert resp.status_code == 202, resp.text
+    # ISO date written to Postgres.
+    assert ins.call_args.kwargs.get("doc_date") == "2025-01-15"
+    # Epochs snapshotted onto IngestParams.
+    params = fake_client.start_workflow.call_args.kwargs["start_signal_args"][0]
+    assert params.doc_date == "2025-01-15"
+    assert params.doc_date_epoch == iso_to_epoch_days("2025-01-15")
+    assert params.inserted_at_epoch is not None
+
+
+@pytest.mark.asyncio
+async def test_ingest_bad_document_date_422() -> None:
+    """A malformed `document_date` is rejected with 422 before any
+    upload / Postgres / Temporal work happens."""
+    from src.api.main import app
+    from src.storage.postgres import AsyncPostgres
+
+    stub_storage = _stub_minio()
+    fake_client = _stub_temporal_client()
+
+    with (
+        patch(
+            "src.api.routes.ingest.build_minio_storage",
+            return_value=stub_storage,
+        ),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
+        patch(
+            "src.api.routes.ingest.get_temporal_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("file.txt", b"hello", "text/plain")},
+                data={"document_date": "15/01/2025"},  # not ISO
+            )
+
+    assert resp.status_code == 422, resp.text
+    # Rejected before side effects.
+    stub_storage.put_object.assert_not_called()
+    ins.assert_not_awaited()
+    fake_client.start_workflow.assert_not_awaited()

@@ -21,25 +21,22 @@ with fakes, real validation deferred to a live stack.
 - [x] Excluded: `vl` junk, the 3 already-merged Tier-0 commits, lock/req churn.
 - 6 helper tests green, ruff clean.
 
-## Phase 1 — data model + ingest stamping
-- [ ] `contracts.py`: `IngestParams` += `doc_date: str=""`,
-      `doc_date_epoch: int|None=None`, `inserted_at_epoch: int|None=None`;
-      `Ctx` += `doc_date_epoch: int|None`, `inserted_at_epoch: int|None`.
-- [ ] `scripts/setup_db.py`: `documents.doc_date DATE` + `documents_doc_date_idx`
-      (port the column DDL; reconcile with current file).
-- [ ] `src/storage/postgres.py`: `insert_pending(..., doc_date=None)` writes the
-      column (port ONLY doc_date — keep main's Tier-0 pg_pool).
-- [ ] `/ingest` (`routes/ingest.py`): `document_date` Form field → validate
-      (422 via `bounds_from_iso`/`iso_to_epoch_days` ValueError) → `doc_date_epoch`;
+## Phase 1 — data model + ingest stamping  ✅ DONE (uncommitted → committed)
+- [x] `contracts.py`: `IngestParams` += `doc_date`, `doc_date_epoch`,
+      `inserted_at_epoch`; `Ctx` += `doc_date_epoch`, `inserted_at_epoch`.
+- [x] `scripts/setup_db.py`: `documents.doc_date DATE` + `documents_doc_date_idx`
+      + `ALTER TABLE … ADD COLUMN IF NOT EXISTS` (for pre-existing DBs).
+- [x] `src/storage/postgres.py`: `insert_pending(..., doc_date=None)` writes it.
+- [x] `/ingest` (`routes/ingest.py`): `document_date` Form field → validate
+      (422 via `iso_to_epoch_days` ValueError) → `doc_date_epoch`;
       `inserted_at_epoch = today_epoch_days()`; into `IngestParams`; `insert_pending`.
-- [ ] `parse_and_chunk.py:73-78`: stamp `md["doc_date_epoch"]` (omit if None) +
-      `md["inserted_at_epoch"]` from `ctx`.
-- [ ] `graph/index.py`: `ensure_chunk_date_indexes(store)` (range idx on
-      `:Chunk(doc_date_epoch)`, `(inserted_at_epoch)`, fail-open) + call it in
-      `build_property_graph` ensure-step via `asyncio.to_thread`.
-- [ ] Tests: contracts round-trip; insert_pending writes doc_date;
-      epoch ints survive `_snapshot_for_milvus`; 422 on bad `document_date`;
-      parse_and_chunk stamps fields from ctx.
+- [x] `fetch_source.py`: propagate epochs `IngestParams → Ctx` (both sites).
+- [x] `parse_and_chunk.py`: stamp `doc_date_epoch` (omit if None) +
+      `inserted_at_epoch` from `ctx` alongside position/doc_id.
+- [x] `graph/index.py`: `ensure_chunk_date_indexes` (range idx, fail-open) +
+      called off-loop in `build_property_graph`.
+- [x] Tests: /ingest 422 + epoch propagation; parse_and_chunk stamping;
+      ensure_chunk_date_indexes idempotent+fail-open. 620 green, ruff clean.
 
 ## Phase 2 — search API + retrieval post-filter
 - [ ] `models/search.py`: `created_after/before` → `str|None` ISO (insertion
