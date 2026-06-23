@@ -65,8 +65,13 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
         "chunks": len(nodes),
     })
 
-    graph_store = build_neo4j_graph_store()
-    embed_model = build_embedding_model()
+    # Off the event loop: build_neo4j_graph_store() does blocking driver
+    # I/O (schema refresh + index DDL) and takes a process-global lock;
+    # building the embed model is likewise blocking. On the loop these
+    # froze the heartbeater under write contention (see inject_canonical /
+    # timeout_type_heartbeat).
+    graph_store = await asyncio.to_thread(build_neo4j_graph_store)
+    embed_model = await asyncio.to_thread(build_embedding_model)
 
     _strip_neo4j_unsafe_metadata(nodes)
     activity.heartbeat({"stage": "scrubbed"})

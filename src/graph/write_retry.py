@@ -30,6 +30,10 @@ _RETRYABLE_CODES: frozenset[str] = frozenset({
     "Neo.TransientError.Transaction.DeadlockDetected",
     "Neo.TransientError.Transaction.LockClientStopped",
     "Neo.TransientError.Transaction.LockAcquisitionTimeout",
+    # "transaction has been terminated … retry in a new transaction" —
+    # a lock-victim / guard-terminated tx. (Most TransientErrors are also
+    # caught by the isinstance check below; listed here for clarity.)
+    "Neo.TransientError.Transaction.Terminated",
 })
 
 

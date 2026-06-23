@@ -297,9 +297,14 @@ services:
       # activity's heartbeat_timeout (the merge/graph "freeze"). Paired
       # with the A3 deadlock/transient retry wrapper on the write path.
       NEO4J_db_lock_acquisition_timeout: "${NEO4J_LOCK_TIMEOUT:-30s}"
-      # Hard ceiling on any single transaction so a pathological supernode
-      # write can't tie up a slot indefinitely (0s = disabled upstream).
-      NEO4J_db_transaction_timeout: "${NEO4J_TX_TIMEOUT:-120s}"
+      # NOTE: do NOT set db.transaction.timeout here. A small value (we
+      # briefly tried 120s) TERMINATES legitimate large inject_canonical /
+      # upsert transactions that run long under hub-node contention
+      # ("transaction has not completed within the timeout … terminated").
+      # The activity is already bounded by Temporal (start_to_close=1h +
+      # heartbeat=2m); a redundant server-side ceiling only adds a failure
+      # mode. Override NEO4J_TX_TIMEOUT in .env ONLY if you want one, and
+      # keep it well above the activity start_to_close.
     ports:
       - "${NEO4J_HTTP_PORT:-7474}:7474"
       - "${NEO4J_BOLT_PORT:-7687}:7687"
