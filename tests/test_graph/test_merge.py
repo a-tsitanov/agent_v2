@@ -331,3 +331,30 @@ async def test_source_chunks_deduped() -> None:
         _StubLLM(),
     )
     assert ents[0].properties["source_chunks"] == ["c1", "c2"]
+
+
+# ── observed_at provenance (analytics temporal fallback) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_relation_stamped_with_observed_at() -> None:
+    """`observed_at` (ingest wall-clock) is the transaction-time fallback
+    the temporal analytics layer uses when a relation has no valid window."""
+    a = _ent("Alpha", "Person", "a."); b = _ent("Beta", "Organization", "b.")
+    r = _rel(a, b, "WORKS_AT", "Alpha works at Beta.", keywords="works_at")
+    _, rels = await merge_kg_extraction(
+        [_chunk("c1", [a, b], [r])], _StubLLM(),
+        observed_at="2026-06-23T10:00:00Z",
+    )
+    assert len(rels) == 1
+    assert rels[0].properties["observed_at"] == "2026-06-23T10:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_relation_observed_at_none_by_default() -> None:
+    """No `observed_at` supplied → property is None (legacy / backfill later)."""
+    a = _ent("Alpha", "Person", "a."); b = _ent("Beta", "Organization", "b.")
+    r = _rel(a, b, "WORKS_AT", "Alpha works at Beta.", keywords="works_at")
+    _, rels = await merge_kg_extraction([_chunk("c1", [a, b], [r])], _StubLLM())
+    assert len(rels) == 1
+    assert rels[0].properties.get("observed_at") is None

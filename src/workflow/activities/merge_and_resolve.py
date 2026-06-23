@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from llama_index.core.graph_stores.types import KG_NODES_KEY
 from loguru import logger
@@ -110,9 +111,15 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     # merge_kg_extraction fans out per-entity/relation judge calls with no
     # internal heartbeat; pulse on a timer so a saturated proxy can't trip
     # the 15-min heartbeat_timeout mid-merge (-> cancel -> retry storm).
+    # Transaction-time provenance for the analytics temporal layer: stamp
+    # each merged relation with when the fact was observed (ingest
+    # wall-clock). Activity code, so wall-clock is allowed (unlike the
+    # workflow). A retry re-stamps with a slightly later time — fine, this
+    # is approximate transaction time, not the fact's valid window.
+    observed_at = datetime.now(timezone.utc).isoformat()
     async with heartbeat_every(_HEARTBEAT_INTERVAL_S, {"stage": "merging"}):
         merged_entities, merged_relations = await merge_kg_extraction(
-            nodes, llm, language="Russian",
+            nodes, llm, language="Russian", observed_at=observed_at,
         )
     activity.heartbeat({
         "stage": "merged",

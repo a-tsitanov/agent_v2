@@ -48,3 +48,46 @@ async def test_pagerank_endpoint_wraps_top():
         resp = await _post("/admin/graph/pagerank?top_n=1", headers=_key())
     assert resp.status_code == 200
     assert resp.json()["top"][0]["name"] == "Иванов"
+
+
+# ── temporal: snapshot / diff (analytics layer v1) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_snapshot_endpoint_returns_temporal():
+    fake = {
+        "as_of": "2024-01-01", "edges": [], "nodes": [],
+        "coverage": {"dated": 0, "fallback": 0, "untimed": 0, "total": 0},
+    }
+    with patch("src.api.routes.graph_admin._store", return_value=object()), patch(
+        "src.api.routes.graph_admin.temporal.snapshot",
+        new=AsyncMock(return_value=fake),
+    ):
+        resp = await _post("/admin/graph/snapshot?as_of=2024-01-01", headers=_key())
+    assert resp.status_code == 200
+    assert resp.json()["as_of"] == "2024-01-01"
+
+
+@pytest.mark.asyncio
+async def test_diff_endpoint_returns_temporal():
+    fake = {
+        "t1": "2023-01-01", "t2": "2025-01-01",
+        "added": [{"source": "A", "target": "NewCo", "label": "WORKS_AT"}],
+        "removed": [], "persisted": [],
+        "t1_coverage": {}, "t2_coverage": {},
+    }
+    with patch("src.api.routes.graph_admin._store", return_value=object()), patch(
+        "src.api.routes.graph_admin.temporal.diff",
+        new=AsyncMock(return_value=fake),
+    ):
+        resp = await _post(
+            "/admin/graph/diff?t1=2023-01-01&t2=2025-01-01", headers=_key(),
+        )
+    assert resp.status_code == 200
+    assert resp.json()["added"][0]["target"] == "NewCo"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_requires_api_key():
+    resp = await _post("/admin/graph/snapshot?as_of=2024-01-01")
+    assert resp.status_code in (401, 403)
