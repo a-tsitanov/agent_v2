@@ -10,6 +10,7 @@ from temporalio import activity
 
 from src.graph.index import NoOpKGExtractor, build_property_graph_index
 from src.graph.store import build_neo4j_graph_store
+from src.graph.write_retry import write_with_retry
 from src.ingestion.embeddings import build_embedding_model
 from src.workflow.contracts import GraphBuilt, Merged
 from src.workflow.staging import build_staging_store
@@ -83,15 +84,21 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
     activity.heartbeat({"stage": "index_built"})
 
     # Neo4j upserts + index DDL are sync (blocking driver) — off the loop.
+    # Wrap in write_with_retry: concurrent MERGE into shared hub nodes can
+    # throw a retryable Neo.TransientError (deadlock / lock timeout) under
+    # max_inflight>1 — re-run the write instead of failing the document.
     if entities:
-        await asyncio.to_thread(graph_store.upsert_nodes, entities)
+        await asyncio.to_thread(write_with_retry, graph_store.upsert_nodes, entities)
         activity.heartbeat({"stage": "entities_upserted", "count": len(entities)})
     if relations:
-        await asyncio.to_thread(graph_store.upsert_relations, relations)
+        await asyncio.to_thread(
+            write_with_retry, graph_store.upsert_relations, relations
+        )
         activity.heartbeat({"stage": "relations_upserted", "count": len(relations)})
 
     from src.graph.index import (
-        ensure_entity_fulltext_index, ensure_entity_lookup_indexes,
+        ensure_entity_fulltext_index,
+        ensure_entity_lookup_indexes,
     )
     await asyncio.to_thread(ensure_entity_fulltext_index, graph_store)
     await asyncio.to_thread(ensure_entity_lookup_indexes, graph_store)

@@ -8,6 +8,7 @@ from loguru import logger
 from temporalio import activity
 
 from src.graph.store import build_neo4j_graph_store
+from src.graph.write_retry import write_with_retry
 from src.ingestion.identifier_transform import inject_canonical_entities
 from src.workflow.contracts import Injected, Parsed
 from src.workflow.heartbeat import heartbeat_every
@@ -35,7 +36,10 @@ async def inject_canonical(parsed: Parsed) -> Injected:
     async with heartbeat_every(
         _HEARTBEAT_INTERVAL_S, {"stage": "injecting", "chunks": len(nodes)}
     ):
-        await asyncio.to_thread(inject_canonical_entities, graph_store, nodes)
+        # Retry transient hub-node lock/deadlock errors (see write_retry).
+        await asyncio.to_thread(
+            write_with_retry, inject_canonical_entities, graph_store, nodes
+        )
     activity.heartbeat({"stage": "injected", "chunks": len(nodes)})
 
     logger.info(

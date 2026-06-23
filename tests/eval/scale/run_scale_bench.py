@@ -7,12 +7,15 @@ cliff from the 250k-entity assessment:
   er-recall   P0.1  duplicate-candidate recall vs knn_k          (no infra)
   milvus      P1.1  Milvus FLAT vs HNSW latency + recall         (local Milvus)
   walk        P1.2  graph_walk hub-degree cliff                  (local Neo4j)
+  graph-write A.A0  concurrent MERGE hub-node write contention   (local Neo4j)
 
 Examples::
 
     uv run python -m tests.eval.scale.run_scale_bench er-cost --sizes 200,400,800
     uv run python -m tests.eval.scale.run_scale_bench milvus --n 200000 --dim 768
     uv run python -m tests.eval.scale.run_scale_bench walk --hub-degrees 500,1000,5000
+    uv run python -m tests.eval.scale.run_scale_bench graph-write --writers 1,2,4,8
+    uv run python -m tests.eval.scale.run_scale_bench graph-write --writers 4,8 --with-retry
     uv run python -m tests.eval.scale.run_scale_bench all          # everything available
 
 infra-bound benches print a ``skipped`` line (never fail) when the local
@@ -82,6 +85,21 @@ def _cmd_walk(args) -> None:
         _print_rows("graph_walk hub cliff (P1.2)", out)
 
 
+def _cmd_graph_write(args) -> None:
+    from tests.eval.scale.bench_graph_write import bench_graph_write
+
+    writers = tuple(int(x) for x in args.writers.split(","))
+    out = bench_graph_write(
+        writers_sweep=writers, rounds=args.rounds, batch=args.batch,
+        n_hubs=args.n_hubs, with_retry=args.with_retry,
+        uri=args.neo4j_uri, user=args.neo4j_user, password=args.neo4j_password,
+    )
+    if out.get("status") == "ok":
+        _print_rows("Neo4j concurrent-write contention (A.A0)", out["rows"])
+    else:
+        _print_rows("Neo4j concurrent-write contention (A.A0)", out)
+
+
 def _cmd_all(args) -> None:
     from tests.eval.scale.bench_er import bench_dedup_recall
 
@@ -130,6 +148,20 @@ def main(argv: list[str] | None = None) -> None:
     sp.add_argument("--neo4j-user", default="neo4j")
     sp.add_argument("--neo4j-password", default="changeme")
     sp.set_defaults(func=_cmd_walk)
+
+    sp = sub.add_parser("graph-write"); _common(sp)
+    sp.add_argument("--writers", default="1,2,4,8",
+                    help="comma-separated concurrency levels to sweep")
+    sp.add_argument("--rounds", type=int, default=20)
+    sp.add_argument("--batch", type=int, default=25)
+    sp.add_argument("--n-hubs", type=int, default=16,
+                    help="shared hub-node count; smaller = more contention")
+    sp.add_argument("--with-retry", action="store_true", default=False,
+                    help="enable the deadlock-retry wrapper (A3) — measure vs baseline")
+    sp.add_argument("--neo4j-uri", default="bolt://localhost:7687")
+    sp.add_argument("--neo4j-user", default="neo4j")
+    sp.add_argument("--neo4j-password", default="changeme")
+    sp.set_defaults(func=_cmd_graph_write)
 
     sp = sub.add_parser("all"); _common(sp)
     sp.add_argument("--sizes", default="200,400,800")

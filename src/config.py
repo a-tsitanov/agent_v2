@@ -113,6 +113,23 @@ class Neo4jSettings(BaseSettings):
     password: SecretStr = SecretStr("changeme")
     database: str = "neo4j"
 
+    # Bolt-driver connection pool (src/graph/store.py, Track A2).  The
+    # store is now cached once per process, so this is the pool shared by
+    # every activity in that process — size it to the worker's activity
+    # concurrency, not 1-per-call.  acquisition timeout bounds the wait
+    # for a free pooled connection; connection timeout bounds the TCP
+    # connect.  Both seconds.
+    max_connection_pool_size: int = Field(default=16, ge=1)
+    connection_acquisition_timeout_s: float = 60.0
+    connection_timeout_s: float = 30.0
+
+    # Bounded retry for transient write errors (src/graph/write_retry.py,
+    # Track A3): concurrent MERGE into shared hub nodes throws a retryable
+    # Neo.TransientError (deadlock / lock-acquisition timeout); re-run the
+    # write a few times with backoff instead of failing the document.
+    write_retry_max_attempts: int = Field(default=5, ge=1)
+    write_retry_base_delay_s: float = 0.05
+
 
 class PostgresSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POSTGRES_", env_file=".env", extra="ignore")
