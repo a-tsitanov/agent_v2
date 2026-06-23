@@ -45,6 +45,9 @@ async def _build_retriever_once():
     embed = build_embedding_model()
     store = build_vector_store()
     index = build_vector_index(store, embed)
+    # Stash the index so per-request retrievers at a custom top_k (the date
+    # over-fetch path) can reuse it without rebuilding the Milvus client.
+    _state["_vector_index"] = index
     return index.as_retriever(similarity_top_k=10), embed
 
 
@@ -110,6 +113,24 @@ async def get_retriever() -> RetrieverProtocol:
             _state["retriever"] = ret
             _state["_embed_model"] = embed
     return _state["retriever"]
+
+
+async def get_vector_retriever(top_k: int) -> RetrieverProtocol:
+    """Per-request vector retriever at a custom ``similarity_top_k``.
+
+    Used by the date-filter over-fetch path (``retrieve_subquestion``):
+    fetch more candidates so post-filtering out-of-range chunks doesn't
+    starve the in-range pool.  Reuses the cached vector index —
+    ``as_retriever`` is an in-memory wrap (no Milvus rebuild), so building
+    one per request is cheap."""
+    async with _lock:
+        if _state.get("_vector_index") is None:
+            ret, embed = await _build_retriever_once()
+            if _state["retriever"] is None:
+                _state["retriever"] = ret
+            _state["_embed_model"] = embed
+        index = _state["_vector_index"]
+    return index.as_retriever(similarity_top_k=top_k)
 
 
 async def get_graph_retriever() -> GraphRetrieverProtocol | None:
@@ -195,3 +216,4 @@ def reset_for_tests() -> None:
         ) else _state[k]
     _state.pop("graph_retriever_attempted", None)
     _state.pop("_embed_model", None)
+    _state.pop("_vector_index", None)

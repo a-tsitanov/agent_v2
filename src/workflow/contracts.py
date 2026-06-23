@@ -379,6 +379,12 @@ class RetrieveParams(_Frozen):
 
     subquestion: str
     top_k: int = 10
+    # Date-filter epoch-day bounds (None = unset). Drive over-fetch + the
+    # post-filter in retrieve_subquestion. See date-filters spec.
+    doc_date_after_epoch: int | None = None
+    doc_date_before_epoch: int | None = None
+    inserted_after_epoch: int | None = None
+    inserted_before_epoch: int | None = None
 
 
 class RetrieveResult(_Frozen):
@@ -415,6 +421,11 @@ class SubQueryParams(_Frozen):
 
     subquestion: str
     top_k: int = 10
+    # Date-filter epoch-day bounds, threaded down to RetrieveParams.
+    doc_date_after_epoch: int | None = None
+    doc_date_before_epoch: int | None = None
+    inserted_after_epoch: int | None = None
+    inserted_before_epoch: int | None = None
 
 
 class SubQueryResult(_Frozen):
@@ -462,6 +473,12 @@ class OrchestratorParams(_Frozen):
     contextualize_enabled: bool = True
     # Optional answer-shape template (named or inline); threaded to synth.
     answer_template: str = ""
+    # Date-filter epoch-day bounds (resolved from SearchRequest ISO dates in
+    # _local_params, outside the sandbox). Threaded down to each sub-query.
+    doc_date_after_epoch: int | None = None
+    doc_date_before_epoch: int | None = None
+    inserted_after_epoch: int | None = None
+    inserted_before_epoch: int | None = None
 
 
 class SearchOutcome(_Frozen):

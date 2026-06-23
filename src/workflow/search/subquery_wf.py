@@ -41,6 +41,10 @@ class SubQueryRetrievalWorkflow:
             RetrieveParams(
                 subquestion=params.subquestion,
                 top_k=params.top_k,
+                doc_date_after_epoch=params.doc_date_after_epoch,
+                doc_date_before_epoch=params.doc_date_before_epoch,
+                inserted_after_epoch=params.inserted_after_epoch,
+                inserted_before_epoch=params.inserted_before_epoch,
             ),
             result_type=RetrieveResult,
             start_to_close_timeout=LLM_START_TO_CLOSE,

@@ -21,7 +21,12 @@ from temporalio import activity
 
 from src.config import settings
 from src.retrieval import atomic_tools
-from src.workflow._search_deps import get_graph_retriever, get_retriever
+from src.retrieval.date_filters import DateBounds, filter_nodes, overfetch_top_k
+from src.workflow._search_deps import (
+    get_graph_retriever,
+    get_retriever,
+    get_vector_retriever,
+)
 from src.workflow._search_serde import node_to_serialized
 from src.workflow.contracts import RetrieveParams, RetrieveResult
 
@@ -102,7 +107,22 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
     t0 = time.monotonic()
     activity.heartbeat({"stage": "init", "sub": params.subquestion[:80]})
 
-    retriever = await get_retriever()
+    # Date-filter bounds (epoch-days, None = unset). When any bound is set,
+    # over-fetch the vector pool so the post-filter (below) doesn't starve
+    # the in-range result count; otherwise use the cached default retriever
+    # (zero behaviour change for non-filtered queries).
+    bounds = DateBounds(
+        doc_after=params.doc_date_after_epoch,
+        doc_before=params.doc_date_before_epoch,
+        ins_after=params.inserted_after_epoch,
+        ins_before=params.inserted_before_epoch,
+    )
+    if bounds.any_set:
+        retriever = await get_vector_retriever(
+            overfetch_top_k(params.top_k, bounds)
+        )
+    else:
+        retriever = await get_retriever()
     graph_retriever = await get_graph_retriever()
 
     collected = []  # list[NodeWithScore]
@@ -171,6 +191,18 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
                     start, exc,
                 )
                 errors.append(f"graph_walk: {exc}")
+
+    # Uniform date post-filter over the merged pool (vector + graph + walk):
+    # drop chunks whose epoch metadata is out of range, or that lack the
+    # field when a bound is set. No-op when no bound. Truncation to the
+    # final top-N is the downstream rerank's job, so we keep the pool here.
+    if bounds.any_set:
+        before = len(collected)
+        collected = filter_nodes(collected, bounds)
+        activity.logger.info(
+            "retrieve_subquestion  date-filter kept %d/%d",
+            len(collected), before,
+        )
 
     sources = [node_to_serialized(n) for n in collected]
     duration_ms = int((time.monotonic() - t0) * 1000)

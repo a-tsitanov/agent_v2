@@ -39,28 +39,32 @@ with fakes, real validation deferred to a live stack.
       ensure_chunk_date_indexes idempotent+fail-open. 620 green, ruff clean.
 
 ## Phase 2 — search API + retrieval post-filter
-- [ ] `models/search.py`: `created_after/before` → `str|None` ISO (insertion
-      range); add `doc_date_after/before: str|None`; field-validate (422).
-- [ ] `search_v2.py`: drop `created_*` from `_RESERVED_FILTER_FIELDS`;
-      `_local_params`: `bounds_from_iso(...)` → 4 epoch ints into `OrchestratorParams`.
-- [ ] `contracts.py`: add 4 epoch-bound `int|None` to `OrchestratorParams`,
-      `SubQueryParams`, `RetrieveParams`; orchestrator + subquery workflows
-      thread them down (mechanical).
-- [ ] `retrieve_subquestion` (`search/activities/retrieve.py`):
-      reconstruct `DateBounds`; if `any_set` → per-request vector retriever with
-      `similarity_top_k = overfetch_top_k(top_k, bounds)` passed into
-      `dispatch("vector_search", …, retriever=…)`; else cached retriever.
-      After merge/dedup → `filter_nodes(sources, bounds)` → truncate to top_k.
-- [ ] `drift` inherits; `global` keeps reserved-warning for date fields.
-- [ ] Tests (fakes): 422 paths; `_local_params` conversion; per-request retriever
-      built with raised top_k only when bound set; merged sources post-filtered;
-      truncate to top_k; no-bound path byte-identical (cached retriever, no filter).
+## Phase 2 — search API + retrieval post-filter  ✅ DONE (uncommitted)
+- [x] `models/search.py`: `created_after/before` → `str|None` ISO; add
+      `doc_date_after/before`; field-validator (422 on bad ISO).
+- [x] `search_v2.py`: dropped `created_*` from `_RESERVED_FILTER_FIELDS`;
+      `_local_params` → `bounds_from_iso` → 4 epoch ints into `OrchestratorParams`.
+- [x] `contracts.py`: 4 epoch-bound `int|None` on `OrchestratorParams`,
+      `SubQueryParams`, `RetrieveParams`; orchestrator (fan-out + coverage gap)
+      + `subquery_wf` thread them down.
+- [x] `_search_deps.py`: cache the vector index + `get_vector_retriever(top_k)`
+      (per-request, in-memory `as_retriever` — no Milvus rebuild).
+- [x] `retrieve_subquestion`: build `DateBounds`; `any_set` → over-fetch
+      retriever at `overfetch_top_k`; merged pool `filter_nodes(...)`. NO
+      truncate here (the downstream rerank does the final top-N cut — this
+      stage returns a pool, unchanged for non-filtered queries).
+- [x] `drift` inherits local. NOTE deviation: `global` no longer warns on date
+      fields (created_* left the reserved tuple); global date-filtering stays Backlog.
+- [x] Tests: SearchRequest 422 + accept; `_local_params` conversion (set/unset);
+      retrieve over-fetch ×3 + post-filter drops out-of-range/missing; no-bound
+      path uses cached retriever + no filter. 630 green, ruff clean.
 
 ## Phase 3 — verify + hand off
-- [ ] Full ruff + `tests/test_retrieval tests/test_storage tests/test_api
-      tests/test_workflow` green (mod known pre-existing test_search_community).
-- [ ] Note live-only checks: Milvus epoch metadata round-trips + filterable in
-      `_node_content`; Neo4j `:Chunk` date indexes created; e2e date query.
+- [x] Full ruff clean on changed code; `tests/test_workflow test_api
+      test_retrieval test_graph test_storage test_config` → 630 pass (mod the
+      2 known pre-existing `test_search_community` stub failures).
+- [ ] Live-only (needs stack): Milvus epoch metadata round-trips + is
+      filterable; Neo4j `:Chunk` date indexes created; e2e date query.
 - [ ] Commit per phase; push only on explicit command.
 
 ## Risks / watch

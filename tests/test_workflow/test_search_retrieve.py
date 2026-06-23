@@ -212,3 +212,72 @@ def test_pipeline_includes_find_entity_by_name():
     assert "find_entity_by_name" in _PIPELINE
     assert _PIPELINE.index("find_entity_by_name") > _PIPELINE.index("graph_search")
     assert "find_entity_by_name" in ALLOWED_TOOLS
+
+
+# ── date filter: over-fetch + uniform post-filter ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_date_bounds_overfetch_and_postfilter(monkeypatch):
+    """With a date bound set: the vector retriever is built per-request at
+    the over-fetched top_k, and the merged pool is post-filtered — chunks
+    out of range OR missing the epoch field are dropped (vector + graph)."""
+    async def _gret():
+        return object()
+
+    seen: dict = {}
+
+    async def _vret(top_k):
+        seen["top_k"] = top_k
+        return object()
+
+    monkeypatch.setattr(retrieve_mod, "get_graph_retriever", _gret)
+    monkeypatch.setattr(retrieve_mod, "get_vector_retriever", _vret)
+    monkeypatch.setattr(retrieve_mod.settings.agent, "graph_walk_enabled", False)
+
+    rec = _DispatchRecorder({
+        "vector_search": _result(
+            [
+                _node("in", doc_date_epoch=100),    # in range
+                _node("out", doc_date_epoch=999),   # out of range
+                _node("nofield"),                   # missing field → dropped
+            ],
+            "[]",
+        ),
+        "graph_search": _result([_node("g_in", doc_date_epoch=120)], _gs_obs([])),
+        "find_entity_by_name": _result([], _gs_obs([])),
+    })
+    monkeypatch.setattr(retrieve_mod.atomic_tools, "dispatch", rec)
+
+    res = await retrieve_subquestion(RetrieveParams(
+        subquestion="q", top_k=5,
+        doc_date_after_epoch=50, doc_date_before_epoch=150,
+    ))
+
+    # Over-fetch retriever used at top_k × default factor (3).
+    assert seen["top_k"] == 15
+    # Only in-range chunks survive; out-of-range + missing-field dropped.
+    assert {s.chunk_id for s in res.sources} == {"in", "g_in"}
+
+
+@pytest.mark.asyncio
+async def test_no_date_bounds_uses_cached_retriever(_patch_deps, monkeypatch):
+    """No date bound → cached retriever (never the over-fetch path) and no
+    post-filter (every source survives, behaviour unchanged)."""
+    def _boom(_top_k):
+        raise AssertionError("get_vector_retriever must not be called unfiltered")
+
+    monkeypatch.setattr(retrieve_mod, "get_vector_retriever", _boom)
+    monkeypatch.setattr(retrieve_mod.settings.agent, "graph_walk_enabled", False)
+
+    rec = _DispatchRecorder({
+        "vector_search": _result([_node("v1", doc_date_epoch=999)], "[]"),
+        "graph_search": _result([_node("g1")], _gs_obs([])),
+        "find_entity_by_name": _result([], _gs_obs([])),
+    })
+    monkeypatch.setattr(retrieve_mod.atomic_tools, "dispatch", rec)
+
+    res = await retrieve_subquestion(RetrieveParams(subquestion="q", top_k=10))
+
+    # Out-of-range v1 survives because no bound is set → no filtering.
+    assert {s.chunk_id for s in res.sources} == {"v1", "g1"}

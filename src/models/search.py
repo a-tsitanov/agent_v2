@@ -9,7 +9,9 @@ removed with those routes.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from datetime import date
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class ConversationTurn(BaseModel):
@@ -49,14 +51,42 @@ class SearchRequest(BaseModel):
     doc_type_filter: str | None = Field(
         default=None, description="RESERVED — not applied.",
     )
-    created_after: int | None = Field(default=None, description="RESERVED — not applied.")
-    created_before: int | None = Field(default=None, description="RESERVED — not applied.")
+    # Date filters (applied; see date-filters spec). ISO YYYY-MM-DD, each
+    # bound independent + optional, combined with AND. `created_*` filter the
+    # INSERTION date; `doc_date_*` the client-provided document date. (They
+    # were previously RESERVED int fields, never applied.)
+    created_after: str | None = Field(
+        default=None, description="Insertion-date lower bound, ISO YYYY-MM-DD.",
+    )
+    created_before: str | None = Field(
+        default=None, description="Insertion-date upper bound, ISO YYYY-MM-DD.",
+    )
+    doc_date_after: str | None = Field(
+        default=None, description="Document-date lower bound, ISO YYYY-MM-DD.",
+    )
+    doc_date_before: str | None = Field(
+        default=None, description="Document-date upper bound, ISO YYYY-MM-DD.",
+    )
     response_type: str = "Multiple Paragraphs"
     include_references: bool = False
     # Optional answer-shape template — a named template
     # (prompts/answer_templates/<name>.md) or an inline template string.
     # Empty/None → default Russian-output synthesis (unchanged).
     answer_template: str | None = None
+
+    @field_validator(
+        "created_after", "created_before", "doc_date_after", "doc_date_before",
+    )
+    @classmethod
+    def _validate_iso_date(cls, v: str | None) -> str | None:
+        """Reject a malformed date bound → 422 (FastAPI maps ValueError)."""
+        if v is None:
+            return v
+        try:
+            date.fromisoformat(v)
+        except ValueError as exc:
+            raise ValueError(f"must be ISO YYYY-MM-DD: {exc}") from exc
+        return v
 
 
 class SourceCitation(BaseModel):

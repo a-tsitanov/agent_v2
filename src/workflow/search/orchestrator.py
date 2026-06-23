@@ -173,6 +173,10 @@ class SearchOrchestratorWorkflow:
                 SubQueryParams(
                     subquestion=sub,
                     top_k=params.top_k,
+                    doc_date_after_epoch=params.doc_date_after_epoch,
+                    doc_date_before_epoch=params.doc_date_before_epoch,
+                    inserted_after_epoch=params.inserted_after_epoch,
+                    inserted_before_epoch=params.inserted_before_epoch,
                 ),
                 id=f"{workflow.info().workflow_id}-sub-{i}",
                 result_type=SubQueryResult,
@@ -250,7 +254,14 @@ class SearchOrchestratorWorkflow:
             try:
                 extra: SubQueryResult = await workflow.execute_child_workflow(
                     SubQueryRetrievalWorkflow.run,
-                    SubQueryParams(subquestion=gap, top_k=params.top_k),
+                    SubQueryParams(
+                        subquestion=gap,
+                        top_k=params.top_k,
+                        doc_date_after_epoch=params.doc_date_after_epoch,
+                        doc_date_before_epoch=params.doc_date_before_epoch,
+                        inserted_after_epoch=params.inserted_after_epoch,
+                        inserted_before_epoch=params.inserted_before_epoch,
+                    ),
                     id=f"{workflow.info().workflow_id}-cov-{cov_round}",
                     result_type=SubQueryResult,
                 )

@@ -24,6 +24,7 @@ from src.api.auth import require_api_key
 from src.config import settings
 from src.models.search import DocumentRef, SearchRequest, SearchResponse, SourceCitation
 from src.observability.trace import trace_request
+from src.retrieval.date_filters import bounds_from_iso
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import (
     ConversationTurnDict,
@@ -40,8 +41,11 @@ from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflo
 router = APIRouter(tags=["search"])
 
 
+# NOTE: `created_after`/`created_before` are no longer reserved — they (and
+# `doc_date_after`/`doc_date_before`) are APPLIED on local/drift. They are
+# still ignored by `global` (community-summary) search — see spec Backlog.
 _RESERVED_FILTER_FIELDS = (
-    "department", "user_id", "doc_type_filter", "created_after", "created_before",
+    "department", "user_id", "doc_type_filter",
 )
 
 
@@ -58,8 +62,16 @@ def _warn_reserved_filters(req: SearchRequest) -> None:
 
 
 def _local_params(req: SearchRequest) -> OrchestratorParams:
-    """Build the local plan-execute workflow input from the request."""
+    """Build the local plan-execute workflow input from the request.
+
+    ISO date bounds are converted to epoch-days here (outside the Temporal
+    sandbox); the request's field validator already rejected malformed
+    dates with 422, so this never raises."""
     _warn_reserved_filters(req)
+    b = bounds_from_iso(
+        doc_after=req.doc_date_after, doc_before=req.doc_date_before,
+        ins_after=req.created_after, ins_before=req.created_before,
+    )
     return OrchestratorParams(
         query=req.query,
         max_subqueries=settings.agent.max_subqueries,
@@ -72,6 +84,10 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
         ],
         contextualize_enabled=settings.agent.conversation_history_enabled,
         answer_template=req.answer_template or "",
+        doc_date_after_epoch=b.doc_after,
+        doc_date_before_epoch=b.doc_before,
+        inserted_after_epoch=b.ins_after,
+        inserted_before_epoch=b.ins_before,
     )
 
 
