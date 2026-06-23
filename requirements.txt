@@ -1,6 +1,8 @@
+aio-pika==9.6.2
 aiofile==3.11.1
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
+aiormq==6.9.4
 aiosignal==1.4.0
 aiosqlite==0.22.1
 annotated-doc==0.0.4
@@ -106,6 +108,7 @@ openapi-pydantic==0.5.1
 opentelemetry-api==1.42.1
 orjson==3.11.9
 packaging==26.2
+pamqp==3.3.0
 pandas==2.3.3
 pathable==0.6.0
 phonenumbers==9.0.30

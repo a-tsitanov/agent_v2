@@ -44,6 +44,10 @@ def test_scheduler_starts_children_on_main_queue():
 
 
 def test_scheduler_started_on_scheduler_queue():
-    from src.api.routes import ingest
-    src = inspect.getsource(ingest)
+    # The scheduler start moved out of the /ingest route into the
+    # producer dispatcher (Track B: submit_document routes temporal vs
+    # rabbitmq). The isolation invariant — scheduler on its OWN queue —
+    # now lives in _submit_to_scheduler.
+    from src.workflow.ingest_submit import _submit_to_scheduler
+    src = inspect.getsource(_submit_to_scheduler)
     assert "task_queue=settings.temporal.scheduler_task_queue" in src

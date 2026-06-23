@@ -13,14 +13,12 @@ from __future__ import annotations
 import asyncio
 import io
 import uuid
-from datetime import timedelta
 from pathlib import Path
 
 from dishka.integrations.fastapi import FromDishka, inject
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel
-from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from urllib3.exceptions import MaxRetryError
 
@@ -29,8 +27,8 @@ from src.config import settings
 from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
 from src.workflow.client import get_temporal_client
-from src.workflow.contracts import IngestParams, SchedulerParams
-from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
+from src.workflow.contracts import IngestParams
+from src.workflow.ingest_submit import submit_document
 
 router = APIRouter(tags=["ingestion"])
 
@@ -142,29 +140,13 @@ async def upload_document(
         classifier_enabled=settings.classifier.enabled,
         force=force,
     )
-    # Admission is always on: hand the document to the singleton scheduler
-    # (signal-with-start; USE_EXISTING reuses the running one) so at most K
-    # (max_inflight) documents run at once, each to completion, FIFO.
+    # Admission is always on: hand the document to the configured backlog
+    # backend (INGEST_QUEUE_BACKEND).  Default `temporal` = signal-with-start
+    # the singleton scheduler so at most K (max_inflight) documents run at
+    # once, each to completion, FIFO; `rabbitmq` = publish to a durable
+    # queue a consumer drains at prefetch=K.  See src/workflow/ingest_submit.
     try:
-        await client.start_workflow(
-            IngestSchedulerWorkflow.run,
-            SchedulerParams(max_inflight=settings.ingest_admission.max_inflight),
-            id="ingest-scheduler",
-            # Dedicated queue: the scheduler runs on its own worker pool,
-            # isolated from DocumentIngestWorkflow on `task_queue` (main).
-            task_queue=settings.temporal.scheduler_task_queue,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            start_signal="submit",
-            start_signal_args=[params],
-            # Defense-in-depth for the always-on singleton: the workflow
-            # bounds its own history via drain-then-continue_as_new
-            # (see IngestSchedulerWorkflow), but give a cold replay extra
-            # headroom over the 10s default so a one-off larger history
-            # (e.g. right after a deploy) can't time out the workflow task
-            # and wedge admission.  Only applies to a freshly-started
-            # singleton; USE_EXISTING reuses the running one untouched.
-            task_timeout=timedelta(seconds=30),
-        )
+        await submit_document(client, params)
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is
         # already running or already completed successfully.  Don't

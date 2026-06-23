@@ -49,6 +49,12 @@ x-app-env: &app-env
   #    K = max in-flight documents (admission, always on). ──
   LLM_POOL_N: ${LLM_POOL_N:-8}
   INGEST_ADMISSION_MAX_INFLIGHT: ${INGEST_ADMISSION_MAX_INFLIGHT:-1}
+  # ── Ingest backlog backend (Track B).  `temporal` (default) = singleton
+  #    IngestSchedulerWorkflow.  Set `rabbitmq` AND start the `rabbitmq`
+  #    compose profile to move the backlog to RabbitMQ — the ingest-consumer
+  #    then admits at prefetch=K (= INGEST_ADMISSION_MAX_INFLIGHT). ──
+  INGEST_QUEUE_BACKEND: ${INGEST_QUEUE_BACKEND:-temporal}
+  RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
   ANALYTICS_ENV_NAME: ${ANALYTICS_ENV_NAME:-prod}
   # ── Optional feature toggles (off / conservative by default; flip to enable) ──
   CLASSIFIER_ENABLED: ${CLASSIFIER_ENABLED:-false}
@@ -130,6 +136,23 @@ services:
       init: {condition: service_completed_successfully}
     restart: unless-stopped
 
+  # Ingest-queue consumer (Track B).  Opt-in: only starts under the
+  # `rabbitmq` profile.  Pulls ingest.pending at prefetch=K and starts a
+  # DocumentIngestWorkflow per message, awaiting completion before ack —
+  # so prefetch is the admission ceiling (replaces IngestSchedulerWorkflow
+  # when INGEST_QUEUE_BACKEND=rabbitmq).
+  ingest-consumer:
+    <<: [*app-build]
+    profiles: ["rabbitmq"]
+    command: ["python", "-m", "src.ingest_queue.consumer"]
+    environment: *app-env
+    depends_on:
+      temporal: {condition: service_started}
+      rabbitmq: {condition: service_healthy}
+      worker: {condition: service_started}
+      init: {condition: service_completed_successfully}
+    restart: unless-stopped
+
   mcp-search:
     <<: [*app-build]
     command: ["python", "-m", "src.mcp.search_server", "--transport", "http", "--port", "9001"]
@@ -162,6 +185,27 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  # RabbitMQ ingest backlog (Track B).  Opt-in via the `rabbitmq` profile;
+  # management UI on 15672.  Set credentials to match RABBITMQ_URL.
+  rabbitmq:
+    image: rabbitmq:3-management
+    profiles: ["rabbitmq"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
 
   etcd:
@@ -443,6 +487,7 @@ services:
 
 volumes:
   redis_data:
+  rabbitmq_data:
   etcd_data:
   minio_data:
   milvus_data:

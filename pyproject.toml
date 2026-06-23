@@ -27,6 +27,10 @@ dependencies = [
     # Workflow engine
     "temporalio>=1.8,<2",
 
+    # Ingest-queue backend (Track B, INGEST_QUEUE_BACKEND=rabbitmq) — async
+    # AMQP client for the RabbitMQ producer/consumer that fronts admission.
+    "aio-pika>=9.4,<10",
+
     # Storage clients
     "psycopg[binary,pool]>=3.2,<4",
     "pymilvus>=2.4,<3",

@@ -755,6 +755,40 @@ class IngestAdmissionSettings(BaseSettings):
 
     max_inflight: int = Field(default=1, ge=1)
 
+    # Where the ingest BACKLOG lives (Track B).  ``temporal`` = today's
+    # singleton IngestSchedulerWorkflow (backlog in workflow state, every
+    # /ingest a signal — chokes on bulk inserts as history balloons).
+    # ``rabbitmq`` = the backlog moves to a durable RabbitMQ queue and a
+    # consumer admits at most ``max_inflight`` (prefetch=K) at a time.
+    # Default ``temporal`` → no behaviour change until explicitly flipped.
+    # Env var is the bare ``INGEST_QUEUE_BACKEND`` (no admission prefix).
+    backend: Literal["temporal", "rabbitmq"] = Field(
+        default="temporal", validation_alias="INGEST_QUEUE_BACKEND",
+    )
+
+
+class RabbitMQSettings(BaseSettings):
+    """RabbitMQ ingest-queue connection (Track B).
+
+    Only consumed when ``INGEST_QUEUE_BACKEND=rabbitmq``.  The producer
+    (/ingest) publishes ``IngestParams`` as a persistent message to
+    ``queue``; the consumer pulls with ``prefetch`` =
+    ``IngestAdmissionSettings.max_inflight`` (admission K) and starts a
+    ``DocumentIngestWorkflow`` per message, ack on success /
+    dead-letter (``dlx`` → ``dlq``) on failure."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="RABBITMQ_", env_file=".env", extra="ignore",
+    )
+
+    url: str = "amqp://guest:guest@localhost:5672/"
+    queue: str = "ingest.pending"
+    # Dead-letter exchange + queue for messages that fail processing.
+    dlx: str = "ingest.dlx"
+    dlq: str = "ingest.dlq"
+    # Requeue a nacked message instead of dead-lettering (debug only).
+    requeue_on_failure: bool = False
+
 
 # ── composed top-level settings ──────────────────────────────────────
 
@@ -814,6 +848,10 @@ class Settings(BaseSettings):
     @cached_property
     def ingest_admission(self) -> IngestAdmissionSettings:
         return IngestAdmissionSettings()
+
+    @cached_property
+    def rabbitmq(self) -> RabbitMQSettings:
+        return RabbitMQSettings()
 
     @cached_property
     def agent(self) -> AgentSettings:
