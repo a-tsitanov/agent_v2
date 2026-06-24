@@ -27,14 +27,19 @@ from src.workflow.contracts import IngestParams, SchedulerParams
 from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
 
 
-async def submit_document(client: Client, params: IngestParams) -> None:
-    """Hand one document to the configured ingest backlog backend."""
+async def submit_document(
+    client: Client, params: IngestParams, queue: str | None = None,
+) -> None:
+    """Hand one document to the configured ingest backlog backend.
+
+    ``queue`` (rabbitmq backend only) names the target queue — the caller
+    has validated it ∈ RabbitMQSettings.queues; ignored on temporal."""
     if settings.ingest_admission.backend == "rabbitmq":
         # Lazy import: aio_pika is only required when this backend is
         # actually selected (default is temporal).
         from src.ingest_queue.publisher import publish_ingest
 
-        await publish_ingest(params)
+        await publish_ingest(params, queue)
         return
     await _submit_to_scheduler(client, params)
 

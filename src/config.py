@@ -782,12 +782,43 @@ class RabbitMQSettings(BaseSettings):
     )
 
     url: str = "amqp://guest:guest@localhost:5672/"
-    queue: str = "ingest.pending"
+    # Configured ingest queues. /ingest picks one by explicit name
+    # (validated against this list); the consumer declares + consumes ALL
+    # of them on one channel under a GLOBAL prefetch=K (so total in-flight
+    # ≤ K across every queue). Env: comma-separated, e.g.
+    # RABBITMQ_QUEUES=ingest.pending,ingest.bulk. First entry is the default.
+    queues: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["ingest.pending"],
+    )
     # Dead-letter exchange + queue for messages that fail processing.
     dlx: str = "ingest.dlx"
     dlq: str = "ingest.dlq"
     # Requeue a nacked message instead of dead-lettering (debug only).
     requeue_on_failure: bool = False
+    # Per-queue consumer ack timeout (ms), set as the ``x-consumer-timeout``
+    # arg on ``queue``.  The consumer awaits the WHOLE DocumentIngestWorkflow
+    # before acking, so a delivery can stay unacked for the full per-document
+    # wall-clock (slow Neo4j writes; activity schedule_to_close up to ~12h).
+    # RabbitMQ's default (30 min) would force-close the channel mid-document
+    # and requeue every in-flight message → a storm of duplicate workflow
+    # starts.  Set WELL above the longest document run (default 24h).
+    consumer_timeout_ms: int = Field(default=86_400_000, ge=60_000)
+
+    @field_validator("queues", mode="before")
+    @classmethod
+    def _split_queues(cls, v):
+        """Allow a comma-separated env string (RABBITMQ_QUEUES=a,b) as well
+        as a JSON/python list. Empty entries dropped; never empty."""
+        if isinstance(v, str):
+            v = [q.strip() for q in v.split(",") if q.strip()]
+        if not v:
+            return ["ingest.pending"]
+        return v
+
+    @property
+    def default_queue(self) -> str:
+        """Queue used when /ingest doesn't name one (the first configured)."""
+        return self.queues[0]
 
 
 # ── composed top-level settings ──────────────────────────────────────

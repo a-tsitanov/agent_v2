@@ -36,13 +36,16 @@ async def _get_connection() -> aio_pika.abc.AbstractRobustConnection:
     return _connection
 
 
-async def publish_ingest(params: IngestParams) -> None:
-    """Publish one document to the durable ``ingest.pending`` queue.
+async def publish_ingest(params: IngestParams, queue: str | None = None) -> None:
+    """Publish one document to a configured ingest queue (``queue``,
+    default the first configured).  The caller (/ingest) has already
+    validated ``queue`` ∈ ``RabbitMQSettings.queues``.
 
     ``message_id`` = ``doc_id`` so the payload is dedup-friendly and
     traceable; ``PERSISTENT`` so an enqueued document survives a broker
     restart before the consumer admits it."""
     cfg = settings.rabbitmq
+    target = queue or cfg.default_queue
     connection = await _get_connection()
     channel = await connection.channel()
     try:
@@ -54,9 +57,12 @@ async def publish_ingest(params: IngestParams) -> None:
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
                 message_id=params.doc_id,
             ),
-            routing_key=cfg.queue,
+            routing_key=target,
         )
-        logger.info("ingest published to rabbitmq  doc={d}", d=params.doc_id)
+        logger.info(
+            "ingest published to rabbitmq  doc={d}  queue={q}",
+            d=params.doc_id, q=target,
+        )
     finally:
         await channel.close()
 

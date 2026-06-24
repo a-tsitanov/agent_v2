@@ -46,15 +46,15 @@ async def test_rabbitmq_backend_publishes_and_skips_temporal(monkeypatch) -> Non
     published: list[IngestParams] = []
     fake_mod = types.ModuleType("src.ingest_queue.publisher")
 
-    async def _publish(p: IngestParams) -> None:
-        published.append(p)
+    async def _publish(p: IngestParams, queue: str | None = None) -> None:
+        published.append((p, queue))
 
     fake_mod.publish_ingest = _publish
     monkeypatch.setitem(sys.modules, "src.ingest_queue.publisher", fake_mod)
 
     client = AsyncMock()
     params = _params()
-    await submit_document(client, params)
+    await submit_document(client, params, queue="ingest.bulk")
 
-    assert published == [params]
+    assert published == [(params, "ingest.bulk")]  # queue forwarded to publisher
     assert client.start_workflow.await_count == 0  # never touched Temporal

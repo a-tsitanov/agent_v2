@@ -367,3 +367,64 @@ async def test_ingest_bad_document_date_422() -> None:
     stub_storage.put_object.assert_not_called()
     ins.assert_not_awaited()
     fake_client.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_unknown_queue_422(monkeypatch) -> None:
+    """rabbitmq backend: an unconfigured `queue` is rejected with 422
+    before any upload/enqueue."""
+    from src.api.main import app
+    from src.config import settings
+    from src.storage.postgres import AsyncPostgres
+
+    monkeypatch.setattr(settings.ingest_admission, "backend", "rabbitmq")
+    monkeypatch.setattr(settings.rabbitmq, "queues", ["ingest.pending"])
+    stub_storage = _stub_minio()
+
+    with (
+        patch("src.api.routes.ingest.build_minio_storage", return_value=stub_storage),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()) as ins,
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("f.txt", b"x", "text/plain")},
+                data={"queue": "does-not-exist"},
+            )
+
+    assert resp.status_code == 422, resp.text
+    stub_storage.put_object.assert_not_called()
+    ins.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_valid_queue_forwarded(monkeypatch) -> None:
+    """rabbitmq backend: a configured `queue` is passed to submit_document."""
+    from src.api.main import app
+    from src.config import settings
+    from src.storage.postgres import AsyncPostgres
+
+    monkeypatch.setattr(settings.ingest_admission, "backend", "rabbitmq")
+    monkeypatch.setattr(settings.rabbitmq, "queues", ["ingest.pending", "ingest.bulk"])
+    stub_storage = _stub_minio("s3://kb-uploads/abc/file.txt")
+    submit = AsyncMock()
+
+    with (
+        patch("src.api.routes.ingest.build_minio_storage", return_value=stub_storage),
+        patch.object(AsyncPostgres, "insert_pending", new=AsyncMock()),
+        patch("src.api.routes.ingest.get_temporal_client", new=AsyncMock()),
+        patch("src.api.routes.ingest.submit_document", submit),
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/v1/ingest",
+                headers=_api_key_header(),
+                files={"file": ("file.txt", b"x", "text/plain")},
+                data={"queue": "ingest.bulk"},
+            )
+
+    assert resp.status_code == 202, resp.text
+    assert submit.await_args.kwargs["queue"] == "ingest.bulk"

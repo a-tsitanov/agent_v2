@@ -62,10 +62,23 @@ async def upload_document(
     department: str = Form(default=""),
     force: bool = Form(default=False),
     document_date: str | None = Form(default=None),
+    queue: str | None = Form(default=None),
     x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
     if not file.filename:
         raise HTTPException(400, "filename required")
+
+    # Optional target ingest queue (rabbitmq backend only). Validate up
+    # front against the configured queues → 422 on an unknown name. On the
+    # temporal backend the field is ignored (single admission singleton).
+    target_queue: str | None = None
+    if settings.ingest_admission.backend == "rabbitmq" and queue is not None:
+        if queue not in settings.rabbitmq.queues:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"unknown queue {queue!r}; configured: {settings.rabbitmq.queues}",
+            )
+        target_queue = queue
 
     # Optional client document date (ISO YYYY-MM-DD) for date-filtered
     # search.  Validate up front so a malformed value 422s before any
@@ -167,7 +180,7 @@ async def upload_document(
     # once, each to completion, FIFO; `rabbitmq` = publish to a durable
     # queue a consumer drains at prefetch=K.  See src/workflow/ingest_submit.
     try:
-        await submit_document(client, params)
+        await submit_document(client, params, queue=target_queue)
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is
         # already running or already completed successfully.  Don't

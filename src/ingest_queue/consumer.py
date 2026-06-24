@@ -85,17 +85,22 @@ async def run_consumer(stop_event: asyncio.Event | None = None) -> None:
     connection = await aio_pika.connect_robust(cfg.url)
     try:
         channel = await connection.channel()
-        # prefetch=K is the admission ceiling: K unacked → K docs running.
-        await channel.set_qos(prefetch_count=k)
-        queue = await declare_ingest_topology(channel, cfg)
+        # global_=True → prefetch=K is shared across ALL consumers on this
+        # channel, so total unacked (= documents in flight) ≤ K across every
+        # configured queue, not K per queue. This keeps the admission ceiling
+        # global even with N queues.
+        await channel.set_qos(prefetch_count=k, global_=True)
+        queues = await declare_ingest_topology(channel, cfg)
         logger.info(
-            "ingest consumer up  queue={q}  prefetch(K)={k}", q=cfg.queue, k=k,
+            "ingest consumer up  queues={q}  prefetch(K,global)={k}",
+            q=cfg.queues, k=k,
         )
 
         async def _on_message(message: aio_pika.abc.AbstractIncomingMessage) -> None:
             await handle_message(message, client, cfg)
 
-        await queue.consume(_on_message)
+        for q in queues:
+            await q.consume(_on_message)
         await (stop_event or asyncio.Event()).wait()
     finally:
         await connection.close()
