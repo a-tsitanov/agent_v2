@@ -1,13 +1,15 @@
 # src/analytics/primitives/__init__.py
 """Importing this package registers every primitive into catalog.CATALOG.
 
-Per-family imports are commented out until each module lands (Tasks 5–9, 21–23).
-Re-enable each line as its corresponding primitive module is created.
+Each family module calls catalog.register() for its primitives as a side effect.
+Importing this package is therefore sufficient to populate the full Wave-0 CATALOG.
 """
 
-# from src.analytics.primitives import aggregations  — Task 5
-# from src.analytics.primitives import connections   — Task 6
-# from src.analytics.primitives import dynamics      — Task 7
-# from src.analytics.primitives import communities   — Task 8
-# from src.analytics.primitives import events        — Task 9
-from src.analytics.primitives import quality  # — Task 22
+from src.analytics.primitives import (
+    aggregations,  # noqa: F401
+    communities,  # noqa: F401
+    connections,  # noqa: F401
+    dynamics,  # noqa: F401
+    events,  # noqa: F401
+    quality,  # noqa: F401
+)
