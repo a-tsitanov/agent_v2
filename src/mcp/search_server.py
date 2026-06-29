@@ -39,18 +39,23 @@ from temporalio.common import WorkflowIDReusePolicy
 
 from src.config import settings
 from src.mcp._shared import (
-    assert_api_key_env_set, build_sse_auth, log_banner, parse_args,
+    assert_api_key_env_set,
+    build_sse_auth,
+    log_banner,
+    parse_args,
 )
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import (
-    GlobalSearchParams, OrchestratorParams, SearchOutcome,
+    GlobalSearchParams,
+    OrchestratorParams,
+    SearchOutcome,
 )
 from src.workflow.search.global_wf import GlobalSearchWorkflow
 from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 from src.workflow.search.router_wf import (
-    AutoSearchWorkflow, DriftSearchWorkflow,
+    AutoSearchWorkflow,
+    DriftSearchWorkflow,
 )
-
 
 mcp = FastMCP(
     name="kb-llamaindex-search",
@@ -106,8 +111,7 @@ def _outcome_to_dict(outcome: SearchOutcome) -> dict[str, Any]:
         "sources": [
             {
                 "chunk_id": n.chunk_id,
-                "doc_id": str(n.metadata.get("doc_id")
-                              or n.metadata.get("file_path") or ""),
+                "doc_id": str(n.metadata.get("doc_id") or n.metadata.get("file_path") or ""),
                 "text": n.text,
                 "score": n.score,
             }
@@ -134,13 +138,15 @@ async def _stream_until_done(handle, ctx: Context, state_query) -> SearchOutcome
                     state = await handle.query(state_query)
                     msg = "  ".join(f"{k}={v}" for k, v in state.items())
                     await ctx.report_progress(
-                        progress=0.0, total=1.0, message=msg or "…",
+                        progress=0.0,
+                        total=1.0,
+                        message=msg or "…",
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.debug("query state failed (transient): {e}", e=exc)
             try:
                 await asyncio.wait_for(asyncio.shield(result_task), 0.3)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 logger.info("mcp search cancelled by client, cancelling workflow")
@@ -194,7 +200,9 @@ async def kb_search(
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
     )
     outcome = await _stream_until_done(
-        handle, ctx, SearchOrchestratorWorkflow.get_state,
+        handle,
+        ctx,
+        SearchOrchestratorWorkflow.get_state,
     )
     return _outcome_to_dict(outcome)
 
@@ -226,7 +234,9 @@ async def kb_global_search(
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
     )
     outcome = await _stream_until_done(
-        handle, ctx, GlobalSearchWorkflow.get_state,
+        handle,
+        ctx,
+        GlobalSearchWorkflow.get_state,
     )
     return _outcome_to_dict(outcome)
 
@@ -291,12 +301,40 @@ async def kb_auto_search(
     return _outcome_to_dict(outcome)
 
 
+@mcp.tool(timeout=1800)
+async def kb_analyze(query: str, ctx: Context, top_n: int = 20) -> dict[str, Any]:
+    """Analytical Q&A: computes counts/rankings/connections/centrality/temporal facts
+    over the knowledge graph and returns an answer plus a deterministic provenance
+    chain (which primitives ran, the rows, source chunks). USE FOR quantitative /
+    structural / "how many / who is most central / how connected / what changed"
+    questions. For 'what do the documents say', use kb_search instead."""
+    from src.analytics.contracts import AnalyzeParams
+    from src.workflow.analytics.workflow import AnalyticalQueryWorkflow
+
+    handle = await (await get_temporal_client()).start_workflow(
+        AnalyticalQueryWorkflow.run,
+        AnalyzeParams(query=query, top_n=top_n),
+        id=f"mcp-analyze-{uuid.uuid4().hex}",
+        task_queue=settings.temporal.search_task_queue,
+        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+    )
+    outcome = await handle.result()
+    return {
+        "query": outcome.query,
+        "answer": outcome.answer,
+        "provenance": outcome.provenance.model_dump(),
+        "latency_ms": outcome.latency_ms,
+    }
+
+
 def main() -> None:
     args = parse_args()
     assert_api_key_env_set()
     log_banner(
         "kb-llamaindex-search",
-        transport=args["transport"], host=args["host"], port=args["port"],
+        transport=args["transport"],
+        host=args["host"],
+        port=args["port"],
     )
     if args["transport"] == "stdio":
         mcp.run(transport="stdio")
@@ -305,7 +343,8 @@ def main() -> None:
         # the legacy SSE transport for MCP-1 (matches MCP-2 tools_server).
         mcp.run(
             transport="http",
-            host=args["host"], port=args["port"],
+            host=args["host"],
+            port=args["port"],
         )
 
 

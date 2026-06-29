@@ -20,6 +20,7 @@ _EXPECTED_SEARCH_TOOLS = {
     "kb_global_search",
     "kb_drift_search",
     "kb_auto_search",
+    "kb_analyze",
 }
 
 
