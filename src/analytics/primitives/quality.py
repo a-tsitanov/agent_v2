@@ -67,7 +67,10 @@ register(
         "contradictions",
         contradictions,
         ContradictionsParams,
-        "Facts asserted AND denied with overlapping validity (true contradictions, not changes).",
+        "Facts asserted AND denied via two contemporaneous edges on the same pair. "
+        "NOTE: current ingest merges each (entity,relation,entity) to one edge with majority "
+        "polarity, so this surfaces results only when duplicate opposite-polarity edges exist; "
+        "merge-time contradiction detection is a planned follow-up.",
     )
 )
 register(

@@ -11,7 +11,6 @@ from src.analytics.contracts import AnalyzeParams
 from src.api.auth import require_api_key
 from src.config import settings
 from src.models.analyze import AnalyzeRequest, AnalyzeResponse
-from src.retrieval.date_filters import iso_to_epoch_days
 from src.workflow.analytics.workflow import AnalyticalQueryWorkflow
 from src.workflow.client import get_temporal_client
 
@@ -19,13 +18,9 @@ router = APIRouter(tags=["analytics"])
 
 
 def _to_params(req: AnalyzeRequest) -> AnalyzeParams:
-    """Map AnalyzeRequest → AnalyzeParams (ISO dates → epoch-days)."""
-    return AnalyzeParams(
-        query=req.query,
-        top_n=req.top_n,
-        date_from_epoch=iso_to_epoch_days(req.date_from) if req.date_from else None,
-        date_to_epoch=iso_to_epoch_days(req.date_to) if req.date_to else None,
-    )
+    """Map AnalyzeRequest → AnalyzeParams."""
+    # request-level date filtering deferred (no Wave-0 primitive consumes request bounds; planner sets per-primitive dates).
+    return AnalyzeParams(query=req.query, top_n=req.top_n)
 
 
 @router.post(

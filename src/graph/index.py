@@ -202,32 +202,30 @@ def ensure_chunk_date_indexes(store) -> bool:
     return ok
 
 
-# Range index on ``__Entity__.created_at`` and a relationship index on
-# ``created_at`` — E1 (Wave 0 first-seen feature).  Backs the
-# "what's new" query path that filters entities/relations by epoch-day.
+# Range index on ``__Entity__.created_at`` — E1 (Wave 0 first-seen feature).
+# Backs the "what's new" query path that filters entities by epoch-day.
+# NOTE: relationship created_at index needs per-type DDL in Neo4j; deferred
+# (edge first_seen queries scan until added).
 ENTITY_CREATED_AT_INDEX_CYPHER = (
     "CREATE INDEX entity_created_at IF NOT EXISTS FOR (e:__Entity__) ON (e.created_at)"
-)
-REL_CREATED_AT_INDEX_CYPHER = (
-    "CREATE INDEX rel_created_at IF NOT EXISTS FOR ()-[r]-() ON (r.created_at)"
 )
 
 
 def ensure_first_seen_indexes(store) -> bool:
-    """Idempotently create ``created_at`` indexes on entities and
-    relationships (E1 Wave 0).
+    """Idempotently create the ``created_at`` index on entities (E1 Wave 0).
+
+    Relationship-level ``created_at`` indexing is deferred — Neo4j requires
+    per-type DDL (``FOR ()-[r:TYPE]-()``) which is not yet wired.
 
     Fail-open like the other ensure-index helpers: any error is logged
-    and swallowed.  Returns True only if both DDL statements succeeded.
+    and swallowed.  Returns True only if the DDL succeeded.
     """
-    ok = True
-    for cypher in (ENTITY_CREATED_AT_INDEX_CYPHER, REL_CREATED_AT_INDEX_CYPHER):
-        try:
-            store.structured_query(cypher)
-        except Exception as exc:  # broad by design — fail-open
-            logger.warning("ensure_first_seen_indexes failed: {e}", e=exc)
-            ok = False
-    return ok
+    try:
+        store.structured_query(ENTITY_CREATED_AT_INDEX_CYPHER)
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_first_seen_indexes failed: {e}", e=exc)
+        return False
 
 
 def _parse_triplets_strip_thinking(response: str, **kwargs):

@@ -14,7 +14,7 @@ class _Rec:
         return []
 
 
-def test_ensure_first_seen_indexes_creates_entity_and_rel_index():
+def test_ensure_first_seen_indexes_creates_entity_index():
     store = _Rec()
     assert ensure_first_seen_indexes(store) is True
     joined = " ".join(store.queries)
@@ -31,8 +31,8 @@ def test_ensure_first_seen_indexes_returns_false_on_error():
     assert ensure_first_seen_indexes(_Fail()) is False
 
 
-def test_ensure_first_seen_indexes_two_queries_issued():
-    """Both entity and relationship indexes are created."""
+def test_ensure_first_seen_indexes_one_query_issued():
+    """Only the entity index is created (rel index deferred — needs per-type DDL)."""
     store = _Rec()
     ensure_first_seen_indexes(store)
-    assert len(store.queries) == 2
+    assert len(store.queries) == 1
