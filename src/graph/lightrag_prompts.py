@@ -345,12 +345,58 @@ def render_examples(
     """
     rendered = []
     for ex in examples:
-        rendered.append(ex.format(
-            entity_types=entity_types,
-            tuple_delimiter=tuple_delimiter,
-            completion_delimiter=completion_delimiter,
-        ))
+        rendered.append(
+            ex.format(
+                entity_types=entity_types,
+                tuple_delimiter=tuple_delimiter,
+                completion_delimiter=completion_delimiter,
+            )
+        )
     return "\n\n".join(rendered)
+
+
+# ── Event extraction addendum (injected ONLY when events are requested) ──
+#
+# Append EVENT_INSTRUCTION to the system prompt when the caller passes
+# `extraction_events=True` (Task 3 wires this).  Default entity/relation
+# extraction is unchanged when this block is absent.
+
+
+EVENT_INSTRUCTION = """\
+
+---Event Extraction (additional, only when requested)---
+Extract *discrete occurrences* described in the text as `event` tuples, on top of the entity and relation output above.
+
+**Output Format — Events:** Output 7 fields per event, delimited by `{tuple_delimiter}`, on a single line.  The first field *must* be the literal string `event`.
+
+  Format: `event{tuple_delimiter}event_type{tuple_delimiter}trigger_phrase{tuple_delimiter}participants{tuple_delimiter}event_timestamp{tuple_delimiter}event_location{tuple_delimiter}event_polarity`
+
+Field definitions:
+  * `event_type`: short label for the kind of event (e.g. `deal`, `meeting`, `termination`, `acquisition`).
+  * `trigger_phrase`: the verb phrase or noun that signals the event in the text (e.g. "signed a contract", "merger announced").
+  * `participants`: semicolon-separated list of entity names involved (e.g. `Romashka;Lutik`).  Use the same names as in the entity list.
+  * `event_timestamp`: ISO date or range (`YYYY`, `YYYY-MM-DD`) from the text; leave **empty** if unknown.
+  * `event_location`: place where the event occurred; leave **empty** if not mentioned.
+  * `event_polarity`: logical polarity — `affirmed` (event occurred), `negated` (explicitly did NOT occur), or `uncertain` (hedged).  Default `affirmed`.
+
+Output all events after the entity and relation lines, before the `{completion_delimiter}` sentinel.
+
+---Event Example---
+<Input Text>
+```
+On 1 March 2024, ООО «Ромашка» and ООО «Лютик» signed a supply contract in Moscow.
+```
+
+<Output (excerpt — entities and relations omitted for brevity)>
+event{tuple_delimiter}deal{tuple_delimiter}signed a supply contract{tuple_delimiter}ООО «Ромашка»;ООО «Лютик»{tuple_delimiter}2024-03-01{tuple_delimiter}Moscow{tuple_delimiter}affirmed
+{completion_delimiter}
+"""
+"""Addendum appended to the system prompt when event extraction is enabled.
+
+Contains the tuple spec and one few-shot.  Append to
+`ENTITY_EXTRACTION_SYSTEM` (after `.format(...)`) only when events are
+requested — do NOT include in the default entity/relation prompt.
+"""
 
 
 __all__ = [
@@ -361,6 +407,7 @@ __all__ = [
     "ENTITY_CONTINUE_EXTRACTION_USER",
     "ENTITY_EXTRACTION_SYSTEM",
     "ENTITY_EXTRACTION_USER",
+    "EVENT_INSTRUCTION",
     "EXAMPLES_DEFAULT",
     "SUMMARIZE_ENTITY_DESCRIPTIONS",
     "TUPLE_DELIM",
