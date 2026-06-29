@@ -1,0 +1,23 @@
+[
+  {
+    "id": "count-ok",
+    "rows": [{"n": 7}],
+    "answer": "В графе 7 организаций.",
+    "min_faithfulness": 1.0
+  },
+  {
+    "id": "halluc",
+    "rows": [{"n": 7}],
+    "answer": "7 организаций и 42 человека.",
+    "max_faithfulness": 0.6
+  },
+  {
+    "id": "ranking-ok",
+    "rows": [
+      {"name": "A", "mentions": 9},
+      {"name": "B", "mentions": 4}
+    ],
+    "answer": "Чаще всего упоминается A (9), затем B (4).",
+    "min_faithfulness": 1.0
+  }
+]
