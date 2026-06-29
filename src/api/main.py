@@ -22,6 +22,9 @@ from src.api.routes import (
     ingest,
     search_v2,
 )
+from src.api.routes import (
+    analyze as analyze_routes,
+)
 from src.config import settings
 from src.di.providers import build_api_container
 from src.utils.logging import configure_logging
@@ -34,12 +37,14 @@ _container = build_api_container()
 async def lifespan(_: FastAPI):
     logger.info(
         "kb-llamaindex API starting  env={env}  log_level={lvl}",
-        env=settings.api.env, lvl=settings.api.log_level,
+        env=settings.api.env,
+        lvl=settings.api.log_level,
     )
     # Probe LiteLLM /v1/models so a misconfigured per-role env
     # surfaces here as a WARNING (or, with LITELLM_VALIDATE_MODELS_STRICT,
     # blocks startup) — instead of an opaque 500 mid-ingest.
     from src.observability.litellm_models import validate_litellm_models
+
     validate_litellm_models(source="api")
     problems = settings.preflight(settings)
     if problems:
@@ -51,6 +56,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         from src.storage.pg_pool import close_pg_pool
+
         await close_pg_pool()
         await _container.close()
 
@@ -78,6 +84,7 @@ setup_dishka(_container, app)
 # global,drift,auto} (+ /admin/communities/rebuild).
 app.include_router(health.router)
 app.include_router(search_v2.router, prefix="/api/v1")
+app.include_router(analyze_routes.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
 app.include_router(admin.router)
