@@ -2,6 +2,7 @@
 
 Run: uv run python -m scripts.make_env   (see --help for flags)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -78,10 +79,14 @@ def parse_example(text: str) -> list[Line]:
         else:
             m_kv = _KV_RE.match(raw)
             if m_kv:
-                lines.append(KV(
-                    key=m_kv.group(1), example_val=m_kv.group(2),
-                    comment_lines=list(recent), section=section,
-                ))
+                lines.append(
+                    KV(
+                        key=m_kv.group(1),
+                        example_val=m_kv.group(2),
+                        comment_lines=list(recent),
+                        section=section,
+                    )
+                )
                 recent = []
             else:
                 lines.append(Comment(text=raw))
@@ -120,8 +125,7 @@ def parse_env(text: str) -> dict[str, str]:
     return out
 
 
-_SECRET_MARKERS = ("PASSWORD", "PASS", "SECRET", "API_KEY", "API_KEYS",
-                   "ACCESS_KEY", "_KEY")
+_SECRET_MARKERS = ("PASSWORD", "PASS", "SECRET", "API_KEY", "API_KEYS", "ACCESS_KEY", "_KEY")
 
 
 def is_secret(key: str) -> bool:
@@ -133,13 +137,14 @@ def is_secret(key: str) -> bool:
 @dataclass
 class EnvVar:
     env: str
-    default: str       # rendered default ("" for secrets / None / undefined)
+    default: str  # rendered default ("" for secrets / None / undefined)
     secret: bool
-    group: str         # settings class name (for grouping)
+    group: str  # settings class name (for grouping)
 
 
 def _render_default(value) -> str:
     import json
+
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -158,9 +163,10 @@ def iter_app_env_vars() -> list[EnvVar]:
     """
     import importlib
     import inspect
+
     from pydantic import SecretStr
-    from pydantic_settings import BaseSettings
     from pydantic_core import PydanticUndefined
+    from pydantic_settings import BaseSettings
 
     cfg = importlib.import_module("src.config")
     rows: list[EnvVar] = []
@@ -270,13 +276,13 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "LITELLM_API_KEY": "Ключ к LiteLLM-прокси (OpenAI-совместимый). Секрет.",
     "LITELLM_BASE_URL": "Base URL LiteLLM-прокси (или любого OpenAI-совместимого эндпоинта).",
     "LITELLM_EMBEDDING_MODEL": "Имя embedding-модели; её native-dim ДОЛЖНА совпадать с MILVUS_DIM (text-embedding-3-small → 1536).",
-    "LITELLM_EXTRA_BODY": "JSON доп.полей тела КАЖДОГО chat-запроса (через OpenAI extra_body), напр. {\"think\": false} чтобы выключить chain-of-thought Qwen3. Пусто ⇒ запрос не меняется.",
-    "LITELLM_EXTRA_BODY_ROLES": "JSON per-role override'ов extra_body; shallow-мёрж поверх LITELLM_EXTRA_BODY, ключи роли побеждают. Напр. {\"synthesis\": {\"think\": true}} — оставить thinking только для финального ответа.",
+    "LITELLM_EXTRA_BODY": 'JSON доп.полей тела КАЖДОГО chat-запроса (через OpenAI extra_body), напр. {"think": false} чтобы выключить chain-of-thought Qwen3. Пусто ⇒ запрос не меняется.',
+    "LITELLM_EXTRA_BODY_ROLES": 'JSON per-role override\'ов extra_body; shallow-мёрж поверх LITELLM_EXTRA_BODY, ключи роли побеждают. Напр. {"synthesis": {"think": true}} — оставить thinking только для финального ответа.',
     "LITELLM_LLM_MODEL": "DEPRECATED-алиас no-role legacy-пути; пусто ⇒ откат на model_small. Удалить, когда все читатели перейдут на tier-поля.",
     "LITELLM_MAX_RETRIES": "Сколько повторов на сетевую/временную ошибку LLM-вызова.",
     "LITELLM_MODEL_LARGE": "Имя 'large'-модели: только финальный user-facing synthesis (дефолт gpt-4o-mini).",
     "LITELLM_MODEL_SMALL": "Имя 'small'-модели: локальная высоконагруженная (extraction/judge/search/plan/...).",
-    "LITELLM_ROLE_TIERS": "JSON-override карты роль→tier; мёржится поверх дефолтов, можно эскалировать одну роль, напр. {\"plan\":\"large\"}.",
+    "LITELLM_ROLE_TIERS": 'JSON-override карты роль→tier; мёржится поверх дефолтов, можно эскалировать одну роль, напр. {"plan":"large"}.',
     "LITELLM_TIMEOUT_S": "Таймаут LLM-вызова в секундах (дефолт 900 — под медленный локальный inference).",
     # ── MetricsSettings (METRICS_*) — Prometheus-экспортёр воркера ────
     "METRICS_BIND_ADDRESS": "Адрес:порт, на котором воркер поднимает Prometheus-листенер; Prometheus скрейпит через host.docker.internal:<port>.",
@@ -316,9 +322,14 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "POSTGRES_USER": "Пользователь Postgres.",
     # ── SignalsSettings (SIGNALS_*) — качество знаний / actionable-сигналы
     "SIGNALS_EXPECTED_ATTRS": "Ожидаемые идентификаторы для оценки полноты данных по типу сущности (используется в completeness-сигнале).",
+    "SIGNALS_LINK_PREDICTION_MIN_SCORE": "Минимальный similarity-score GDS node-similarity для записи ребра :LIKELY_LINK (0.0..1.0).",
+    "SIGNALS_LINK_PREDICTION_TOP_K": "top-K соседей на узел для GDS node-similarity (link prediction). >= 1.",
     "SIGNALS_ORPHAN_MIN_DEGREE": "Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).",
+    "SIGNALS_RISK_BANDS": "Пороги полос composite risk_score: >=high → 'high', >=medium → 'medium', иначе 'low'. JSON-словарь {\"high\": 0.66, \"medium\": 0.33}.",
+    "SIGNALS_RISK_WEIGHTS": "Веса компонентов composite risk_score (affiliation/brokerage/controversy/volatility/opacity); должны суммироваться к 1.0.",
     # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
     "TEMPORAL_ACTIVITY_CONCURRENCY": "Слотов активити на основной очереди kb-ingest.",
+    "TEMPORAL_ANALYTICS_MATERIALIZE_CONCURRENCY": "GDS-воркеры для офлайн-материализации аналитики (centrality/link-prediction) на очереди kb-graph-build. >= 1.",
     "TEMPORAL_COMMUNITY_BACKEND": "Движок детекции сообществ: 'gds' (Leiden в Neo4j, легаси) или 'leidenalg' (leidenalg/igraph в воркере, память вне Neo4j). Дефолт 'gds' до прохождения бенчмарка паритета.",
     "TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY": "Число GDS-потоков для прогона Leiden; держать умеренным, чтобы rebuild не голодил Neo4j. >= 1.",
     "TEMPORAL_COMMUNITY_LEIDEN_GAMMA": "Resolution Leiden: >1 → больше мелких сообществ, <1 → меньше крупных. Только детекция, не query-путь. > 0.",
@@ -390,7 +401,7 @@ def gen_secret(key: str) -> str:
     """Generate a sensible secret for `key` (opt-in per field)."""
     k = key.upper()
     if k == "WIKIBASE_SECRET_KEY":
-        return secrets.token_hex(16)          # exactly 32 hex chars
+        return secrets.token_hex(16)  # exactly 32 hex chars
     if "API_KEY" in k or k == "API_KEYS":
         return "sk-" + secrets.token_urlsafe(32)
     # passwords + everything else: long urlsafe token (>= 12 chars)
@@ -418,29 +429,45 @@ def validate(values: dict[str, str]) -> list[Issue]:
     pool_n = _int(values, "LLM_POOL_N", 8)
     llm_cap = _int(values, "TEMPORAL_LLM_ACTIVITY_CONCURRENCY", 0)
     if llm_cap and llm_cap < pool_n:
-        issues.append(Issue("WARN",
-            f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY ({llm_cap}) < LLM_POOL_N "
-            f"({pool_n}); Temporal will throttle before the pool"))
+        issues.append(
+            Issue(
+                "WARN",
+                f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY ({llm_cap}) < LLM_POOL_N "
+                f"({pool_n}); Temporal will throttle before the pool",
+            )
+        )
     merge_cap = _int(values, "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY", 0)
     if merge_cap and merge_cap < pool_n:
-        issues.append(Issue("WARN",
-            f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY ({merge_cap}) < LLM_POOL_N "
-            f"({pool_n}); Temporal will throttle before the pool"))
+        issues.append(
+            Issue(
+                "WARN",
+                f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY ({merge_cap}) < LLM_POOL_N "
+                f"({pool_n}); Temporal will throttle before the pool",
+            )
+        )
 
-    models = (values.get("LITELLM_MODEL_SMALL", ""),
-              values.get("LITELLM_MODEL_LARGE", ""))
+    models = (values.get("LITELLM_MODEL_SMALL", ""), values.get("LITELLM_MODEL_LARGE", ""))
     if any(m.startswith("gpt-") for m in models) and not values.get("OPENAI_API_KEY"):
-        issues.append(Issue("ERROR",
-            "OPENAI_API_KEY is empty but a model tier points at OpenAI (gpt-*)"))
+        issues.append(
+            Issue("ERROR", "OPENAI_API_KEY is empty but a model tier points at OpenAI (gpt-*)")
+        )
 
     bp = values.get("WIKIBASE_BOT_PASSWORD", "")
     if bp and len(bp) < 8:
-        issues.append(Issue("ERROR",
-            f"WIKIBASE_BOT_PASSWORD must be >= 8 chars (MediaWiki minimum), got {len(bp)}"))
+        issues.append(
+            Issue(
+                "ERROR",
+                f"WIKIBASE_BOT_PASSWORD must be >= 8 chars (MediaWiki minimum), got {len(bp)}",
+            )
+        )
     ap = values.get("WIKIBASE_ADMIN_PASS", "")
     if ap and len(ap) < 10:
-        issues.append(Issue("ERROR",
-            f"WIKIBASE_ADMIN_PASS must be >= 10 chars (MediaWiki minimum), got {len(ap)}"))
+        issues.append(
+            Issue(
+                "ERROR",
+                f"WIKIBASE_ADMIN_PASS must be >= 10 chars (MediaWiki minimum), got {len(ap)}",
+            )
+        )
 
     return issues
 
@@ -530,16 +557,23 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Build .env from .env.example.")
     p.add_argument("--example", default=".env.example")
     p.add_argument("--out", default=".env")
-    p.add_argument("--non-interactive", action="store_true",
-                   help="copy defaults + generate empty secrets, no prompts")
-    p.add_argument("--force", action="store_true",
-                   help="write despite ERROR-level validation")
-    p.add_argument("--no-merge", action="store_true",
-                   help="ignore an existing .env")
-    p.add_argument("--reference", action="store_true",
-                   help="(re)generate .env.reference from config.py and exit")
-    p.add_argument("--check", action="store_true",
-                   help="verify .env.reference is current (+ report .env.example coverage); exit 1 on stale reference")
+    p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="copy defaults + generate empty secrets, no prompts",
+    )
+    p.add_argument("--force", action="store_true", help="write despite ERROR-level validation")
+    p.add_argument("--no-merge", action="store_true", help="ignore an existing .env")
+    p.add_argument(
+        "--reference",
+        action="store_true",
+        help="(re)generate .env.reference from config.py and exit",
+    )
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="verify .env.reference is current (+ report .env.example coverage); exit 1 on stale reference",
+    )
     args = p.parse_args(argv)
 
     ref_path = Path(".env.reference")
@@ -552,15 +586,20 @@ def main(argv: list[str] | None = None) -> int:
         on_disk = ref_path.read_text() if ref_path.exists() else ""
         stale = current != on_disk
         if stale:
-            print("  [DRIFT] .env.reference is stale — run `python -m scripts.make_env --reference`")
+            print(
+                "  [DRIFT] .env.reference is stale — run `python -m scripts.make_env --reference`"
+            )
         # coverage is INFORMATIONAL (do not fail on it in this batch)
-        example_keys = {ln.key for ln in parse_example(Path(args.example).read_text())
-                        if isinstance(ln, KV)}
+        example_keys = {
+            ln.key for ln in parse_example(Path(args.example).read_text()) if isinstance(ln, KV)
+        }
         missing = sorted({r.env for r in iter_app_env_vars()} - example_keys)
         if missing:
-            print(f"  [INFO] {len(missing)} app var(s) not in {args.example} "
-                  f"(documented in .env.reference): {', '.join(missing[:8])}"
-                  + (" ..." if len(missing) > 8 else ""))
+            print(
+                f"  [INFO] {len(missing)} app var(s) not in {args.example} "
+                f"(documented in .env.reference): {', '.join(missing[:8])}"
+                + (" ..." if len(missing) > 8 else "")
+            )
         if stale:
             return 1
         print("env check: OK")
@@ -578,9 +617,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.non_interactive:
         for ln in lines:
-            if (isinstance(ln, KV) and is_secret(ln.key)
-                    and not values[ln.key]
-                    and ln.key not in _UPSTREAM_CREDENTIALS):
+            if (
+                isinstance(ln, KV)
+                and is_secret(ln.key)
+                and not values[ln.key]
+                and ln.key not in _UPSTREAM_CREDENTIALS
+            ):
                 values[ln.key] = gen_secret(ln.key)
     else:
         if not sys.stdin.isatty():

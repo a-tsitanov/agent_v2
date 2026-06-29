@@ -350,6 +350,15 @@ class TemporalSettings(BaseSettings):
     # to flood the LLM proxy with a burst from a single rebuild.
     graph_build_task_queue: str = "kb-graph-build"
     graph_build_activity_concurrency: int = 2
+    # Offline analytics materialisation (Wave 1): centrality + link-prediction
+    # runs on the same kb-graph-build queue so it shares its low concurrency cap
+    # and never touches the query hot path.  Raise to process more nodes in
+    # parallel; keep modest so a rebuild doesn't starve Neo4j / LLM proxy.
+    analytics_materialize_concurrency: int = Field(
+        default=2,
+        ge=1,
+        description="GDS-воркеры для офлайн-материализации аналитики (centrality/link-prediction)",
+    )
     # Bounded parallelism for the per-community summarize fan-out inside
     # CommunityBuildWorkflow (independent of the worker-side activity cap).
     community_summary_parallelism: int = 4
@@ -715,9 +724,17 @@ class AnalyticsSettings(BaseSettings):
     default_version_tag: str = "unspecified"
     env_name: str = "dev-local"
     # --- analytical-query layer (Wave 0 v1a) ---
-    default_top_n: int = Field(default=20, description="Максимальное число строк, возвращаемых аналитическим запросом по умолчанию (top-N).")
-    max_steps: int = Field(default=3, description="Максимальное число примитивных вызовов в одном аналитическом плане.")
-    cypher_fallback_enabled: bool = Field(default=False, description="Разрешить фолбэк на text-to-Cypher при отсутствии подходящего примитива (v1c; по умолчанию выключено).")
+    default_top_n: int = Field(
+        default=20,
+        description="Максимальное число строк, возвращаемых аналитическим запросом по умолчанию (top-N).",
+    )
+    max_steps: int = Field(
+        default=3, description="Максимальное число примитивных вызовов в одном аналитическом плане."
+    )
+    cypher_fallback_enabled: bool = Field(
+        default=False,
+        description="Разрешить фолбэк на text-to-Cypher при отсутствии подходящего примитива (v1c; по умолчанию выключено).",
+    )
 
 
 class EventsSettings(BaseSettings):
@@ -728,9 +745,17 @@ class EventsSettings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
-    first_seen_enabled: bool = Field(default=False, description="Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).")
-    new_window_days: int = Field(default=14, description="Окно в днях для выборки новых событий (new_events) по умолчанию.")
-    backfill_sentinel: int = Field(default=0, description="Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).")
+    first_seen_enabled: bool = Field(
+        default=False,
+        description="Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
+    )
+    new_window_days: int = Field(
+        default=14, description="Окно в днях для выборки новых событий (new_events) по умолчанию."
+    )
+    backfill_sentinel: int = Field(
+        default=0,
+        description="Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
+    )
 
 
 class SignalsSettings(BaseSettings):
@@ -741,7 +766,10 @@ class SignalsSettings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
-    orphan_min_degree: int = Field(default=1, description="Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).")
+    orphan_min_degree: int = Field(
+        default=1,
+        description="Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).",
+    )
     # per-type expected identifier attributes for completeness scoring
     expected_attrs: dict[str, list[str]] = Field(
         default_factory=lambda: {
@@ -749,6 +777,35 @@ class SignalsSettings(BaseSettings):
             "Person": ["PhoneNumber", "Email"],
         },
         description="Ожидаемые идентификаторы для оценки полноты данных по типу сущности (используется в completeness-сигнале).",
+    )
+    # Composite risk score weights (Wave 1).  Five components; must sum to 1.0.
+    # Operators can rebalance via SIGNALS_RISK_WEIGHTS='{"affiliation":0.4,...}'.
+    risk_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "affiliation": 0.30,
+            "brokerage": 0.20,
+            "controversy": 0.20,
+            "volatility": 0.15,
+            "opacity": 0.15,
+        },
+        description="Веса компонентов composite risk_score (нормализованы к сумме 1.0)",
+    )
+    # Risk-band thresholds: score >= high → "high"; >= medium → "medium"; else "low".
+    risk_bands: dict[str, float] = Field(
+        default_factory=lambda: {"high": 0.66, "medium": 0.33},
+        description="Пороги полос risk_score: >=high → high, >=medium → medium, иначе low",
+    )
+    # GDS node-similarity (link prediction) knobs.
+    link_prediction_top_k: int = Field(
+        default=10,
+        ge=1,
+        description="top-K соседей на узел для GDS node-similarity (link prediction)",
+    )
+    link_prediction_min_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Минимальный similarity для записи ребра :LIKELY_LINK",
     )
 
 
