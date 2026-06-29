@@ -55,6 +55,7 @@ from src.workflow.activities import (
     synthesize_answer,
 )
 from src.workflow.analytics.activities import ANALYTICS_ACTIVITIES, ANALYTICS_LARGE_ACTIVITIES
+from src.workflow.analytics.materialize_workflow import AnalyticsMaterializeWorkflow
 from src.workflow.analytics.workflow import AnalyticalQueryWorkflow
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
@@ -220,7 +221,7 @@ def _build_worker(client: Client, group: str) -> Worker:
         return Worker(
             client,
             task_queue=t.graph_build_task_queue,
-            workflows=[CommunityBuildWorkflow],
+            workflows=[CommunityBuildWorkflow, AnalyticsMaterializeWorkflow],
             activities=GRAPH_BUILD_ACTIVITIES,
             max_concurrent_activities=t.graph_build_activity_concurrency,
         )
