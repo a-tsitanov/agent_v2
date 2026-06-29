@@ -15,23 +15,25 @@ from src.ingestion.embeddings import build_embedding_model
 from src.workflow.contracts import GraphBuilt, Merged
 from src.workflow.staging import build_staging_store
 
-_NEO4J_UNSAFE_METADATA_KEYS: frozenset[str] = frozenset({
-    "canonical_identifiers",
-    "canonical_identifiers_augment",
-})
-_PRESERVE_METADATA_KEYS: frozenset[str] = frozenset({
-    KG_NODES_KEY, KG_RELATIONS_KEY,
-})
+_NEO4J_UNSAFE_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "canonical_identifiers",
+        "canonical_identifiers_augment",
+    }
+)
+_PRESERVE_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        KG_NODES_KEY,
+        KG_RELATIONS_KEY,
+    }
+)
 
 
 def _is_neo4j_safe(value) -> bool:
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
     if isinstance(value, (list, tuple)):
-        return all(
-            v is None or isinstance(v, (str, int, float, bool))
-            for v in value
-        )
+        return all(v is None or isinstance(v, (str, int, float, bool)) for v in value)
     return False
 
 
@@ -50,20 +52,24 @@ def _strip_neo4j_unsafe_metadata(nodes) -> None:
 @activity.defn
 async def build_property_graph(merged: Merged) -> GraphBuilt:
     activity.logger.info(
-        "build_property_graph start  doc=%s", merged.kg.parsed.ctx.doc_id,
+        "build_property_graph start  doc=%s",
+        merged.kg.parsed.ctx.doc_id,
     )
     activity.heartbeat({"stage": "init"})
 
     staging = build_staging_store()
     entities, relations, nodes = await asyncio.to_thread(
-        staging.read_pickle, merged.merged_entities_uri,
+        staging.read_pickle,
+        merged.merged_entities_uri,
     )
-    activity.heartbeat({
-        "stage": "loaded",
-        "entities": len(entities),
-        "relations": len(relations),
-        "chunks": len(nodes),
-    })
+    activity.heartbeat(
+        {
+            "stage": "loaded",
+            "entities": len(entities),
+            "relations": len(relations),
+            "chunks": len(nodes),
+        }
+    )
 
     # Off the event loop: build_neo4j_graph_store() does blocking driver
     # I/O (schema refresh + index DDL) and takes a process-global lock;
@@ -77,7 +83,8 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
     activity.heartbeat({"stage": "scrubbed"})
 
     activity.logger.info(
-        "build_property_graph building index  chunks=%d", len(nodes),
+        "build_property_graph building index  chunks=%d",
+        len(nodes),
     )
     await asyncio.to_thread(
         build_property_graph_index,
@@ -96,23 +103,52 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
         await asyncio.to_thread(write_with_retry, graph_store.upsert_nodes, entities)
         activity.heartbeat({"stage": "entities_upserted", "count": len(entities)})
     if relations:
-        await asyncio.to_thread(
-            write_with_retry, graph_store.upsert_relations, relations
-        )
+        await asyncio.to_thread(write_with_retry, graph_store.upsert_relations, relations)
         activity.heartbeat({"stage": "relations_upserted", "count": len(relations)})
+
+    # E1 — ON-CREATE-emulated first_seen stamping.
+    # Relation.source_id/target_id are synthetic EntityNode.id values (not
+    # entity names), so we build an id→name map from the merged entities list
+    # before constructing the relation triples for the Cypher stamp query.
+    from src.config import settings
+    from src.graph.first_seen import stamp_first_seen
+    from src.retrieval.date_filters import today_epoch_days
+
+    if settings.events.first_seen_enabled:
+        _id_to_name = {e.id: e.name for e in entities}
+        _ent_names = [e.name for e in entities]
+        _rel_triples = [
+            (_id_to_name[r.source_id], r.label, _id_to_name[r.target_id])
+            for r in relations
+            if r.source_id in _id_to_name and r.target_id in _id_to_name
+        ]
+        await asyncio.to_thread(
+            stamp_first_seen,
+            graph_store,
+            entity_names=_ent_names,
+            relations=_rel_triples,
+            ingest_epoch=today_epoch_days(),
+            doc_id=merged.kg.parsed.ctx.doc_id,
+        )
+        activity.heartbeat({"stage": "first_seen_stamped"})
 
     from src.graph.index import (
         ensure_chunk_date_indexes,
         ensure_entity_fulltext_index,
         ensure_entity_lookup_indexes,
+        ensure_first_seen_indexes,
     )
+
     await asyncio.to_thread(ensure_entity_fulltext_index, graph_store)
     await asyncio.to_thread(ensure_entity_lookup_indexes, graph_store)
     await asyncio.to_thread(ensure_chunk_date_indexes, graph_store)
+    await asyncio.to_thread(ensure_first_seen_indexes, graph_store)
     activity.heartbeat({"stage": "indexes_ensured"})
 
     logger.info(
         "build_property_graph done  doc={d}  e={e}  r={r}",
-        d=merged.kg.parsed.ctx.doc_id, e=len(entities), r=len(relations),
+        d=merged.kg.parsed.ctx.doc_id,
+        e=len(entities),
+        r=len(relations),
     )
     return GraphBuilt(entities=len(entities), relations=len(relations))
