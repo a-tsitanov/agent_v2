@@ -10,4 +10,4 @@ Re-enable each line as its corresponding primitive module is created.
 # from src.analytics.primitives import dynamics      — Task 7
 # from src.analytics.primitives import communities   — Task 8
 # from src.analytics.primitives import events        — Task 9
-# from src.analytics.primitives import quality       — Task 21
+from src.analytics.primitives import quality  # — Task 22
