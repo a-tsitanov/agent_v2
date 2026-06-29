@@ -1,9 +1,9 @@
-"""Wave 0 catalog completeness test.
+"""Wave 0 + Wave 1 catalog completeness test.
 
 Importing src.analytics.primitives triggers all family-module registrations via
-side-effect imports in that package's __init__.py.  Once all six family modules
-are imported we expect CATALOG to contain the full set of 28 Wave-0 primitives
-and render_catalog_for_planner() to mention each one.
+side-effect imports in that package's __init__.py.  Once all nine family modules
+are imported we expect CATALOG to contain the full set of 36 primitives
+(28 Wave-0 + 8 Wave-1) and render_catalog_for_planner() to mention each one.
 """
 
 import src.analytics.primitives  # noqa: F401 — triggers all registrations
@@ -44,17 +44,28 @@ _EXPECTED = {
     "orphans",
     "incomplete_entities",
     "merge_candidates",
+    # Wave 1 — v1b (centrality)
+    "top_central_entities",
+    "link_prediction",
+    # Wave 1 — P2 (signals)
+    "risk_score",
+    "investigate_next",
+    "recommended_merges",
+    "review_queue",
+    "circular_ownership",
+    # Wave 1 — Arc 1 (rollups)
+    "numeric_rollup",
 }
 
 
 def test_wave0_catalog_is_complete() -> None:
-    """All 28 Wave-0 primitives must be registered in CATALOG."""
+    """All 36 primitives (Wave-0 + Wave-1) must be registered in CATALOG."""
     missing = _EXPECTED - set(CATALOG)
     assert not missing, f"Missing from CATALOG: {sorted(missing)}"
 
 
 def test_planner_prompt_lists_every_primitive() -> None:
-    """render_catalog_for_planner() must mention every Wave-0 primitive name."""
+    """render_catalog_for_planner() must mention every primitive name."""
     rendered = render_catalog_for_planner()
     missing = [name for name in _EXPECTED if name not in rendered]
     assert not missing, f"Missing from planner prompt: {sorted(missing)}"
