@@ -58,3 +58,29 @@ class AnalyticsOutcome(_Frozen):
     answer: str
     provenance: Provenance
     latency_ms: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Activity-level wire types (Task 12)
+# ---------------------------------------------------------------------------
+
+
+class PlanInput(_Frozen):
+    query: str
+    max_steps: int = 3
+
+
+class ExecInput(_Frozen):
+    call: PrimitiveCall
+    top_n: int = 20
+    date_from_epoch: int | None = None
+    date_to_epoch: int | None = None
+
+
+class SynthInput(_Frozen):
+    query: str
+    steps: list[StepResult] = Field(default_factory=list)
+
+
+class SynthResult(_Frozen):
+    text: str = ""
