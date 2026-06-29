@@ -756,6 +756,22 @@ class EventsSettings(BaseSettings):
         default=0,
         description="Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
     )
+    extraction_enabled: bool = Field(
+        default=False,
+        description="Включить извлечение структурных LLM-событий в extract_kg (E2; по умолчанию выкл — доп. стоимость LLM)",
+    )
+    taxonomy: list[str] = Field(
+        default_factory=lambda: [
+            "deal",
+            "appointment",
+            "lawsuit",
+            "incident",
+            "payment",
+            "meeting",
+            "sanction",
+        ],
+        description="Закрытый список типов событий (event_type), с открытым fallback для длинного хвоста",
+    )
 
 
 class SignalsSettings(BaseSettings):
@@ -806,6 +822,29 @@ class SignalsSettings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Минимальный similarity для записи ребра :LIKELY_LINK",
+    )
+
+
+class MonitorSettings(BaseSettings):
+    """Arc 2 continuous monitoring + alerts (scheduled sweep)."""
+
+    model_config = SettingsConfigDict(env_prefix="MONITOR_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(
+        default=False, description="Включить непрерывный мониторинг/алерты (Arc 2)"
+    )
+    task_queue: str = Field(default="kb-monitor", description="Очередь воркера монитор-свипа")
+    activity_concurrency: int = Field(
+        default=2, ge=1, description="Параллелизм активностей монитора"
+    )
+    sweep_interval_minutes: int = Field(
+        default=30, ge=1, description="Период Temporal-Schedule монитор-свипа, мин"
+    )
+    new_window_days: int = Field(
+        default=7, ge=1, description="Окно (дни) для детекта новых first_seen-связей"
+    )
+    risk_rise_delta: float = Field(
+        default=0.1, gt=0.0, le=1.0, description="Порог роста risk_score для алерта"
     )
 
 
@@ -1045,6 +1084,10 @@ class Settings(BaseSettings):
     def signals(self) -> SignalsSettings:
         return SignalsSettings()
 
+    @cached_property
+    def monitor(self) -> MonitorSettings:
+        return MonitorSettings()
+
     @staticmethod
     def preflight(s: Settings) -> list[str]:
         """Return a list of actionable config problems (empty == OK).
@@ -1112,6 +1155,7 @@ __all__ = [
     "MetricsSettings",
     "MilvusSettings",
     "MinioSettings",
+    "MonitorSettings",
     "Neo4jSettings",
     "PostgresSettings",
     "Settings",

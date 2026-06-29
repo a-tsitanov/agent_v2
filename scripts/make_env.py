@@ -251,8 +251,10 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "CLASSIFIER_SKIP_EXTENSIONS": "JSON-список расширений, отсекаемых детерминированным правилом (exe, zip, png, mp4 и т.п.).",
     # ── EventsSettings (EVENTS_*) — детекция событий first_seen ─────────
     "EVENTS_BACKFILL_SENTINEL": "Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
+    "EVENTS_EXTRACTION_ENABLED": "Включить извлечение структурных LLM-событий в extract_kg (E2; по умолчанию выкл — доп. стоимость LLM).",
     "EVENTS_FIRST_SEEN_ENABLED": "Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
     "EVENTS_NEW_WINDOW_DAYS": "Окно в днях для выборки новых событий (new_events) по умолчанию.",
+    "EVENTS_TAXONOMY": "Закрытый список типов событий (event_type) для LLM-извлечения; с открытым fallback для длинного хвоста.",
     # ── HFSettings (явные имена без префикса) — offline HF-модели ─────
     "HF_CACHE_DIR": "Путь к локальному HF-кэшу для air-gapped деплоя; пусто = дефолт HF. Связано с download_models.py / configure_hf.",
     "HF_OFFLINE": "Включить offline-режим HuggingFace (читать только из локального кэша, без обращений к Hub).",
@@ -305,6 +307,13 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "MINIO_REGION": "Регион S3 (для совместимых клиентов).",
     "MINIO_SECRET_KEY": "Secret key MinIO/S3. Секрет; в проде задать реальный.",
     "MINIO_SECURE": "Использовать TLS (https) при обращении к MinIO/S3.",
+    # ── MonitorSettings (MONITOR_*) — непрерывный мониторинг/алерты ──
+    "MONITOR_ACTIVITY_CONCURRENCY": "Параллелизм активностей монитор-свипа. >= 1.",
+    "MONITOR_ENABLED": "Включить непрерывный мониторинг и алерты (Arc 2). По умолчанию off.",
+    "MONITOR_NEW_WINDOW_DAYS": "Окно в днях для детекта новых first_seen-связей при свипе. >= 1.",
+    "MONITOR_RISK_RISE_DELTA": "Порог роста risk_score для генерации алерта (0 < значение <= 1).",
+    "MONITOR_SWEEP_INTERVAL_MINUTES": "Период Temporal-Schedule монитор-свипа в минутах. >= 1.",
+    "MONITOR_TASK_QUEUE": "Имя очереди Temporal для воркера монитор-свипа.",
     # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
     "NEO4J_DATABASE": "Имя базы Neo4j.",
     "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",
