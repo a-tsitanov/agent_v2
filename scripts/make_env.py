@@ -224,8 +224,11 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "AGENT_MAX_COVERAGE_ROUNDS": "Макс. число доп. раундов coverage-check в plan-execute: на найденный пробел запускается ещё один SubQueryRetrievalWorkflow. Капа 0..3.",
     "AGENT_MAX_SUBQUERIES": "Макс. число подвопросов, которые может выдать планировщик — ограничивает параллельный fan-out SubQueryRetrievalWorkflow и стоимость планировщика. Капа 1..20.",
     # ── AnalyticsSettings (ANALYTICS_*) — теги версий ingest-метрик ───
+    "ANALYTICS_CYPHER_FALLBACK_ENABLED": "Разрешить фолбэк на text-to-Cypher при отсутствии подходящего примитива (v1c; по умолчанию выключено).",
+    "ANALYTICS_DEFAULT_TOP_N": "Максимальное число строк, возвращаемых аналитическим запросом по умолчанию (top-N).",
     "ANALYTICS_DEFAULT_VERSION_TAG": "Версия-тег по умолчанию, если на /ingest не пришёл заголовок X-Version-Tag; пишется в ingest_metrics / Temporal search attributes.",
     "ANALYTICS_ENV_NAME": "Имя окружения-деплоя для меток (Temporal search attributes и строки Postgres ingest_metrics).",
+    "ANALYTICS_MAX_STEPS": "Максимальное число примитивных вызовов в одном аналитическом плане.",
     # ── ApiSettings (API_*) — поверхность FastAPI ────────────────────
     "API_CORS_ORIGINS": "Разрешённые CORS-origin через запятую; '*' = любой.",
     "API_ENV": "Окружение приложения (development|production); в production preflight жёстко требует реальные секреты.",
@@ -240,6 +243,10 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "CLASSIFIER_MIN_SIZE_BYTES": "Минимальный размер документа (байт); мельче — отсев (пустышка/мусор).",
     "CLASSIFIER_PREVIEW_CHARS": "Сколько символов превью документа подаётся LLM-слою классификатора.",
     "CLASSIFIER_SKIP_EXTENSIONS": "JSON-список расширений, отсекаемых детерминированным правилом (exe, zip, png, mp4 и т.п.).",
+    # ── EventsSettings (EVENTS_*) — детекция событий first_seen ─────────
+    "EVENTS_BACKFILL_SENTINEL": "Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
+    "EVENTS_FIRST_SEEN_ENABLED": "Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
+    "EVENTS_NEW_WINDOW_DAYS": "Окно в днях для выборки новых событий (new_events) по умолчанию.",
     # ── HFSettings (явные имена без префикса) — offline HF-модели ─────
     "HF_CACHE_DIR": "Путь к локальному HF-кэшу для air-gapped деплоя; пусто = дефолт HF. Связано с download_models.py / configure_hf.",
     "HF_OFFLINE": "Включить offline-режим HuggingFace (читать только из локального кэша, без обращений к Hub).",
@@ -307,6 +314,9 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "POSTGRES_POOL_TIMEOUT_S": "Сколько секунд ждать свободный коннект из пула, прежде чем упасть с ошибкой.",
     "POSTGRES_PORT": "Порт Postgres (по умолчанию 5432).",
     "POSTGRES_USER": "Пользователь Postgres.",
+    # ── SignalsSettings (SIGNALS_*) — качество знаний / actionable-сигналы
+    "SIGNALS_EXPECTED_ATTRS": "Ожидаемые идентификаторы для оценки полноты данных по типу сущности (используется в completeness-сигнале).",
+    "SIGNALS_ORPHAN_MIN_DEGREE": "Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).",
     # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
     "TEMPORAL_ACTIVITY_CONCURRENCY": "Слотов активити на основной очереди kb-ingest.",
     "TEMPORAL_COMMUNITY_BACKEND": "Движок детекции сообществ: 'gds' (Leiden в Neo4j, легаси) или 'leidenalg' (leidenalg/igraph в воркере, память вне Neo4j). Дефолт 'gds' до прохождения бенчмарка паритета.",

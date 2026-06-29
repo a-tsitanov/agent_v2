@@ -715,9 +715,9 @@ class AnalyticsSettings(BaseSettings):
     default_version_tag: str = "unspecified"
     env_name: str = "dev-local"
     # --- analytical-query layer (Wave 0 v1a) ---
-    default_top_n: int = 20
-    max_steps: int = 3  # max primitive calls per plan
-    cypher_fallback_enabled: bool = False  # text-to-Cypher fallback (v1c; ships OFF)
+    default_top_n: int = Field(default=20, description="Максимальное число строк, возвращаемых аналитическим запросом по умолчанию (top-N).")
+    max_steps: int = Field(default=3, description="Максимальное число примитивных вызовов в одном аналитическом плане.")
+    cypher_fallback_enabled: bool = Field(default=False, description="Разрешить фолбэк на text-to-Cypher при отсутствии подходящего примитива (v1c; по умолчанию выключено).")
 
 
 class EventsSettings(BaseSettings):
@@ -728,9 +728,9 @@ class EventsSettings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
-    first_seen_enabled: bool = False  # enable ON-CREATE stamping (flip AFTER backfill)
-    new_window_days: int = 14  # default window for new_events
-    backfill_sentinel: int = 0  # epoch-day stamp for pre-existing elements
+    first_seen_enabled: bool = Field(default=False, description="Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).")
+    new_window_days: int = Field(default=14, description="Окно в днях для выборки новых событий (new_events) по умолчанию.")
+    backfill_sentinel: int = Field(default=0, description="Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).")
 
 
 class SignalsSettings(BaseSettings):
@@ -741,13 +741,14 @@ class SignalsSettings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
-    orphan_min_degree: int = 1
+    orphan_min_degree: int = Field(default=1, description="Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).")
     # per-type expected identifier attributes for completeness scoring
     expected_attrs: dict[str, list[str]] = Field(
         default_factory=lambda: {
             "Organization": ["INN", "OGRN", "PostalAddress", "PhoneNumber"],
             "Person": ["PhoneNumber", "Email"],
-        }
+        },
+        description="Ожидаемые идентификаторы для оценки полноты данных по типу сущности (используется в completeness-сигнале).",
     )
 
 
