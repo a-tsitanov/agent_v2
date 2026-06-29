@@ -210,9 +210,7 @@ class LiteLLMSettings(BaseSettings):
     # lets an empty ``LITELLM_EXTRA_BODY=`` mean "no params" instead of a
     # JSON parse error.
     extra_body: Annotated[dict[str, Any], NoDecode] = Field(default_factory=dict)
-    extra_body_roles: Annotated[dict[str, dict[str, Any]], NoDecode] = Field(
-        default_factory=dict
-    )
+    extra_body_roles: Annotated[dict[str, dict[str, Any]], NoDecode] = Field(default_factory=dict)
 
     @field_validator("extra_body", "extra_body_roles", mode="before")
     @classmethod
@@ -526,7 +524,9 @@ class WikiSettings(BaseSettings):
     MediaWiki pages from the Neo4j graph. Opt-in via WIKI_ENABLED."""
 
     model_config = SettingsConfigDict(
-        env_prefix="WIKI_", env_file=".env", extra="ignore",
+        env_prefix="WIKI_",
+        env_file=".env",
+        extra="ignore",
     )
 
     enabled: bool = False
@@ -671,7 +671,9 @@ class LLMPoolSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="LLM_POOL_", env_file=".env", extra="ignore",
+        env_prefix="LLM_POOL_",
+        env_file=".env",
+        extra="ignore",
     )
 
     n: int = Field(default=8, ge=1)
@@ -712,6 +714,41 @@ class AnalyticsSettings(BaseSettings):
 
     default_version_tag: str = "unspecified"
     env_name: str = "dev-local"
+    # --- analytical-query layer (Wave 0 v1a) ---
+    default_top_n: int = 20
+    max_steps: int = 3  # max primitive calls per plan
+    cypher_fallback_enabled: bool = False  # text-to-Cypher fallback (v1c; ships OFF)
+
+
+class EventsSettings(BaseSettings):
+    """first_seen / event-detection config (Wave 0 E1)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="EVENTS_",
+        env_file=".env",
+        extra="ignore",
+    )
+    first_seen_enabled: bool = False  # enable ON-CREATE stamping (flip AFTER backfill)
+    new_window_days: int = 14  # default window for new_events
+    backfill_sentinel: int = 0  # epoch-day stamp for pre-existing elements
+
+
+class SignalsSettings(BaseSettings):
+    """Knowledge-quality / actionable-signal config (Wave 0 P1)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="SIGNALS_",
+        env_file=".env",
+        extra="ignore",
+    )
+    orphan_min_degree: int = 1
+    # per-type expected identifier attributes for completeness scoring
+    expected_attrs: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "Organization": ["INN", "OGRN", "PostalAddress", "PhoneNumber"],
+            "Person": ["PhoneNumber", "Email"],
+        }
+    )
 
 
 class ClassifierSettings(BaseSettings):
@@ -725,7 +762,9 @@ class ClassifierSettings(BaseSettings):
     error defaults to INGEST (false-skip is the costly error)."""
 
     model_config = SettingsConfigDict(
-        env_prefix="CLASSIFIER_", env_file=".env", extra="ignore",
+        env_prefix="CLASSIFIER_",
+        env_file=".env",
+        extra="ignore",
     )
 
     enabled: bool = False
@@ -733,9 +772,24 @@ class ClassifierSettings(BaseSettings):
     min_size_bytes: int = 1
     skip_extensions: list[str] = Field(
         default_factory=lambda: [
-            "exe", "dll", "bin", "zip", "tar", "gz", "7z",
-            "png", "jpg", "jpeg", "gif", "bmp", "svg",
-            "mp3", "mp4", "mov", "avi", "wav",
+            "exe",
+            "dll",
+            "bin",
+            "zip",
+            "tar",
+            "gz",
+            "7z",
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "bmp",
+            "svg",
+            "mp3",
+            "mp4",
+            "mov",
+            "avi",
+            "wav",
         ]
     )
     preview_chars: int = 4000
@@ -750,7 +804,9 @@ class IngestAdmissionSettings(BaseSettings):
     bursts."""
 
     model_config = SettingsConfigDict(
-        env_prefix="INGEST_ADMISSION_", env_file=".env", extra="ignore",
+        env_prefix="INGEST_ADMISSION_",
+        env_file=".env",
+        extra="ignore",
     )
 
     max_inflight: int = Field(default=1, ge=1)
@@ -763,7 +819,8 @@ class IngestAdmissionSettings(BaseSettings):
     # Default ``temporal`` → no behaviour change until explicitly flipped.
     # Env var is the bare ``INGEST_QUEUE_BACKEND`` (no admission prefix).
     backend: Literal["temporal", "rabbitmq"] = Field(
-        default="temporal", validation_alias="INGEST_QUEUE_BACKEND",
+        default="temporal",
+        validation_alias="INGEST_QUEUE_BACKEND",
     )
 
 
@@ -778,7 +835,9 @@ class RabbitMQSettings(BaseSettings):
     dead-letter (``dlx`` → ``dlq``) on failure."""
 
     model_config = SettingsConfigDict(
-        env_prefix="RABBITMQ_", env_file=".env", extra="ignore",
+        env_prefix="RABBITMQ_",
+        env_file=".env",
+        extra="ignore",
     )
 
     url: str = "amqp://guest:guest@localhost:5672/"
@@ -824,10 +883,18 @@ class RabbitMQSettings(BaseSettings):
 # ── composed top-level settings ──────────────────────────────────────
 
 # Known placeholder / default secrets that must NOT appear in production.
-_PREFLIGHT_PLACEHOLDER_SECRETS: frozenset[str] = frozenset({
-    "dev-local-key", "changeme", "change-me", "postgres", "minioadmin",
-    "changemebot", "botpass", "sk-litellm-stub",
-})
+_PREFLIGHT_PLACEHOLDER_SECRETS: frozenset[str] = frozenset(
+    {
+        "dev-local-key",
+        "changeme",
+        "change-me",
+        "postgres",
+        "minioadmin",
+        "changemebot",
+        "botpass",
+        "sk-litellm-stub",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -912,8 +979,16 @@ class Settings(BaseSettings):
     def analytics(self) -> AnalyticsSettings:
         return AnalyticsSettings()
 
+    @cached_property
+    def events(self) -> EventsSettings:
+        return EventsSettings()
+
+    @cached_property
+    def signals(self) -> SignalsSettings:
+        return SignalsSettings()
+
     @staticmethod
-    def preflight(s: "Settings") -> list[str]:
+    def preflight(s: Settings) -> list[str]:
         """Return a list of actionable config problems (empty == OK).
 
         Hard problems matter in production (``API_ENV=production``); in dev
@@ -926,8 +1001,8 @@ class Settings(BaseSettings):
             api_keys = [k.strip() for k in s.api.keys.split(",") if k.strip()]
             if any(k in _PREFLIGHT_PLACEHOLDER_SECRETS for k in api_keys) or not api_keys:
                 problems.append(
-                    "API_KEYS contains a placeholder/default key; set real "
-                    "key(s) in production.")
+                    "API_KEYS contains a placeholder/default key; set real key(s) in production."
+                )
             checks = {
                 "NEO4J_PASSWORD": s.neo4j.password.get_secret_value(),
                 "POSTGRES_PASSWORD": s.postgres.password.get_secret_value(),
@@ -938,25 +1013,29 @@ class Settings(BaseSettings):
                 if val in _PREFLIGHT_PLACEHOLDER_SECRETS:
                     problems.append(
                         f"{name} is a placeholder default ({val!r}); set a real "
-                        f"secret in production.")
+                        f"secret in production."
+                    )
 
         n = s.llm_pool.n
         if s.temporal.llm_activity_concurrency < n:
             problems.append(
                 f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY "
                 f"({s.temporal.llm_activity_concurrency}) < LLM_POOL_N ({n}); "
-                f"the Temporal cap must be >= N so the pool is the throttle.")
+                f"the Temporal cap must be >= N so the pool is the throttle."
+            )
         if s.temporal.merge_activity_concurrency < n:
             problems.append(
                 f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY "
-                f"({s.temporal.merge_activity_concurrency}) < LLM_POOL_N ({n}).")
+                f"({s.temporal.merge_activity_concurrency}) < LLM_POOL_N ({n})."
+            )
 
         if s.wiki.enabled or s.wikibase.enabled:
             bot_pw = s.wikibase.bot_password.get_secret_value()
             if len(bot_pw) < 8:
                 problems.append(
                     "WIKIBASE_BOT_PASSWORD must be >= 8 chars when wiki/wikibase "
-                    "is enabled (setup_wikibase refuses to provision the bot).")
+                    "is enabled (setup_wikibase refuses to provision the bot)."
+                )
         return problems
 
 
@@ -967,18 +1046,20 @@ __all__ = [
     "AgentSettings",
     "AnalyticsSettings",
     "ApiSettings",
+    "EventsSettings",
     "HFSettings",
     "IngestionSettings",
-    "LiteLLMSettings",
     "LLMPoolSettings",
+    "LiteLLMSettings",
     "MetricsSettings",
     "MilvusSettings",
     "MinioSettings",
     "Neo4jSettings",
     "PostgresSettings",
     "Settings",
+    "SignalsSettings",
     "TemporalSettings",
-    "WikibaseSettings",
     "WikiSettings",
+    "WikibaseSettings",
     "settings",
 ]
