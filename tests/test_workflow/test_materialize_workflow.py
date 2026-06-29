@@ -100,11 +100,6 @@ async def test_materialize_workflow_skips_link_and_risk():
     assert out.errors == []
 
 
-@activity.defn(name="materialize_centrality_err")
-async def _c_err(p) -> StageResult:
-    return StageResult(written=0, error="gds timeout")
-
-
 @pytest.mark.asyncio
 async def test_materialize_workflow_collects_errors():
     """Errors from StageResult.error are collected into MaterializeResult.errors."""

@@ -39,10 +39,10 @@ async def test_materialize_centrality_failsoft(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_materialize_centrality_none_projection(monkeypatch):
-    """If _with_projection returns None (projection failed), written should be 0."""
+    """If _with_projection returns None (projection failed), error must be non-empty."""
     monkeypatch.setattr(ma, "_get_store", lambda: None)
     res = await ma.materialize_centrality(CentralityIn(metrics=["pagerank"]))
-    assert res.written == 0 and res.error == ""
+    assert res.written == 0 and res.error != ""
 
 
 @pytest.mark.asyncio
@@ -61,6 +61,14 @@ async def test_materialize_link_prediction_failsoft(monkeypatch):
     monkeypatch.setattr(ma, "_get_store", _boom)
     res = await ma.materialize_link_prediction(LinkPredictionIn())
     assert res.written == 0 and "link pred down" in res.error
+
+
+@pytest.mark.asyncio
+async def test_materialize_link_prediction_none_projection(monkeypatch):
+    """If _with_projection returns None (projection failed), error must be non-empty."""
+    monkeypatch.setattr(ma, "_get_store", lambda: None)
+    res = await ma.materialize_link_prediction(LinkPredictionIn())
+    assert res.written == 0 and res.error != ""
 
 
 # ---------------------------------------------------------------------------

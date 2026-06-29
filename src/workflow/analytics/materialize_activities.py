@@ -20,6 +20,7 @@ from src.config import settings
 from src.graph.analysis import _with_projection
 from src.graph.store import build_neo4j_graph_store
 from src.retrieval.date_filters import today_epoch_days
+from src.workflow.heartbeat import heartbeat_every
 
 
 def _get_store() -> Any:
@@ -35,13 +36,14 @@ async def materialize_centrality(p: CentralityIn) -> StageResult:
         async def _do(graph_name: str) -> int:
             total = 0
             for metric in p.metrics:
-                if activity.in_activity():
-                    activity.heartbeat({"metric": metric})
                 total += await mz.write_centrality(store, graph_name, metric)
             return total
 
-        written = await _with_projection(store, _do)
-        return StageResult(written=written or 0)
+        async with heartbeat_every(30.0, {"stage": "centrality"}):
+            written = await _with_projection(store, _do)
+        if written is None:
+            return StageResult(error="projection/GDS failed — see worker logs")
+        return StageResult(written=written)
     except Exception as exc:
         logger.warning("materialize_centrality failed: {e}", e=exc)
         return StageResult(error=str(exc))
@@ -62,8 +64,11 @@ async def materialize_link_prediction(p: LinkPredictionIn) -> StageResult:
                 min_score=s.link_prediction_min_score,
             )
 
-        written = await _with_projection(store, _do)
-        return StageResult(written=written or 0)
+        async with heartbeat_every(30.0, {"stage": "link_prediction"}):
+            written = await _with_projection(store, _do)
+        if written is None:
+            return StageResult(error="projection/GDS failed — see worker logs")
+        return StageResult(written=written)
     except Exception as exc:
         logger.warning("materialize_link_prediction failed: {e}", e=exc)
         return StageResult(error=str(exc))
@@ -116,13 +121,14 @@ async def materialize_risk(p: RiskIn) -> StageResult:
     try:
         store = _get_store()
         since = today_epoch_days() - settings.events.new_window_days
-        raws = await mz._run(store, _RISK_GATHER, {"id_types": ID_TYPES, "since": since})
-        if not raws:
-            return StageResult(written=0)
-        max_bet = max((float(x.get("betweenness", 0.0)) for x in raws), default=0.0)
-        s = settings.signals
-        rows = [_risk_row(x, s.risk_weights, s.risk_bands, max_bet) for x in raws]
-        await mz._run(store, _RISK_WRITE, {"rows": rows})
+        async with heartbeat_every(30.0, {"stage": "risk"}):
+            raws = await mz._run(store, _RISK_GATHER, {"id_types": ID_TYPES, "since": since})
+            if not raws:
+                return StageResult(written=0)
+            max_bet = max((float(x.get("betweenness", 0.0)) for x in raws), default=0.0)
+            s = settings.signals
+            rows = [_risk_row(x, s.risk_weights, s.risk_bands, max_bet) for x in raws]
+            await mz._run(store, _RISK_WRITE, {"rows": rows})
         return StageResult(written=len(rows))
     except Exception as exc:
         logger.warning("materialize_risk failed: {e}", e=exc)

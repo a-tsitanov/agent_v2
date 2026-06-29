@@ -85,8 +85,9 @@ register(
         "investigate_next",
         investigate_next,
         InvestigateNextParams,
-        "Ranked lead list: high risk_score × low completeness — who deserves attention and is "
-        "under-documented. Reads materialized scores.",
+        "Ranked lead list: entities ranked by risk_score (and completeness_score once materialized"
+        " — currently risk-dominant) — who deserves attention and is under-documented."
+        " Reads materialized scores.",
         tier="offline-mat",
     )
 )
