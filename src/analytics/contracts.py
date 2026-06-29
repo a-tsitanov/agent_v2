@@ -84,3 +84,38 @@ class SynthInput(_Frozen):
 
 class SynthResult(_Frozen):
     text: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 — Materialize workflow contracts
+# ---------------------------------------------------------------------------
+
+
+class MaterializeParams(_Frozen):
+    metrics: list[str] = Field(default_factory=lambda: ["pagerank", "betweenness", "eigenvector"])
+    link_prediction: bool = True
+    risk: bool = True
+
+
+class CentralityIn(_Frozen):
+    metrics: list[str] = Field(default_factory=lambda: ["pagerank", "betweenness", "eigenvector"])
+
+
+class LinkPredictionIn(_Frozen):
+    pass
+
+
+class RiskIn(_Frozen):
+    pass
+
+
+class StageResult(_Frozen):
+    written: int = 0
+    error: str = ""
+
+
+class MaterializeResult(_Frozen):
+    centrality_written: int = 0
+    links_written: int = 0
+    risk_written: int = 0
+    errors: list[str] = Field(default_factory=list)
