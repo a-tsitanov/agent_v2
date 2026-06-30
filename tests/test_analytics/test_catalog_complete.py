@@ -1,9 +1,10 @@
-"""Wave 0 + Wave 1 catalog completeness test.
+"""Wave 0 + Wave 1 + Wave 2 catalog completeness test.
 
 Importing src.analytics.primitives triggers all family-module registrations via
-side-effect imports in that package's __init__.py.  Once all nine family modules
-are imported we expect CATALOG to contain the full set of 36 primitives
-(28 Wave-0 + 8 Wave-1) and render_catalog_for_planner() to mention each one.
+side-effect imports in that package's __init__.py.  Once all family modules
+are imported we expect CATALOG to contain the full set of 41 primitives
+(28 Wave-0 + 8 Wave-1 + 5 Wave-2) and render_catalog_for_planner() to mention
+each one.
 """
 
 import src.analytics.primitives  # noqa: F401 — triggers all registrations
@@ -55,11 +56,19 @@ _EXPECTED = {
     "circular_ownership",
     # Wave 1 — Arc 1 (rollups)
     "numeric_rollup",
+    # Wave 2 — E2 event reads (events_llm)
+    "event_dossier",
+    "event_timeline",
+    # Wave 2 — Arc 2 alerts
+    "alerts",
+    # Wave 2 — P3 domain rollups
+    "issue_resolution_stats",
+    "communication_stats",
 }
 
 
 def test_wave0_catalog_is_complete() -> None:
-    """All 36 primitives (Wave-0 + Wave-1) must be registered in CATALOG."""
+    """All 41 primitives (Wave-0 + Wave-1 + Wave-2) must be registered in CATALOG."""
     missing = _EXPECTED - set(CATALOG)
     assert not missing, f"Missing from CATALOG: {sorted(missing)}"
 
