@@ -119,3 +119,19 @@ class MaterializeResult(_Frozen):
     links_written: int = 0
     risk_written: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Wave 2 — Monitor
+# ---------------------------------------------------------------------------
+
+
+class MonitorIn(_Frozen):
+    window_days: int = 7
+    risk_rise_delta: float = 0.1
+
+
+class MonitorResult(_Frozen):
+    new_connection_alerts: int = 0
+    risk_rise_alerts: int = 0
+    error: str = ""
