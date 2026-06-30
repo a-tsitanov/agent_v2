@@ -60,6 +60,8 @@ from src.workflow.analytics.workflow import AnalyticalQueryWorkflow
 from src.workflow.document_ingest import DocumentIngestWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
 from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
+from src.workflow.monitor.activities import MONITOR_ACTIVITIES
+from src.workflow.monitor.workflow import MonitorSweepWorkflow
 from src.workflow.search.activities import (
     GRAPH_BUILD_ACTIVITIES,
     SEARCH_V2_ACTIVITIES,
@@ -85,6 +87,7 @@ WORKER_GROUPS: list[str] = [
     "large",
     "graph_build",
     "wiki",
+    "monitor",
     "scheduler",
 ]
 
@@ -232,6 +235,14 @@ def _build_worker(client: Client, group: str) -> Worker:
             workflows=[WikiSweepWorkflow],
             activities=[select_dirty_entities, write_entity_article],
             max_concurrent_activities=settings.wiki.activity_concurrency,
+        )
+    if group == "monitor":
+        return Worker(
+            client,
+            task_queue=settings.monitor.task_queue,
+            workflows=[MonitorSweepWorkflow],
+            activities=MONITOR_ACTIVITIES,
+            max_concurrent_activities=settings.monitor.activity_concurrency,
         )
     raise ValueError(f"unknown group: {group!r}")
 
