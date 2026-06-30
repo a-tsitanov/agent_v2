@@ -1,6 +1,6 @@
 """Tests for src/graph/alerts.py — Alert store + watchlist Cypher helpers."""
 
-from src.graph.alerts import alert_key, mark_watched, upsert_alert
+from src.graph.alerts import alert_key, mark_watched, read_alerts_cypher, upsert_alert
 
 
 class _Rec:
@@ -49,3 +49,30 @@ def test_mark_watched_empty_is_noop():
     s = _Rec()
     mark_watched(s, [])
     assert s.calls == []
+
+
+# ── Fail-soft (never-raise) contract ─────────────────────────────────────────
+
+
+class _Boom:
+    def structured_query(self, *a, **kw):
+        raise RuntimeError("neo4j down")
+
+
+def test_upsert_alert_is_fail_soft():
+    # must not raise — fail-soft per the off-loop contract
+    assert upsert_alert(_Boom(), kind="x", entity="y", detail="z", created_at=0) is None
+
+
+def test_mark_watched_is_fail_soft():
+    # must not raise — fail-soft per the off-loop contract
+    assert mark_watched(_Boom(), ["A", "B"]) is None
+
+
+# ── read_alerts_cypher shape ──────────────────────────────────────────────────
+
+
+def test_read_alerts_cypher_shape():
+    assert "ORDER BY a.created_at DESC" in read_alerts_cypher
+    for col in ("a.key", "a.kind", "a.entity", "a.detail", "a.created_at"):
+        assert col in read_alerts_cypher, f"missing column reference: {col}"
