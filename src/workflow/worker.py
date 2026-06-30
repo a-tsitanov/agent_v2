@@ -87,8 +87,8 @@ WORKER_GROUPS: list[str] = [
     "large",
     "graph_build",
     "wiki",
-    "monitor",
     "scheduler",
+    "monitor",
 ]
 
 # Module-level workflow/activity lists — referenced in _build_worker and

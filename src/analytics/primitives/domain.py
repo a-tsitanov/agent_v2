@@ -50,6 +50,10 @@ async def issue_resolution_stats(store: Any | None) -> PrimitiveResult:
 
 # ── communication_stats ───────────────────────────────────────────────────────
 
+# NOTE: spans both RESPONDED_TO (Person→Person) and CONTACT (Person→Phone/Email)
+# per the Wave-2 plan, so "pairs" include person↔contact-method rows, not only
+# person↔person. The `rel` column lets callers separate the two. To restrict to
+# person-to-person communication, drop CONTACT and/or label-constrain b.
 _COMMS = (
     "MATCH (a:__Entity__)-[r:CONTACT|RESPONDED_TO]-(b:__Entity__) "
     "WHERE a.name < b.name "

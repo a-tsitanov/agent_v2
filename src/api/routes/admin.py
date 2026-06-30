@@ -52,5 +52,9 @@ async def monitor_sweep() -> dict:
 
 @monitor_router.post("/watch")
 async def monitor_watch(names: list[str], watched: bool = True) -> dict:
+    # Intentionally NOT gated on settings.monitor.enabled (unlike /sweep): the
+    # watchlist is the input the sweep consumes, so operators pre-seed it while
+    # monitoring is still dark, then flip MONITOR_ENABLED on. `names` binds to
+    # the JSON body (a string array); `watched` is a query param.
     mark_watched(build_neo4j_graph_store(), names, watched)
     return {"status": "ok", "count": len(names), "watched": watched}
