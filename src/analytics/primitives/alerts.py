@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.ids import clamp_top_n
 from src.analytics.store_query import run_rows
+from src.graph.alerts import read_alerts_cypher
 from src.retrieval.date_filters import today_epoch_days
 
 
@@ -16,15 +17,9 @@ class _Params(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-_ALERTS = (
-    "MATCH (a:Alert) "
-    "WHERE ($kind IS NULL OR a.kind = $kind) "
-    "AND ($entity IS NULL OR a.entity = $entity) "
-    "AND ($since IS NULL OR a.created_at >= $since) "
-    "RETURN a.key AS key, a.kind AS kind, a.entity AS entity, "
-    "a.detail AS detail, a.created_at AS created_at "
-    "ORDER BY a.created_at DESC LIMIT $top_n"
-)
+# Reuse the canonical :Alert read query from the alert store (single source of
+# truth — see src/graph/alerts.read_alerts_cypher).
+_ALERTS = read_alerts_cypher
 
 
 class AlertsParams(_Params):

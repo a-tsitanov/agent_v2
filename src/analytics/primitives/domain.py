@@ -19,7 +19,8 @@ class _Params(BaseModel):
 
 _ISSUE_STATS = (
     "MATCH (i:__Entity__:Issue) "
-    "OPTIONAL MATCH (i)-[:RESOLVED_BY]-(r:__Entity__:Resolution) "
+    "OPTIONAL MATCH (i)-[rr:RESOLVED_BY]-(r:__Entity__:Resolution) "
+    "WHERE rr.polarity IS NULL OR rr.polarity <> 'negated' "
     "WITH i, count(r) AS res "
     "RETURN count(i) AS total, sum(CASE WHEN res = 0 THEN 1 ELSE 0 END) AS unresolved"
 )

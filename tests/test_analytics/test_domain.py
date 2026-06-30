@@ -10,6 +10,8 @@ async def test_issue_resolution_stats_computes_rate():
     res = await dm.issue_resolution_stats(store)
     assert "RESOLVED_BY" in res.cypher
     assert ":Issue" in res.cypher and ":Resolution" in res.cypher
+    # negated RESOLVED_BY edges must not count as resolutions
+    assert "rr.polarity IS NULL OR rr.polarity <> 'negated'" in res.cypher
     row = res.rows[0]
     assert row["total_issues"] == 10
     assert row["unresolved"] == 4

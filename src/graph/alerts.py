@@ -27,13 +27,17 @@ MATCH (e:__Entity__ {name: n})
 SET e.watched = $watched
 """
 
-# Read primitive constant reused by Task 11 — newest-first, fully parameterized
-# so the primitive can add WHERE clauses before calling structured_query.
+# Canonical :Alert read query — the single source of truth reused by the
+# `alerts` catalog primitive (Task 11). Optional filters are NULL-guarded so
+# the caller passes them as params ($kind/$entity/$since/$top_n), newest-first.
 read_alerts_cypher = (
     "MATCH (a:Alert) "
+    "WHERE ($kind IS NULL OR a.kind = $kind) "
+    "AND ($entity IS NULL OR a.entity = $entity) "
+    "AND ($since IS NULL OR a.created_at >= $since) "
     "RETURN a.key AS key, a.kind AS kind, a.entity AS entity, "
     "a.detail AS detail, a.created_at AS created_at "
-    "ORDER BY a.created_at DESC"
+    "ORDER BY a.created_at DESC LIMIT $top_n"
 )
 
 
