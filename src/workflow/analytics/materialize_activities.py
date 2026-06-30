@@ -91,6 +91,7 @@ _RISK_GATHER = (
 )
 _RISK_WRITE = (
     "UNWIND $rows AS r MATCH (e:__Entity__ {name:r.name}) "
+    "SET e.risk_score_prev = e.risk_score "
     "SET e.risk_score=r.score, e.risk_band=r.band, e.risk_components=r.components"
 )
 

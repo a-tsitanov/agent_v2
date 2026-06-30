@@ -126,3 +126,30 @@ async def test_materialize_risk_failsoft(monkeypatch):
     monkeypatch.setattr(ma, "_get_store", _boom)
     res = await ma.materialize_risk(RiskIn())
     assert res.written == 0 and "risk db down" in res.error
+
+
+# ---------------------------------------------------------------------------
+# Task 8: risk_score_prev snapshot for rise detection
+# ---------------------------------------------------------------------------
+
+
+def test_risk_write_snapshots_prev_before_overwrite():
+    """_RISK_WRITE must capture the old risk_score into risk_score_prev BEFORE overwriting it.
+
+    Cypher executes separate SET clauses in order, so the prev-snapshot SET must appear
+    at a lower string index than the new-score SET.  This is a string-level assertion on
+    the constant — no live Neo4j required.
+    """
+    cypher = ma._RISK_WRITE
+    assert "risk_score_prev" in cypher, "_RISK_WRITE must reference risk_score_prev"
+    assert "risk_score=r.score" in cypher.replace(" ", ""), (
+        "_RISK_WRITE must set risk_score=r.score"
+    )
+    idx_prev = cypher.index("risk_score_prev")
+    # Use the raw cypher positions; tolerate optional spaces around '='
+    idx_new_raw = cypher.find("risk_score=r.score")
+    if idx_new_raw == -1:
+        idx_new_raw = cypher.find("risk_score = r.score")
+    assert idx_prev < idx_new_raw, (
+        "SET e.risk_score_prev must appear BEFORE SET e.risk_score=r.score in _RISK_WRITE"
+    )
