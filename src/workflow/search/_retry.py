@@ -30,6 +30,21 @@ FAST_RETRY = RetryPolicy(
 LLM_START_TO_CLOSE = timedelta(hours=1)
 LLM_SCHEDULE_TO_CLOSE = timedelta(hours=3)
 
+# Timeouts for detect_communities_activity.  The leidenalg backend clusters
+# in a C extension (leidenalg/igraph ``find_partition``) that HOLDS the GIL
+# for the entire compute, so the ``heartbeat_every`` background pulse cannot
+# fire while clustering runs — a 150k-node / 1.2M-edge graph clusters in
+# ~35s holding the GIL, and a production-scale graph runs for minutes.  A
+# tight 2-minute heartbeat window therefore false-positives a healthy-but-
+# busy detect as dead and kills it with ``timeout_type_heartbeat``.  Since
+# heartbeating THROUGH a single GIL-held C call from a worker thread is
+# impossible, the heartbeat window must simply exceed the compute; the
+# start-to-close ceiling stays the real upper bound on a genuinely stuck
+# (or OOM-dead) run.
+DETECT_HEARTBEAT_TIMEOUT = timedelta(minutes=30)
+DETECT_START_TO_CLOSE = timedelta(minutes=60)
+DETECT_SCHEDULE_TO_CLOSE = timedelta(minutes=90)
+
 # Detect-communities is heavy and resource-bound: a true OOM/resource error
 # will recur on retry and only pile load onto Neo4j/the worker, so it is
 # non-retryable.  Transient transport errors still get a couple of tries.

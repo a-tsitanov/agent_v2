@@ -130,6 +130,13 @@ class Neo4jSettings(BaseSettings):
     write_retry_max_attempts: int = Field(default=5, ge=1)
     write_retry_base_delay_s: float = 0.05
 
+    # Debug toggle: log EVERY Cypher this process sends to Neo4j — one INFO
+    # line per query (collapsed/truncated Cypher, param KEYS only, row
+    # count, elapsed ms).  Off by default; flip on (NEO4J_QUERY_LOG=true) to
+    # confirm/inspect the graph queries the search path issues without
+    # touching Neo4j's own query.log.  Wrapper in src/graph/store.py.
+    query_log: bool = False
+
 
 class PostgresSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POSTGRES_", env_file=".env", extra="ignore")
