@@ -151,7 +151,7 @@ _UNPUSHED = (
     "MATCH (a:Alert) WHERE a.pushed_at IS NULL "
     "RETURN a.key AS key, a.kind AS kind, a.entity AS entity, "
     "a.detail AS detail, a.created_at AS created_at "
-    "ORDER BY a.created_at DESC LIMIT $cap"
+    "ORDER BY a.created_at ASC LIMIT $cap"  # FIFO — deliver oldest unpushed first
 )
 _MARK_PUSHED = "MATCH (a:Alert {key:$key}) SET a.pushed_at = $now"
 

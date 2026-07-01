@@ -63,5 +63,5 @@ class MonitorSweepWorkflow:
             burst_alerts=result.burst_alerts,
             delivered=deliver.delivered,
             failed=deliver.failed,
-            error=result.error or deliver.error,
+            error="; ".join(e for e in (result.error, deliver.error) if e),
         )

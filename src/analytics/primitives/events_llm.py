@@ -65,7 +65,12 @@ async def event_timeline(
     window_days: int | None = None,
     top_n: int = 50,
 ) -> PrimitiveResult:
-    """Events a named entity participated in, ordered by event_ts."""
+    """Events a named entity participated in, ordered by event_ts.
+
+    When ``window_days`` is set, the window filters on ``created_at`` (ingest
+    epoch-days, the E1 axis), so events without a ``created_at`` stamp are
+    excluded; results are still ordered by ``event_ts``.
+    """
     top_n = clamp_top_n(top_n, default=50)
     params: dict[str, Any] = {"entity": entity, "top_n": top_n}
     where = ""
