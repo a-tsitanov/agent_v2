@@ -539,21 +539,43 @@ class DetectCommunitiesParams(_Frozen):
     concurrency: int = 4
 
 
+class DetectedCommunity(_Frozen):
+    """Slim cross-activity handle the build workflow fans out over to
+    summarise.  Deliberately carries NO member name list — membership is
+    already persisted in Neo4j (``(:__Entity__)-[:IN_COMMUNITY]->
+    (:Community)``) and is read back per-community inside
+    ``summarize_community_activity``.  Keeping the detect result O(number of
+    communities) instead of O(number of entities) is what prevents the
+    Temporal "Complete result exceeds size limit" failure on large graphs
+    (the full-membership ``CommunityRef`` is for in-worker WRITE use only)."""
+
+    community_id: str
+    level: int = 0
+    member_count: int = 0
+    parent_id: str = ""
+    needs_report: bool = True
+
+
 class DetectCommunitiesResult(_Frozen):
     """Output of ``detect_communities_activity`` — the communities to
     summarise.  Empty on any GDS / store error (fail-safe)."""
 
-    communities: list[CommunityRef] = Field(default_factory=list)
+    communities: list[DetectedCommunity] = Field(default_factory=list)
 
 
 class SummarizeCommunityParams(_Frozen):
     """Input to ``summarize_community_activity`` — summarise ONE
     community's members (+ their inter-member relations) via the small
-    tier and persist on ``:Community.summary``."""
+    tier and persist on ``:Community.summary``.
+
+    Carries ``member_count`` (a cheap gate to skip empty communities) — NOT
+    the member names: the activity reads members from Neo4j by
+    ``community_id`` so per-spec payloads stay tiny regardless of community
+    size."""
 
     community_id: str
     level: int = 0
-    members: list[str] = Field(default_factory=list)
+    member_count: int = 0
 
 
 class SummarizeCommunityResult(_Frozen):

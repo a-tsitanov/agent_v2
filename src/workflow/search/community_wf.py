@@ -26,7 +26,6 @@ unit-testable without a live Temporal env (see
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 
 from temporalio import workflow
 
@@ -40,7 +39,10 @@ with workflow.unsafe.imports_passed_through():
         SummarizeCommunityResult,
     )
     from src.workflow.search._retry import (
+        DETECT_HEARTBEAT_TIMEOUT,
         DETECT_RETRY,
+        DETECT_SCHEDULE_TO_CLOSE,
+        DETECT_START_TO_CLOSE,
         FAST_RETRY,
         LLM_SCHEDULE_TO_CLOSE,
         LLM_START_TO_CLOSE,
@@ -53,7 +55,8 @@ def build_summarize_specs(
     """Pure spec: detected communities → batchable summarize params.
 
     One ``SummarizeCommunityParams`` per community that NEEDS a report,
-    preserving id/level/members.  Communities carried over unchanged from a
+    preserving id/level/member_count (members are read from Neo4j in the
+    activity, not carried).  Communities carried over unchanged from a
     prior build (``needs_report=False``, set by ``detect_hierarchy``) are
     skipped — their report is already persisted.  Extracted so the fan-out
     shape is unit-testable outside Temporal.  Re-running over the same
@@ -64,7 +67,7 @@ def build_summarize_specs(
         SummarizeCommunityParams(
             community_id=c.community_id,
             level=c.level,
-            members=list(c.members),
+            member_count=c.member_count,
         )
         for c in detect.communities
         if getattr(c, "needs_report", True)
@@ -114,9 +117,9 @@ class CommunityBuildWorkflow:
             "detect_communities_activity",
             params,
             result_type=DetectCommunitiesResult,
-            start_to_close_timeout=timedelta(minutes=60),
-            heartbeat_timeout=timedelta(minutes=2),
-            schedule_to_close_timeout=timedelta(minutes=90),
+            start_to_close_timeout=DETECT_START_TO_CLOSE,
+            heartbeat_timeout=DETECT_HEARTBEAT_TIMEOUT,
+            schedule_to_close_timeout=DETECT_SCHEDULE_TO_CLOSE,
             retry_policy=DETECT_RETRY,
         )
         specs = build_summarize_specs(detect)

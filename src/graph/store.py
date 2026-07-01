@@ -21,14 +21,55 @@ from __future__ import annotations
 
 import contextlib
 import threading
+import time
 
 from llama_index.core.graph_stores.types import PropertyGraphStore
 from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
+from loguru import logger
 
 from src.config import settings
 
 _store: PropertyGraphStore | None = None
 _lock = threading.Lock()
+
+
+def _install_query_logging(store: PropertyGraphStore) -> PropertyGraphStore:
+    """Wrap ``store.structured_query`` to log EVERY Cypher (flag-gated).
+
+    Emits one INFO line per query — collapsed+truncated Cypher, the param
+    KEYS only (never values, so no data leaks), row count and elapsed ms —
+    so you can confirm/inspect the graph queries the search path issues
+    (``MATCH (c:Community ...)`` etc.) straight from the app logs, without
+    enabling Neo4j's own query.log.  Idempotent: a second call is a no-op.
+    """
+    if getattr(store, "_kb_query_logging", False):
+        return store
+    orig = store.structured_query
+
+    def _logged(cypher, param_map=None, **kwargs):
+        t0 = time.perf_counter()
+        one_line = " ".join(str(cypher).split())[:160]
+        keys = sorted((param_map or {}).keys())
+        try:
+            rows = orig(cypher, param_map=param_map, **kwargs)
+        except Exception:
+            dt = (time.perf_counter() - t0) * 1000
+            logger.info(
+                "neo4j query [{ms:.0f}ms FAILED] params={k} :: {q}",
+                ms=dt, k=keys, q=one_line,
+            )
+            raise
+        dt = (time.perf_counter() - t0) * 1000
+        n = len(rows) if isinstance(rows, list) else "?"
+        logger.info(
+            "neo4j query [{ms:.0f}ms rows={n}] params={k} :: {q}",
+            ms=dt, n=n, k=keys, q=one_line,
+        )
+        return rows
+
+    store.structured_query = _logged  # type: ignore[method-assign]
+    store._kb_query_logging = True  # type: ignore[attr-defined]
+    return store
 
 
 def _neo4j_driver_kwargs() -> dict:
@@ -67,7 +108,10 @@ def build_neo4j_graph_store() -> PropertyGraphStore:
         return _store
     with _lock:
         if _store is None:
-            _store = _construct_neo4j_graph_store()
+            store = _construct_neo4j_graph_store()
+            if settings.neo4j.query_log:
+                store = _install_query_logging(store)
+            _store = store
     return _store
 
 

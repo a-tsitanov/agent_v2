@@ -34,17 +34,21 @@ from temporalio import activity
 from src.workflow.contracts import (
     DetectCommunitiesParams,
     DetectCommunitiesResult,
+    DetectedCommunity,
     SummarizeCommunityParams,
     SummarizeCommunityResult,
 )
 
 # Read the members' names + descriptions for the summary prompt (and any
-# inter-member relations to give the LLM relational context).
+# inter-member relations to give the LLM relational context).  Members are
+# resolved from Neo4j by ``community_id`` via the ``IN_COMMUNITY`` links
+# that ``detect`` already persisted (level 0) — so the summarize params
+# carry only a count, never the full name list (Temporal payload stays
+# tiny).  ``o`` is constrained to the SAME community so relation context
+# matches the legacy ``o.name IN $members`` semantics.
 _MEMBER_CONTEXT_CYPHER = """
-MATCH (e:__Entity__)
-WHERE e.name IN $members
-OPTIONAL MATCH (e)-[r]-(o:__Entity__)
-WHERE o.name IN $members
+MATCH (c:Community {id: $community_id, level: $level})<-[:IN_COMMUNITY]-(e:__Entity__)
+OPTIONAL MATCH (e)-[r]-(o:__Entity__)-[:IN_COMMUNITY]->(c)
 RETURN e.name AS name,
        coalesce(e.description, '') AS description,
        collect(DISTINCT type(r))[..10] AS rel_types
@@ -299,7 +303,19 @@ async def detect_communities_activity(
         "detect_communities_activity  detected=%d  min_size=%d  max_levels=%d",
         len(communities), params.min_size, params.max_levels,
     )
-    return DetectCommunitiesResult(communities=communities)
+    # Return SLIM refs (counts only): membership is already persisted in
+    # Neo4j by detect_* above, so the result stays O(num communities) and
+    # never trips Temporal's payload size limit on large graphs.
+    return DetectCommunitiesResult(communities=[
+        DetectedCommunity(
+            community_id=c.community_id,
+            level=c.level,
+            member_count=c.member_count,
+            parent_id=c.parent_id,
+            needs_report=c.needs_report,
+        )
+        for c in communities
+    ])
 
 
 async def _gather_context(store, params: SummarizeCommunityParams) -> str:
@@ -331,7 +347,7 @@ async def _gather_context(store, params: SummarizeCommunityParams) -> str:
         rows = await asyncio.to_thread(
             store.structured_query,
             _MEMBER_CONTEXT_CYPHER,
-            {"members": list(params.members)},
+            {"community_id": params.community_id, "level": params.level},
         )
         rows = list(rows or [])
     except Exception as exc:  # noqa: BLE001
@@ -339,10 +355,7 @@ async def _gather_context(store, params: SummarizeCommunityParams) -> str:
             "summarize_community_activity  cid=%s  context fetch err=%s",
             params.community_id, exc,
         )
-        rows = [
-            {"name": m, "description": "", "rel_types": []}
-            for m in params.members
-        ]
+        rows = []
     return _build_member_context(rows)
 
 
@@ -375,9 +388,9 @@ async def summarize_community_activity(
         "stage": "summarize",
         "community_id": params.community_id,
         "level": params.level,
-        "members": len(params.members),
+        "members": params.member_count,
     })
-    if not params.members:
+    if params.member_count <= 0:
         return SummarizeCommunityResult(
             community_id=params.community_id, summary="", persisted=False,
         )

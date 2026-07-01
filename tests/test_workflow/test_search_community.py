@@ -17,8 +17,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.workflow.contracts import (
-    CommunityRef,
     DetectCommunitiesResult,
+    DetectedCommunity,
     SummarizeCommunityParams,
 )
 from src.workflow.search.activities import community as community_mod
@@ -114,7 +114,7 @@ async def test_summarize_produces_report_and_persists(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_embed_model", lambda: embed)
 
     out = await summarize_community_activity(SummarizeCommunityParams(
-        community_id="2", level=0, members=["Ромашка", "СтройИнвест"],
+        community_id="2", level=0, member_count=2,
     ))
 
     assert out.community_id == "2"
@@ -153,7 +153,7 @@ async def test_summarize_level_gt0_uses_child_reports(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
 
     out = await summarize_community_activity(SummarizeCommunityParams(
-        community_id="7", level=1, members=["X", "Z"],
+        community_id="7", level=1, member_count=2,
     ))
 
     assert out.persisted is True
@@ -176,7 +176,7 @@ async def test_summarize_level_gt0_falls_back_to_members(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
 
     await summarize_community_activity(SummarizeCommunityParams(
-        community_id="7", level=1, members=["Альфа"],
+        community_id="7", level=1, member_count=1,
     ))
 
     assert "Альфа" in (llm.seen_prompt or "")
@@ -196,7 +196,7 @@ async def test_summarize_persists_without_vec_on_embed_failure(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_embed_model", lambda: _BoomEmbed())
 
     out = await summarize_community_activity(SummarizeCommunityParams(
-        community_id="3", level=0, members=["A", "B"],
+        community_id="3", level=0, member_count=2,
     ))
     assert out.persisted is True
     write = next(
@@ -218,28 +218,95 @@ async def test_summarize_failsafe_on_llm_error(monkeypatch):
     monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _BoomLLM())
 
     out = await summarize_community_activity(SummarizeCommunityParams(
-        community_id="1", members=["A", "B"],
+        community_id="1", member_count=2,
     ))
     assert out.summary == ""
     assert out.persisted is False
 
 
-@pytest.mark.asyncio
-async def test_summarize_empty_members_skips_llm(monkeypatch):
-    called = {"llm": False}
+# ── payload limit: detect result must NOT carry member name lists ───
 
+
+def test_detect_result_carries_no_member_lists():
+    """The cross-Temporal detect result must be O(num communities): slim
+    ``DetectedCommunity`` refs carrying ``member_count`` but NO member name
+    list, so a large graph never trips Temporal's payload size limit
+    ("Complete result exceeds size limit")."""
+    from src.workflow.contracts import DetectedCommunity
+
+    detect = DetectCommunitiesResult(communities=[
+        DetectedCommunity(community_id="1", level=0, member_count=3),
+    ])
+    c = detect.communities[0]
+    assert c.member_count == 3
+    assert not hasattr(c, "members")
+
+
+@pytest.mark.asyncio
+async def test_detect_activity_strips_members_from_result(monkeypatch):
+    """detect_communities_activity returns slim refs (member_count, no
+    members) even though detect_communities yields full CommunityRefs —
+    membership stays in Neo4j, only counts cross the activity boundary."""
+    import src.graph.communities as communities_mod
+    import src.graph.index as index_mod
+    from src.workflow.contracts import CommunityRef, DetectCommunitiesParams
+    from src.workflow.search.activities.community import detect_communities_activity
+
+    async def fake_single(store, *, min_size, level=0, gamma=1.0, concurrency=4):
+        return [CommunityRef(
+            community_id="9", level=0, members=["a", "b", "c", "d"])]
+
+    monkeypatch.setattr(community_mod, "_get_store", lambda: object())
+    monkeypatch.setattr(communities_mod, "detect_communities", fake_single)
+    monkeypatch.setattr(
+        index_mod, "ensure_community_report_vector_index",
+        lambda store, dim: True,
+    )
+
+    out = await detect_communities_activity(DetectCommunitiesParams(min_size=1))
+
+    assert len(out.communities) == 1
+    c = out.communities[0]
+    assert c.community_id == "9"
+    assert c.member_count == 4
+    assert not hasattr(c, "members")
+
+
+@pytest.mark.asyncio
+async def test_summarize_reads_members_from_graph_by_community_id(monkeypatch):
+    """summarize reads its members from Neo4j keyed by community_id (via
+    IN_COMMUNITY) — NOT from a member-name list in the params payload."""
+    store = _FakeStore(member_rows=[
+        {"name": "Ромашка", "description": "Поставщик."},
+    ])
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _FakeLLM())
+
+    out = await summarize_community_activity(
+        SummarizeCommunityParams(community_id="2", level=0, member_count=1))
+
+    assert out.persisted is True
+    member_call = next(
+        (pm for c, pm in store.calls
+         if "IN_COMMUNITY" in c and "description" in c),
+        None,
+    )
+    assert member_call is not None, "member context query not issued"
+    assert member_call.get("community_id") == "2"
+    assert "members" not in member_call  # keyed by id, not by a name list
+
+
+@pytest.mark.asyncio
+async def test_summarize_zero_member_count_skips_llm(monkeypatch):
     def _llm():
-        called["llm"] = True
-        raise AssertionError("must not build LLM for empty community")
+        raise AssertionError("must not build LLM for an empty community")
 
     monkeypatch.setattr(community_mod, "_get_store", lambda: _FakeStore())
     monkeypatch.setattr(community_mod, "_get_summary_llm", _llm)
 
     out = await summarize_community_activity(
-        SummarizeCommunityParams(community_id="1", members=[]),
-    )
+        SummarizeCommunityParams(community_id="1", member_count=0))
     assert out.persisted is False
-    assert called["llm"] is False
 
 
 # ── pure workflow helper: detected → batchable summarize specs ──────
@@ -247,13 +314,14 @@ async def test_summarize_empty_members_skips_llm(monkeypatch):
 
 def test_build_summarize_specs_maps_each_community():
     detect = DetectCommunitiesResult(communities=[
-        CommunityRef(community_id="1", level=0, members=["A", "B", "C"]),
-        CommunityRef(community_id="2", level=0, members=["D", "E", "F"]),
+        DetectedCommunity(community_id="1", level=0, member_count=3),
+        DetectedCommunity(community_id="2", level=0, member_count=3),
     ])
     specs = build_summarize_specs(detect)
     assert [s.community_id for s in specs] == ["1", "2"]
     assert all(isinstance(s, SummarizeCommunityParams) for s in specs)
-    assert specs[0].members == ["A", "B", "C"]
+    assert specs[0].member_count == 3
+    assert not hasattr(specs[0], "members")
 
 
 def test_build_summarize_specs_empty():
@@ -264,12 +332,12 @@ def test_build_summarize_specs_skips_carried_over_reports():
     # needs_report=False communities (carried over unchanged from a prior
     # build) are skipped — only those needing a (re)summary emit specs.
     detect = DetectCommunitiesResult(communities=[
-        CommunityRef(community_id="1", level=0, members=["A", "B", "C"],
-                     needs_report=True),
-        CommunityRef(community_id="2", level=0, members=["D", "E", "F"],
-                     needs_report=False),  # carried over → skip
-        CommunityRef(community_id="3", level=1, members=["G", "H"],
-                     needs_report=True),
+        DetectedCommunity(community_id="1", level=0, member_count=3,
+                          needs_report=True),
+        DetectedCommunity(community_id="2", level=0, member_count=3,
+                          needs_report=False),  # carried over → skip
+        DetectedCommunity(community_id="3", level=1, member_count=2,
+                          needs_report=True),
     ])
     specs = build_summarize_specs(detect)
     assert [s.community_id for s in specs] == ["1", "3"]
@@ -280,11 +348,11 @@ def test_build_summarize_specs_skips_carried_over_reports():
 
 def test_group_specs_by_level_orders_finest_first():
     specs = [
-        SummarizeCommunityParams(community_id="c0a", level=0, members=["a"]),
-        SummarizeCommunityParams(community_id="c1a", level=1, members=["b"]),
-        SummarizeCommunityParams(community_id="c2a", level=2, members=["c"]),
-        SummarizeCommunityParams(community_id="c1b", level=1, members=["d"]),
-        SummarizeCommunityParams(community_id="c0b", level=0, members=["e"]),
+        SummarizeCommunityParams(community_id="c0a", level=0, member_count=1),
+        SummarizeCommunityParams(community_id="c1a", level=1, member_count=1),
+        SummarizeCommunityParams(community_id="c2a", level=2, member_count=1),
+        SummarizeCommunityParams(community_id="c1b", level=1, member_count=1),
+        SummarizeCommunityParams(community_id="c0b", level=0, member_count=1),
     ]
     groups = group_specs_by_level(specs)
     # Finest (highest level number) first, coarsest (level 0) last.
@@ -296,8 +364,8 @@ def test_group_specs_by_level_orders_finest_first():
 
 def test_group_specs_by_level_single_level():
     specs = [
-        SummarizeCommunityParams(community_id="1", level=0, members=["a"]),
-        SummarizeCommunityParams(community_id="2", level=0, members=["b"]),
+        SummarizeCommunityParams(community_id="1", level=0, member_count=1),
+        SummarizeCommunityParams(community_id="2", level=0, member_count=1),
     ]
     groups = group_specs_by_level(specs)
     assert len(groups) == 1
@@ -385,16 +453,18 @@ async def test_detect_activity_hierarchy_branch_and_one_shot_index(monkeypatch):
     index exactly ONCE (one-shot), not per community."""
     import src.graph.communities as communities_mod
     import src.graph.index as index_mod
+    from src.workflow.contracts import CommunityRef, DetectCommunitiesParams
     from src.workflow.search.activities.community import detect_communities_activity
-    from src.workflow.contracts import DetectCommunitiesParams, CommunityRef
 
     calls = {"hierarchy": 0, "single": 0, "ensure": 0}
 
-    async def fake_hierarchy(store, *, max_levels, min_size):
+    async def fake_hierarchy(store, *, max_levels, min_size, gamma=1.0,
+                             concurrency=4):
         calls["hierarchy"] += 1
         return [CommunityRef(community_id="1", level=0, members=["a", "b"])]
 
-    async def fake_single(store, *, min_size, level=0):
+    async def fake_single(store, *, min_size, level=0, gamma=1.0,
+                          concurrency=4):
         calls["single"] += 1
         return []
 
@@ -418,10 +488,11 @@ async def test_detect_activity_index_ensure_failopen(monkeypatch):
     """A raising one-shot index ensure must NOT crash the detect activity."""
     import src.graph.communities as communities_mod
     import src.graph.index as index_mod
-    from src.workflow.search.activities.community import detect_communities_activity
     from src.workflow.contracts import DetectCommunitiesParams
+    from src.workflow.search.activities.community import detect_communities_activity
 
-    async def fake_single(store, *, min_size, level=0):
+    async def fake_single(store, *, min_size, level=0, gamma=1.0,
+                          concurrency=4):
         return []
 
     def boom_ensure(store, dim):
