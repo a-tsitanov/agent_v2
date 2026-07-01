@@ -54,6 +54,30 @@ host** via `uv run`. Flags go in a host `.env` (+ exported `TEMPORAL_*`).
   - If acceptable: `EVENTS_EXTRACTION_ENABLED=true`, re-ingest; then after event history, `MONITOR_BURST_ENABLED=true`.
 - Otherwise these two phases are validated in prod (or a stack with a real LLM), per the PROD checklist.
 
+## Local validation run (2026-07-01)
+
+Executed against the live local stack (dockerized infra + a worktree worker on
+`graph_build,monitor`):
+- **Phase 1 backfill** — DONE (82 entities + 928 rels stamped `created_at=0`, 0 undated left).
+- **Arc 2 monitor sweep** — VALIDATED end-to-end: watched entity `E0_0` + a
+  synthetic risk rise → `MonitorSweepWorkflow` returned
+  `risk_rise_alerts=1, error=''`; a real `:Alert {key:"risk_rise:E0_0:", detail:"", score:0.9}` persisted (score is a property, NOT in the key).
+- **#2 no-churn** — re-sweep with the score drifted to 0.95 → still **one**
+  alert node, `score` updated in place (0.95). Confirmed.
+- Synthetic demo data reverted afterward (0 alerts, 0 watched); backfill kept.
+
+### ⚠️ Stale-worker drift (blocks Phase 2 locally)
+
+A pre-existing worker from the **main repo checkout**
+(`/Users/a.tsitanov/projects/kb-llamaindex`, old code without the Wave-1
+materialize activities) is **also polling `graph_build`**. Temporal
+load-balances, so a `materialize` trigger routed to the stale worker →
+`NotFound: materialize_risk`. Arc 2 was unaffected because its `monitor` queue
+is new (the stale worker doesn't poll it). **For real activation: stop/replace
+the stale main-repo worker with the new-code worker** (a single worker per
+queue), or run the new worker on isolated queues. Matches the known
+env/stale-worker drift.
+
 ## Rollback
 
 Same as PROD: flip the flag back in `.env` + restart the host worker.
