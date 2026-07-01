@@ -217,9 +217,7 @@ class LiteLLMSettings(BaseSettings):
     # lets an empty ``LITELLM_EXTRA_BODY=`` mean "no params" instead of a
     # JSON parse error.
     extra_body: Annotated[dict[str, Any], NoDecode] = Field(default_factory=dict)
-    extra_body_roles: Annotated[dict[str, dict[str, Any]], NoDecode] = Field(
-        default_factory=dict
-    )
+    extra_body_roles: Annotated[dict[str, dict[str, Any]], NoDecode] = Field(default_factory=dict)
 
     @field_validator("extra_body", "extra_body_roles", mode="before")
     @classmethod
@@ -359,6 +357,15 @@ class TemporalSettings(BaseSettings):
     # to flood the LLM proxy with a burst from a single rebuild.
     graph_build_task_queue: str = "kb-graph-build"
     graph_build_activity_concurrency: int = 2
+    # Offline analytics materialisation (Wave 1): centrality + link-prediction
+    # runs on the same kb-graph-build queue so it shares its low concurrency cap
+    # and never touches the query hot path.  Raise to process more nodes in
+    # parallel; keep modest so a rebuild doesn't starve Neo4j / LLM proxy.
+    analytics_materialize_concurrency: int = Field(
+        default=2,
+        ge=1,
+        description="GDS-воркеры для офлайн-материализации аналитики (centrality/link-prediction)",
+    )
     # Bounded parallelism for the per-community summarize fan-out inside
     # CommunityBuildWorkflow (independent of the worker-side activity cap).
     community_summary_parallelism: int = 4
@@ -533,7 +540,9 @@ class WikiSettings(BaseSettings):
     MediaWiki pages from the Neo4j graph. Opt-in via WIKI_ENABLED."""
 
     model_config = SettingsConfigDict(
-        env_prefix="WIKI_", env_file=".env", extra="ignore",
+        env_prefix="WIKI_",
+        env_file=".env",
+        extra="ignore",
     )
 
     enabled: bool = False
@@ -678,7 +687,9 @@ class LLMPoolSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="LLM_POOL_", env_file=".env", extra="ignore",
+        env_prefix="LLM_POOL_",
+        env_file=".env",
+        extra="ignore",
     )
 
     n: int = Field(default=8, ge=1)
@@ -719,6 +730,156 @@ class AnalyticsSettings(BaseSettings):
 
     default_version_tag: str = "unspecified"
     env_name: str = "dev-local"
+    # --- analytical-query layer (Wave 0 v1a) ---
+    default_top_n: int = Field(
+        default=20,
+        description="Максимальное число строк, возвращаемых аналитическим запросом по умолчанию (top-N).",
+    )
+    max_steps: int = Field(
+        default=3, description="Максимальное число примитивных вызовов в одном аналитическом плане."
+    )
+    cypher_fallback_enabled: bool = Field(
+        default=False,
+        description="Разрешить фолбэк на text-to-Cypher при отсутствии подходящего примитива (v1c; по умолчанию выключено).",
+    )
+
+
+class EventsSettings(BaseSettings):
+    """first_seen / event-detection config (Wave 0 E1)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="EVENTS_",
+        env_file=".env",
+        extra="ignore",
+    )
+    first_seen_enabled: bool = Field(
+        default=False,
+        description="Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
+    )
+    new_window_days: int = Field(
+        default=14, description="Окно в днях для выборки новых событий (new_events) по умолчанию."
+    )
+    backfill_sentinel: int = Field(
+        default=0,
+        description="Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
+    )
+    extraction_enabled: bool = Field(
+        default=False,
+        description="Включить извлечение структурных LLM-событий в extract_kg (E2; по умолчанию выкл — доп. стоимость LLM)",
+    )
+    taxonomy: list[str] = Field(
+        default_factory=lambda: [
+            "deal",
+            "appointment",
+            "lawsuit",
+            "incident",
+            "payment",
+            "meeting",
+            "sanction",
+        ],
+        description="Закрытый список типов событий (event_type), с открытым fallback для длинного хвоста",
+    )
+
+
+class SignalsSettings(BaseSettings):
+    """Knowledge-quality / actionable-signal config (Wave 0 P1)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="SIGNALS_",
+        env_file=".env",
+        extra="ignore",
+    )
+    orphan_min_degree: int = Field(
+        default=1,
+        description="Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).",
+    )
+    # per-type expected identifier attributes for completeness scoring
+    expected_attrs: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "Organization": ["INN", "OGRN", "PostalAddress", "PhoneNumber"],
+            "Person": ["PhoneNumber", "Email"],
+        },
+        description="Ожидаемые идентификаторы для оценки полноты данных по типу сущности (используется в completeness-сигнале).",
+    )
+    # Composite risk score weights (Wave 1).  Five components; must sum to 1.0.
+    # Operators can rebalance via SIGNALS_RISK_WEIGHTS='{"affiliation":0.4,...}'.
+    risk_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "affiliation": 0.30,
+            "brokerage": 0.20,
+            "controversy": 0.20,
+            "volatility": 0.15,
+            "opacity": 0.15,
+        },
+        description="Веса компонентов composite risk_score (нормализованы к сумме 1.0)",
+    )
+    # Risk-band thresholds: score >= high → "high"; >= medium → "medium"; else "low".
+    risk_bands: dict[str, float] = Field(
+        default_factory=lambda: {"high": 0.66, "medium": 0.33},
+        description="Пороги полос risk_score: >=high → high, >=medium → medium, иначе low",
+    )
+    # GDS node-similarity (link prediction) knobs.
+    link_prediction_top_k: int = Field(
+        default=10,
+        ge=1,
+        description="top-K соседей на узел для GDS node-similarity (link prediction)",
+    )
+    link_prediction_min_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Минимальный similarity для записи ребра :LIKELY_LINK",
+    )
+
+
+class MonitorSettings(BaseSettings):
+    """Arc 2 continuous monitoring + alerts (scheduled sweep)."""
+
+    model_config = SettingsConfigDict(env_prefix="MONITOR_", env_file=".env", extra="ignore")
+
+    enabled: bool = Field(
+        default=False, description="Включить непрерывный мониторинг/алерты (Arc 2)"
+    )
+    task_queue: str = Field(default="kb-monitor", description="Очередь воркера монитор-свипа")
+    activity_concurrency: int = Field(
+        default=2, ge=1, description="Параллелизм активностей монитора"
+    )
+    sweep_interval_minutes: int = Field(
+        default=30, ge=1, description="Период Temporal-Schedule монитор-свипа, мин"
+    )
+    new_window_days: int = Field(
+        default=7, ge=1, description="Окно (дни) для детекта новых first_seen-связей"
+    )
+    risk_rise_delta: float = Field(
+        default=0.1, gt=0.0, le=1.0, description="Порог роста risk_score для алерта"
+    )
+    burst_enabled: bool = Field(
+        default=False, description="Включить burst-детектор событий в монитор-свипе (E3)"
+    )
+    burst_window_days: int = Field(
+        default=7, ge=1, description="Окно (дни) для подсчёта недавних событий в burst-детекторе"
+    )
+    burst_baseline_windows: int = Field(
+        default=4, ge=1, description="Сколько предыдущих окон усреднять как базовую ставку burst"
+    )
+    burst_min_count: int = Field(
+        default=2,
+        ge=1,
+        description="Мин. число недавних событий, чтобы пара (сущность,тип) считалась всплеском",
+    )
+    burst_ratio: float = Field(
+        default=3.0, gt=1.0, description="Порог burst_score (recent/base) для алерта о всплеске"
+    )
+    webhook_url: str = Field(
+        default="",
+        description="URL генеричного webhook для доставки алертов (пусто — доставка выключена)",
+    )
+    webhook_timeout_s: float = Field(
+        default=5.0, gt=0.0, description="Таймаут POST на webhook доставки алертов, сек"
+    )
+    deliver_batch: int = Field(
+        default=100, ge=1, description="Сколько непушенных алертов доставлять за один свип"
+    )
 
 
 class ClassifierSettings(BaseSettings):
@@ -732,7 +893,9 @@ class ClassifierSettings(BaseSettings):
     error defaults to INGEST (false-skip is the costly error)."""
 
     model_config = SettingsConfigDict(
-        env_prefix="CLASSIFIER_", env_file=".env", extra="ignore",
+        env_prefix="CLASSIFIER_",
+        env_file=".env",
+        extra="ignore",
     )
 
     enabled: bool = False
@@ -740,9 +903,24 @@ class ClassifierSettings(BaseSettings):
     min_size_bytes: int = 1
     skip_extensions: list[str] = Field(
         default_factory=lambda: [
-            "exe", "dll", "bin", "zip", "tar", "gz", "7z",
-            "png", "jpg", "jpeg", "gif", "bmp", "svg",
-            "mp3", "mp4", "mov", "avi", "wav",
+            "exe",
+            "dll",
+            "bin",
+            "zip",
+            "tar",
+            "gz",
+            "7z",
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "bmp",
+            "svg",
+            "mp3",
+            "mp4",
+            "mov",
+            "avi",
+            "wav",
         ]
     )
     preview_chars: int = 4000
@@ -757,7 +935,9 @@ class IngestAdmissionSettings(BaseSettings):
     bursts."""
 
     model_config = SettingsConfigDict(
-        env_prefix="INGEST_ADMISSION_", env_file=".env", extra="ignore",
+        env_prefix="INGEST_ADMISSION_",
+        env_file=".env",
+        extra="ignore",
     )
 
     max_inflight: int = Field(default=1, ge=1)
@@ -770,7 +950,8 @@ class IngestAdmissionSettings(BaseSettings):
     # Default ``temporal`` → no behaviour change until explicitly flipped.
     # Env var is the bare ``INGEST_QUEUE_BACKEND`` (no admission prefix).
     backend: Literal["temporal", "rabbitmq"] = Field(
-        default="temporal", validation_alias="INGEST_QUEUE_BACKEND",
+        default="temporal",
+        validation_alias="INGEST_QUEUE_BACKEND",
     )
 
 
@@ -785,7 +966,9 @@ class RabbitMQSettings(BaseSettings):
     dead-letter (``dlx`` → ``dlq``) on failure."""
 
     model_config = SettingsConfigDict(
-        env_prefix="RABBITMQ_", env_file=".env", extra="ignore",
+        env_prefix="RABBITMQ_",
+        env_file=".env",
+        extra="ignore",
     )
 
     url: str = "amqp://guest:guest@localhost:5672/"
@@ -831,10 +1014,18 @@ class RabbitMQSettings(BaseSettings):
 # ── composed top-level settings ──────────────────────────────────────
 
 # Known placeholder / default secrets that must NOT appear in production.
-_PREFLIGHT_PLACEHOLDER_SECRETS: frozenset[str] = frozenset({
-    "dev-local-key", "changeme", "change-me", "postgres", "minioadmin",
-    "changemebot", "botpass", "sk-litellm-stub",
-})
+_PREFLIGHT_PLACEHOLDER_SECRETS: frozenset[str] = frozenset(
+    {
+        "dev-local-key",
+        "changeme",
+        "change-me",
+        "postgres",
+        "minioadmin",
+        "changemebot",
+        "botpass",
+        "sk-litellm-stub",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -919,8 +1110,20 @@ class Settings(BaseSettings):
     def analytics(self) -> AnalyticsSettings:
         return AnalyticsSettings()
 
+    @cached_property
+    def events(self) -> EventsSettings:
+        return EventsSettings()
+
+    @cached_property
+    def signals(self) -> SignalsSettings:
+        return SignalsSettings()
+
+    @cached_property
+    def monitor(self) -> MonitorSettings:
+        return MonitorSettings()
+
     @staticmethod
-    def preflight(s: "Settings") -> list[str]:
+    def preflight(s: Settings) -> list[str]:
         """Return a list of actionable config problems (empty == OK).
 
         Hard problems matter in production (``API_ENV=production``); in dev
@@ -933,8 +1136,8 @@ class Settings(BaseSettings):
             api_keys = [k.strip() for k in s.api.keys.split(",") if k.strip()]
             if any(k in _PREFLIGHT_PLACEHOLDER_SECRETS for k in api_keys) or not api_keys:
                 problems.append(
-                    "API_KEYS contains a placeholder/default key; set real "
-                    "key(s) in production.")
+                    "API_KEYS contains a placeholder/default key; set real key(s) in production."
+                )
             checks = {
                 "NEO4J_PASSWORD": s.neo4j.password.get_secret_value(),
                 "POSTGRES_PASSWORD": s.postgres.password.get_secret_value(),
@@ -945,25 +1148,29 @@ class Settings(BaseSettings):
                 if val in _PREFLIGHT_PLACEHOLDER_SECRETS:
                     problems.append(
                         f"{name} is a placeholder default ({val!r}); set a real "
-                        f"secret in production.")
+                        f"secret in production."
+                    )
 
         n = s.llm_pool.n
         if s.temporal.llm_activity_concurrency < n:
             problems.append(
                 f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY "
                 f"({s.temporal.llm_activity_concurrency}) < LLM_POOL_N ({n}); "
-                f"the Temporal cap must be >= N so the pool is the throttle.")
+                f"the Temporal cap must be >= N so the pool is the throttle."
+            )
         if s.temporal.merge_activity_concurrency < n:
             problems.append(
                 f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY "
-                f"({s.temporal.merge_activity_concurrency}) < LLM_POOL_N ({n}).")
+                f"({s.temporal.merge_activity_concurrency}) < LLM_POOL_N ({n})."
+            )
 
         if s.wiki.enabled or s.wikibase.enabled:
             bot_pw = s.wikibase.bot_password.get_secret_value()
             if len(bot_pw) < 8:
                 problems.append(
                     "WIKIBASE_BOT_PASSWORD must be >= 8 chars when wiki/wikibase "
-                    "is enabled (setup_wikibase refuses to provision the bot).")
+                    "is enabled (setup_wikibase refuses to provision the bot)."
+                )
         return problems
 
 
@@ -974,18 +1181,21 @@ __all__ = [
     "AgentSettings",
     "AnalyticsSettings",
     "ApiSettings",
+    "EventsSettings",
     "HFSettings",
     "IngestionSettings",
-    "LiteLLMSettings",
     "LLMPoolSettings",
+    "LiteLLMSettings",
     "MetricsSettings",
     "MilvusSettings",
     "MinioSettings",
+    "MonitorSettings",
     "Neo4jSettings",
     "PostgresSettings",
     "Settings",
+    "SignalsSettings",
     "TemporalSettings",
-    "WikibaseSettings",
     "WikiSettings",
+    "WikibaseSettings",
     "settings",
 ]

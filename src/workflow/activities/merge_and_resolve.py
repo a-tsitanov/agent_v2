@@ -27,6 +27,7 @@ from temporalio import activity
 
 from src.config import settings
 from src.graph.entity_resolution import ERConfig, resolve_entities
+from src.graph.event_merge import merge_events
 from src.graph.merge import merge_kg_extraction
 from src.graph.phone_consolidation import consolidate_phone_entities
 from src.graph.store import build_neo4j_graph_store
@@ -95,45 +96,89 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     activity.heartbeat({"stage": "loaded", "chunks": len(nodes)})
 
     raw_entity_count, dup_groups = _premerge_groups(nodes)
-    activity.heartbeat({
-        "stage": "premerge",
-        "raw_entities": raw_entity_count,
-        "duplicate_groups": dup_groups,
-    })
+    activity.heartbeat(
+        {
+            "stage": "premerge",
+            "raw_entities": raw_entity_count,
+            "duplicate_groups": dup_groups,
+        }
+    )
 
     llm = get_llm_pool().get("judge")
 
     activity.logger.info(
         "merge_and_resolve merging  chunks=%d  raw_entities=%d  duplicate_groups=%d",
-        len(nodes), raw_entity_count, len(dup_groups),
+        len(nodes),
+        raw_entity_count,
+        len(dup_groups),
     )
     # merge_kg_extraction fans out per-entity/relation judge calls with no
     # internal heartbeat; pulse on a timer so a saturated proxy can't trip
     # the 15-min heartbeat_timeout mid-merge (-> cancel -> retry storm).
     async with heartbeat_every(_HEARTBEAT_INTERVAL_S, {"stage": "merging"}):
         merged_entities, merged_relations = await merge_kg_extraction(
-            nodes, llm, language="Russian",
+            nodes,
+            llm,
+            language="Russian",
         )
-    activity.heartbeat({
-        "stage": "merged",
-        "raw_entities": raw_entity_count,
-        "merged_entities": len(merged_entities),
-        "collapsed": max(raw_entity_count - len(merged_entities), 0),
-        "relations": len(merged_relations),
-    })
+    activity.heartbeat(
+        {
+            "stage": "merged",
+            "raw_entities": raw_entity_count,
+            "merged_entities": len(merged_entities),
+            "collapsed": max(raw_entity_count - len(merged_entities), 0),
+            "relations": len(merged_relations),
+        }
+    )
 
     pre_phone_count = len(merged_entities)
     # CPU-bound (libphonenumber parse over every entity) — off the loop.
     merged_entities, merged_relations, _phone_map = await asyncio.to_thread(
-        consolidate_phone_entities, merged_entities, merged_relations, nodes,
+        consolidate_phone_entities,
+        merged_entities,
+        merged_relations,
+        nodes,
     )
-    activity.heartbeat({
-        "stage": "phone_consolidated",
-        "entities_in": pre_phone_count,
-        "entities_out": len(merged_entities),
-        "phones_collapsed": len(_phone_map),
-        "phone_alias_map": _sample_map(_phone_map),
-    })
+    activity.heartbeat(
+        {
+            "stage": "phone_consolidated",
+            "entities_in": pre_phone_count,
+            "entities_out": len(merged_entities),
+            "phones_collapsed": len(_phone_map),
+            "phone_alias_map": _sample_map(_phone_map),
+        }
+    )
+
+    # ── Event de-duplication (gated, dark by default) ────────────────────
+    # Split EventOrAction nodes out BEFORE ER so ER never touches them;
+    # their dedup is handled deterministically by merge_events.  When the
+    # feature is off the lists are passed through unchanged.
+    _held_ev_nodes: list = []
+    _held_ev_rels: list = []
+    if settings.events.extraction_enabled:
+        _event_names = {e.name for e in merged_entities if e.label == "EventOrAction"}
+        _ev_in = [e for e in merged_entities if e.label == "EventOrAction"]
+        _non_ev_entities = [e for e in merged_entities if e.label != "EventOrAction"]
+        _ev_rels = [
+            r
+            for r in merged_relations
+            if r.source_id in _event_names or r.target_id in _event_names
+        ]
+        _non_ev_rels = [
+            r
+            for r in merged_relations
+            if r.source_id not in _event_names and r.target_id not in _event_names
+        ]
+        _held_ev_nodes, _held_ev_rels = merge_events(_ev_in, _ev_rels)
+        merged_entities = _non_ev_entities
+        merged_relations = _non_ev_rels
+        activity.heartbeat(
+            {
+                "stage": "event_deduped",
+                "events_in": len(_ev_in),
+                "events_out": len(_held_ev_nodes),
+            }
+        )
 
     er_map: dict[str, str] = {}
     if settings.agent.er_enabled:
@@ -142,8 +187,12 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         graph_store = build_neo4j_graph_store()
         pre_er_count = len(merged_entities)
         merged_entities, merged_relations, er_map = await resolve_entities(
-            merged_entities, merged_relations, nodes,
-            llm=llm, embed_model=embed_model, graph_store=graph_store,
+            merged_entities,
+            merged_relations,
+            nodes,
+            llm=llm,
+            embed_model=embed_model,
+            graph_store=graph_store,
             config=ERConfig(
                 language="Russian",
                 judge_batch=settings.agent.er_judge_batch_size,
@@ -157,34 +206,44 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
             # inactive when `er_verdict_cache_enabled` is off.
             er_store=graph_store,
         )
-        activity.heartbeat({
-            "stage": "resolved",
-            "entities_in": pre_er_count,
-            "entities_out": len(merged_entities),
-            "er_merged": len(er_map),
-            "er_alias_map": _sample_map(er_map),
-        })
+        activity.heartbeat(
+            {
+                "stage": "resolved",
+                "entities_in": pre_er_count,
+                "entities_out": len(merged_entities),
+                "er_merged": len(er_map),
+                "er_alias_map": _sample_map(er_map),
+            }
+        )
     else:
         activity.heartbeat({"stage": "er_skipped"})
 
+    # Re-join event nodes/rels held aside during ER.
+    if _held_ev_nodes or _held_ev_rels:
+        merged_entities = merged_entities + _held_ev_nodes
+        merged_relations = merged_relations + _held_ev_rels
+
     uri = await asyncio.to_thread(
         staging.write_pickle,
-        kg.parsed.ctx.workflow_run_id, "merged",
+        kg.parsed.ctx.workflow_run_id,
+        "merged",
         (merged_entities, merged_relations, nodes),
     )
     logger.info(
         "merge_and_resolve done  doc={d}  raw={raw}  merged={e}  relations={r}",
         d=kg.parsed.ctx.doc_id,
         raw=raw_entity_count,
-        e=len(merged_entities), r=len(merged_relations),
+        e=len(merged_entities),
+        r=len(merged_relations),
     )
     # Task 8b: surface entity/relation names on the contract so the wiki
     # dirty-mark hook can read them without touching staging (sandbox-safe).
     _entity_names = [e.name for e in merged_entities]
-    _relation_endpoints = list(dict.fromkeys(
-        [r.source_id for r in merged_relations]
-        + [r.target_id for r in merged_relations]
-    ))
+    _relation_endpoints = list(
+        dict.fromkeys(
+            [r.source_id for r in merged_relations] + [r.target_id for r in merged_relations]
+        )
+    )
     return Merged(
         kg=kg,
         merged_entities_uri=uri,

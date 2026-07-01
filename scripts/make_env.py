@@ -2,6 +2,7 @@
 
 Run: uv run python -m scripts.make_env   (see --help for flags)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -78,10 +79,14 @@ def parse_example(text: str) -> list[Line]:
         else:
             m_kv = _KV_RE.match(raw)
             if m_kv:
-                lines.append(KV(
-                    key=m_kv.group(1), example_val=m_kv.group(2),
-                    comment_lines=list(recent), section=section,
-                ))
+                lines.append(
+                    KV(
+                        key=m_kv.group(1),
+                        example_val=m_kv.group(2),
+                        comment_lines=list(recent),
+                        section=section,
+                    )
+                )
                 recent = []
             else:
                 lines.append(Comment(text=raw))
@@ -120,8 +125,7 @@ def parse_env(text: str) -> dict[str, str]:
     return out
 
 
-_SECRET_MARKERS = ("PASSWORD", "PASS", "SECRET", "API_KEY", "API_KEYS",
-                   "ACCESS_KEY", "_KEY")
+_SECRET_MARKERS = ("PASSWORD", "PASS", "SECRET", "API_KEY", "API_KEYS", "ACCESS_KEY", "_KEY")
 
 
 def is_secret(key: str) -> bool:
@@ -133,13 +137,14 @@ def is_secret(key: str) -> bool:
 @dataclass
 class EnvVar:
     env: str
-    default: str       # rendered default ("" for secrets / None / undefined)
+    default: str  # rendered default ("" for secrets / None / undefined)
     secret: bool
-    group: str         # settings class name (for grouping)
+    group: str  # settings class name (for grouping)
 
 
 def _render_default(value) -> str:
     import json
+
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -158,9 +163,10 @@ def iter_app_env_vars() -> list[EnvVar]:
     """
     import importlib
     import inspect
+
     from pydantic import SecretStr
-    from pydantic_settings import BaseSettings
     from pydantic_core import PydanticUndefined
+    from pydantic_settings import BaseSettings
 
     cfg = importlib.import_module("src.config")
     rows: list[EnvVar] = []
@@ -224,8 +230,11 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "AGENT_MAX_COVERAGE_ROUNDS": "Макс. число доп. раундов coverage-check в plan-execute: на найденный пробел запускается ещё один SubQueryRetrievalWorkflow. Капа 0..3.",
     "AGENT_MAX_SUBQUERIES": "Макс. число подвопросов, которые может выдать планировщик — ограничивает параллельный fan-out SubQueryRetrievalWorkflow и стоимость планировщика. Капа 1..20.",
     # ── AnalyticsSettings (ANALYTICS_*) — теги версий ingest-метрик ───
+    "ANALYTICS_CYPHER_FALLBACK_ENABLED": "Разрешить фолбэк на text-to-Cypher при отсутствии подходящего примитива (v1c; по умолчанию выключено).",
+    "ANALYTICS_DEFAULT_TOP_N": "Максимальное число строк, возвращаемых аналитическим запросом по умолчанию (top-N).",
     "ANALYTICS_DEFAULT_VERSION_TAG": "Версия-тег по умолчанию, если на /ingest не пришёл заголовок X-Version-Tag; пишется в ingest_metrics / Temporal search attributes.",
     "ANALYTICS_ENV_NAME": "Имя окружения-деплоя для меток (Temporal search attributes и строки Postgres ingest_metrics).",
+    "ANALYTICS_MAX_STEPS": "Максимальное число примитивных вызовов в одном аналитическом плане.",
     # ── ApiSettings (API_*) — поверхность FastAPI ────────────────────
     "API_CORS_ORIGINS": "Разрешённые CORS-origin через запятую; '*' = любой.",
     "API_ENV": "Окружение приложения (development|production); в production preflight жёстко требует реальные секреты.",
@@ -240,6 +249,12 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "CLASSIFIER_MIN_SIZE_BYTES": "Минимальный размер документа (байт); мельче — отсев (пустышка/мусор).",
     "CLASSIFIER_PREVIEW_CHARS": "Сколько символов превью документа подаётся LLM-слою классификатора.",
     "CLASSIFIER_SKIP_EXTENSIONS": "JSON-список расширений, отсекаемых детерминированным правилом (exe, zip, png, mp4 и т.п.).",
+    # ── EventsSettings (EVENTS_*) — детекция событий first_seen ─────────
+    "EVENTS_BACKFILL_SENTINEL": "Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
+    "EVENTS_EXTRACTION_ENABLED": "Включить извлечение структурных LLM-событий в extract_kg (E2; по умолчанию выкл — доп. стоимость LLM).",
+    "EVENTS_FIRST_SEEN_ENABLED": "Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
+    "EVENTS_NEW_WINDOW_DAYS": "Окно в днях для выборки новых событий (new_events) по умолчанию.",
+    "EVENTS_TAXONOMY": "Закрытый список типов событий (event_type) для LLM-извлечения; с открытым fallback для длинного хвоста.",
     # ── HFSettings (явные имена без префикса) — offline HF-модели ─────
     "HF_CACHE_DIR": "Путь к локальному HF-кэшу для air-gapped деплоя; пусто = дефолт HF. Связано с download_models.py / configure_hf.",
     "HF_OFFLINE": "Включить offline-режим HuggingFace (читать только из локального кэша, без обращений к Hub).",
@@ -263,13 +278,13 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "LITELLM_API_KEY": "Ключ к LiteLLM-прокси (OpenAI-совместимый). Секрет.",
     "LITELLM_BASE_URL": "Base URL LiteLLM-прокси (или любого OpenAI-совместимого эндпоинта).",
     "LITELLM_EMBEDDING_MODEL": "Имя embedding-модели; её native-dim ДОЛЖНА совпадать с MILVUS_DIM (text-embedding-3-small → 1536).",
-    "LITELLM_EXTRA_BODY": "JSON доп.полей тела КАЖДОГО chat-запроса (через OpenAI extra_body), напр. {\"think\": false} чтобы выключить chain-of-thought Qwen3. Пусто ⇒ запрос не меняется.",
-    "LITELLM_EXTRA_BODY_ROLES": "JSON per-role override'ов extra_body; shallow-мёрж поверх LITELLM_EXTRA_BODY, ключи роли побеждают. Напр. {\"synthesis\": {\"think\": true}} — оставить thinking только для финального ответа.",
+    "LITELLM_EXTRA_BODY": 'JSON доп.полей тела КАЖДОГО chat-запроса (через OpenAI extra_body), напр. {"think": false} чтобы выключить chain-of-thought Qwen3. Пусто ⇒ запрос не меняется.',
+    "LITELLM_EXTRA_BODY_ROLES": 'JSON per-role override\'ов extra_body; shallow-мёрж поверх LITELLM_EXTRA_BODY, ключи роли побеждают. Напр. {"synthesis": {"think": true}} — оставить thinking только для финального ответа.',
     "LITELLM_LLM_MODEL": "DEPRECATED-алиас no-role legacy-пути; пусто ⇒ откат на model_small. Удалить, когда все читатели перейдут на tier-поля.",
     "LITELLM_MAX_RETRIES": "Сколько повторов на сетевую/временную ошибку LLM-вызова.",
     "LITELLM_MODEL_LARGE": "Имя 'large'-модели: только финальный user-facing synthesis (дефолт gpt-4o-mini).",
     "LITELLM_MODEL_SMALL": "Имя 'small'-модели: локальная высоконагруженная (extraction/judge/search/plan/...).",
-    "LITELLM_ROLE_TIERS": "JSON-override карты роль→tier; мёржится поверх дефолтов, можно эскалировать одну роль, напр. {\"plan\":\"large\"}.",
+    "LITELLM_ROLE_TIERS": 'JSON-override карты роль→tier; мёржится поверх дефолтов, можно эскалировать одну роль, напр. {"plan":"large"}.',
     "LITELLM_TIMEOUT_S": "Таймаут LLM-вызова в секундах (дефолт 900 — под медленный локальный inference).",
     # ── MetricsSettings (METRICS_*) — Prometheus-экспортёр воркера ────
     "METRICS_BIND_ADDRESS": "Адрес:порт, на котором воркер поднимает Prometheus-листенер; Prometheus скрейпит через host.docker.internal:<port>.",
@@ -292,6 +307,21 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "MINIO_REGION": "Регион S3 (для совместимых клиентов).",
     "MINIO_SECRET_KEY": "Secret key MinIO/S3. Секрет; в проде задать реальный.",
     "MINIO_SECURE": "Использовать TLS (https) при обращении к MinIO/S3.",
+    # ── MonitorSettings (MONITOR_*) — непрерывный мониторинг/алерты ──
+    "MONITOR_ACTIVITY_CONCURRENCY": "Параллелизм активностей монитор-свипа. >= 1.",
+    "MONITOR_BURST_BASELINE_WINDOWS": "Сколько предыдущих окон усреднять как базовую ставку burst. >= 1.",
+    "MONITOR_BURST_ENABLED": "Включить burst-детектор событий в монитор-свипе (E3). По умолчанию off.",
+    "MONITOR_BURST_MIN_COUNT": "Мин. число недавних событий, чтобы пара (сущность,тип) считалась всплеском. >= 1.",
+    "MONITOR_BURST_RATIO": "Порог burst_score (recent/base) для алерта о всплеске (> 1).",
+    "MONITOR_BURST_WINDOW_DAYS": "Окно в днях для подсчёта недавних событий в burst-детекторе. >= 1.",
+    "MONITOR_DELIVER_BATCH": "Сколько непушенных алертов доставлять за один свип. >= 1.",
+    "MONITOR_ENABLED": "Включить непрерывный мониторинг и алерты (Arc 2). По умолчанию off.",
+    "MONITOR_NEW_WINDOW_DAYS": "Окно в днях для детекта новых first_seen-связей при свипе. >= 1.",
+    "MONITOR_RISK_RISE_DELTA": "Порог роста risk_score для генерации алерта (0 < значение <= 1).",
+    "MONITOR_SWEEP_INTERVAL_MINUTES": "Период Temporal-Schedule монитор-свипа в минутах. >= 1.",
+    "MONITOR_TASK_QUEUE": "Имя очереди Temporal для воркера монитор-свипа.",
+    "MONITOR_WEBHOOK_TIMEOUT_S": "Таймаут POST на webhook доставки алертов, сек (> 0).",
+    "MONITOR_WEBHOOK_URL": "URL генеричного webhook для доставки алертов (пусто — доставка выключена).",
     # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
     "NEO4J_DATABASE": "Имя базы Neo4j.",
     "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",
@@ -307,8 +337,16 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "POSTGRES_POOL_TIMEOUT_S": "Сколько секунд ждать свободный коннект из пула, прежде чем упасть с ошибкой.",
     "POSTGRES_PORT": "Порт Postgres (по умолчанию 5432).",
     "POSTGRES_USER": "Пользователь Postgres.",
+    # ── SignalsSettings (SIGNALS_*) — качество знаний / actionable-сигналы
+    "SIGNALS_EXPECTED_ATTRS": "Ожидаемые идентификаторы для оценки полноты данных по типу сущности (используется в completeness-сигнале).",
+    "SIGNALS_LINK_PREDICTION_MIN_SCORE": "Минимальный similarity-score GDS node-similarity для записи ребра :LIKELY_LINK (0.0..1.0).",
+    "SIGNALS_LINK_PREDICTION_TOP_K": "top-K соседей на узел для GDS node-similarity (link prediction). >= 1.",
+    "SIGNALS_ORPHAN_MIN_DEGREE": "Минимальная степень узла графа, ниже которой он считается изолированным (орфаном).",
+    "SIGNALS_RISK_BANDS": "Пороги полос composite risk_score: >=high → 'high', >=medium → 'medium', иначе 'low'. JSON-словарь {\"high\": 0.66, \"medium\": 0.33}.",
+    "SIGNALS_RISK_WEIGHTS": "Веса компонентов composite risk_score (affiliation/brokerage/controversy/volatility/opacity); должны суммироваться к 1.0.",
     # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
     "TEMPORAL_ACTIVITY_CONCURRENCY": "Слотов активити на основной очереди kb-ingest.",
+    "TEMPORAL_ANALYTICS_MATERIALIZE_CONCURRENCY": "GDS-воркеры для офлайн-материализации аналитики (centrality/link-prediction) на очереди kb-graph-build. >= 1.",
     "TEMPORAL_COMMUNITY_BACKEND": "Движок детекции сообществ: 'gds' (Leiden в Neo4j, легаси) или 'leidenalg' (leidenalg/igraph в воркере, память вне Neo4j). Дефолт 'gds' до прохождения бенчмарка паритета.",
     "TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY": "Число GDS-потоков для прогона Leiden; держать умеренным, чтобы rebuild не голодил Neo4j. >= 1.",
     "TEMPORAL_COMMUNITY_LEIDEN_GAMMA": "Resolution Leiden: >1 → больше мелких сообществ, <1 → меньше крупных. Только детекция, не query-путь. > 0.",
@@ -380,7 +418,7 @@ def gen_secret(key: str) -> str:
     """Generate a sensible secret for `key` (opt-in per field)."""
     k = key.upper()
     if k == "WIKIBASE_SECRET_KEY":
-        return secrets.token_hex(16)          # exactly 32 hex chars
+        return secrets.token_hex(16)  # exactly 32 hex chars
     if "API_KEY" in k or k == "API_KEYS":
         return "sk-" + secrets.token_urlsafe(32)
     # passwords + everything else: long urlsafe token (>= 12 chars)
@@ -408,29 +446,45 @@ def validate(values: dict[str, str]) -> list[Issue]:
     pool_n = _int(values, "LLM_POOL_N", 8)
     llm_cap = _int(values, "TEMPORAL_LLM_ACTIVITY_CONCURRENCY", 0)
     if llm_cap and llm_cap < pool_n:
-        issues.append(Issue("WARN",
-            f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY ({llm_cap}) < LLM_POOL_N "
-            f"({pool_n}); Temporal will throttle before the pool"))
+        issues.append(
+            Issue(
+                "WARN",
+                f"TEMPORAL_LLM_ACTIVITY_CONCURRENCY ({llm_cap}) < LLM_POOL_N "
+                f"({pool_n}); Temporal will throttle before the pool",
+            )
+        )
     merge_cap = _int(values, "TEMPORAL_MERGE_ACTIVITY_CONCURRENCY", 0)
     if merge_cap and merge_cap < pool_n:
-        issues.append(Issue("WARN",
-            f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY ({merge_cap}) < LLM_POOL_N "
-            f"({pool_n}); Temporal will throttle before the pool"))
+        issues.append(
+            Issue(
+                "WARN",
+                f"TEMPORAL_MERGE_ACTIVITY_CONCURRENCY ({merge_cap}) < LLM_POOL_N "
+                f"({pool_n}); Temporal will throttle before the pool",
+            )
+        )
 
-    models = (values.get("LITELLM_MODEL_SMALL", ""),
-              values.get("LITELLM_MODEL_LARGE", ""))
+    models = (values.get("LITELLM_MODEL_SMALL", ""), values.get("LITELLM_MODEL_LARGE", ""))
     if any(m.startswith("gpt-") for m in models) and not values.get("OPENAI_API_KEY"):
-        issues.append(Issue("ERROR",
-            "OPENAI_API_KEY is empty but a model tier points at OpenAI (gpt-*)"))
+        issues.append(
+            Issue("ERROR", "OPENAI_API_KEY is empty but a model tier points at OpenAI (gpt-*)")
+        )
 
     bp = values.get("WIKIBASE_BOT_PASSWORD", "")
     if bp and len(bp) < 8:
-        issues.append(Issue("ERROR",
-            f"WIKIBASE_BOT_PASSWORD must be >= 8 chars (MediaWiki minimum), got {len(bp)}"))
+        issues.append(
+            Issue(
+                "ERROR",
+                f"WIKIBASE_BOT_PASSWORD must be >= 8 chars (MediaWiki minimum), got {len(bp)}",
+            )
+        )
     ap = values.get("WIKIBASE_ADMIN_PASS", "")
     if ap and len(ap) < 10:
-        issues.append(Issue("ERROR",
-            f"WIKIBASE_ADMIN_PASS must be >= 10 chars (MediaWiki minimum), got {len(ap)}"))
+        issues.append(
+            Issue(
+                "ERROR",
+                f"WIKIBASE_ADMIN_PASS must be >= 10 chars (MediaWiki minimum), got {len(ap)}",
+            )
+        )
 
     return issues
 
@@ -520,16 +574,23 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Build .env from .env.example.")
     p.add_argument("--example", default=".env.example")
     p.add_argument("--out", default=".env")
-    p.add_argument("--non-interactive", action="store_true",
-                   help="copy defaults + generate empty secrets, no prompts")
-    p.add_argument("--force", action="store_true",
-                   help="write despite ERROR-level validation")
-    p.add_argument("--no-merge", action="store_true",
-                   help="ignore an existing .env")
-    p.add_argument("--reference", action="store_true",
-                   help="(re)generate .env.reference from config.py and exit")
-    p.add_argument("--check", action="store_true",
-                   help="verify .env.reference is current (+ report .env.example coverage); exit 1 on stale reference")
+    p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="copy defaults + generate empty secrets, no prompts",
+    )
+    p.add_argument("--force", action="store_true", help="write despite ERROR-level validation")
+    p.add_argument("--no-merge", action="store_true", help="ignore an existing .env")
+    p.add_argument(
+        "--reference",
+        action="store_true",
+        help="(re)generate .env.reference from config.py and exit",
+    )
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="verify .env.reference is current (+ report .env.example coverage); exit 1 on stale reference",
+    )
     args = p.parse_args(argv)
 
     ref_path = Path(".env.reference")
@@ -542,15 +603,20 @@ def main(argv: list[str] | None = None) -> int:
         on_disk = ref_path.read_text() if ref_path.exists() else ""
         stale = current != on_disk
         if stale:
-            print("  [DRIFT] .env.reference is stale — run `python -m scripts.make_env --reference`")
+            print(
+                "  [DRIFT] .env.reference is stale — run `python -m scripts.make_env --reference`"
+            )
         # coverage is INFORMATIONAL (do not fail on it in this batch)
-        example_keys = {ln.key for ln in parse_example(Path(args.example).read_text())
-                        if isinstance(ln, KV)}
+        example_keys = {
+            ln.key for ln in parse_example(Path(args.example).read_text()) if isinstance(ln, KV)
+        }
         missing = sorted({r.env for r in iter_app_env_vars()} - example_keys)
         if missing:
-            print(f"  [INFO] {len(missing)} app var(s) not in {args.example} "
-                  f"(documented in .env.reference): {', '.join(missing[:8])}"
-                  + (" ..." if len(missing) > 8 else ""))
+            print(
+                f"  [INFO] {len(missing)} app var(s) not in {args.example} "
+                f"(documented in .env.reference): {', '.join(missing[:8])}"
+                + (" ..." if len(missing) > 8 else "")
+            )
         if stale:
             return 1
         print("env check: OK")
@@ -568,9 +634,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.non_interactive:
         for ln in lines:
-            if (isinstance(ln, KV) and is_secret(ln.key)
-                    and not values[ln.key]
-                    and ln.key not in _UPSTREAM_CREDENTIALS):
+            if (
+                isinstance(ln, KV)
+                and is_secret(ln.key)
+                and not values[ln.key]
+                and ln.key not in _UPSTREAM_CREDENTIALS
+            ):
                 values[ln.key] = gen_secret(ln.key)
     else:
         if not sys.stdin.isatty():

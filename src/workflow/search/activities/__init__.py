@@ -6,6 +6,7 @@ they reuse for the final answer.  The worker registers both sets on the
 same queue (legacy ReAct activities + these) during the parity window.
 """
 
+from src.workflow.analytics.materialize_activities import MATERIALIZE_ACTIVITIES
 from src.workflow.search.activities.community import (
     detect_communities_activity,
     summarize_community_activity,
@@ -42,6 +43,7 @@ SEARCH_V2_ACTIVITIES = [
 GRAPH_BUILD_ACTIVITIES = [
     detect_communities_activity,
     summarize_community_activity,
+    *MATERIALIZE_ACTIVITIES,
 ]
 
 __all__ = [

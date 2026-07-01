@@ -12,11 +12,13 @@ calls, not the query hot path.
 from __future__ import annotations
 
 import functools
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.api.auth import require_api_key
+from src.config import settings
 from src.graph import analysis
 
 router = APIRouter(prefix="/admin/graph", tags=["admin"])
@@ -44,13 +46,18 @@ async def graph_pagerank(top_n: int = 20) -> dict:
 
 @router.post("/personalized-pagerank", dependencies=[Depends(require_api_key)])
 async def graph_personalized_pagerank(
-    seeds: list[str], top_n: int = 20,
+    seeds: list[str],
+    top_n: int = 20,
 ) -> dict:
     """Top-N entities by PageRank biased toward the given seed entities
     (relevance/centrality *relative to* the seeds)."""
-    return {"top": await analysis.personalized_pagerank(
-        _store(), seeds, top_n=top_n,
-    )}
+    return {
+        "top": await analysis.personalized_pagerank(
+            _store(),
+            seeds,
+            top_n=top_n,
+        )
+    }
 
 
 @router.post("/components", dependencies=[Depends(require_api_key)])
@@ -61,9 +68,46 @@ async def graph_components() -> dict:
 
 @router.post("/shortest-path", dependencies=[Depends(require_api_key)])
 async def graph_shortest_path(
-    source: str, target: str, max_hops: int = 6,
+    source: str,
+    target: str,
+    max_hops: int = 6,
 ) -> dict:
     """Shortest path between two entities by exact name."""
     return await analysis.shortest_path(
-        _store(), source, target, max_hops=max_hops,
+        _store(),
+        source,
+        target,
+        max_hops=max_hops,
     )
+
+
+@router.post(
+    "/materialize",
+    dependencies=[Depends(require_api_key)],
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Trigger offline analytics materialization (GDS centrality + link-prediction + risk)",
+)
+async def materialize() -> dict[str, str]:
+    """Fire-and-forget: start AnalyticsMaterializeWorkflow on the graph-build queue."""
+    from temporalio.common import WorkflowIDReusePolicy
+
+    from src.analytics.contracts import MaterializeParams
+    from src.workflow.analytics.materialize_workflow import AnalyticsMaterializeWorkflow
+    from src.workflow.client import get_temporal_client
+
+    request_id = uuid.uuid4().hex
+    try:
+        client = await get_temporal_client()
+        handle = await client.start_workflow(
+            AnalyticsMaterializeWorkflow.run,
+            MaterializeParams(),
+            id=f"analytics-materialize-{request_id}",
+            task_queue=settings.temporal.graph_build_task_queue,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        )
+        return {"workflow_id": handle.id, "status": "started"}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"materialize failed to start: {exc}",
+        ) from exc

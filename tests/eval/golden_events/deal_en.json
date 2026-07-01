@@ -1,0 +1,8 @@
+{
+  "text": "On March 1, 2024, Romashka LLC and Lutik Inc signed a supply contract in Moscow. Two weeks later, on March 15, 2024, Romashka LLC filed a lawsuit against Vasilek Group over a payment dispute.",
+  "lang": "en",
+  "expected": [
+    {"event_type": "deal", "participants": ["Romashka", "Lutik"], "event_ts": "2024-03-01"},
+    {"event_type": "lawsuit", "participants": ["Romashka", "Vasilek Group"], "event_ts": "2024-03-15"}
+  ]
+}

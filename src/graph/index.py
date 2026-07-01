@@ -44,8 +44,7 @@ from src.retrieval._common import strip_thinking
 # (``GraphRetriever.afind_entities_by_name``).  Idempotent DDL, safe to
 # run repeatedly / concurrently.
 ENTITY_FULLTEXT_INDEX_CYPHER = (
-    "CREATE FULLTEXT INDEX entity_name_fulltext IF NOT EXISTS "
-    "FOR (e:__Entity__) ON EACH [e.name]"
+    "CREATE FULLTEXT INDEX entity_name_fulltext IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.name]"
 )
 
 
@@ -68,17 +67,13 @@ def ensure_entity_fulltext_index(store) -> bool:
 # Cypher matches entities by the separate `.name` property
 # (``GraphRetriever.awalk`` seed lookup, ER stored-loser cleanup).  Without
 # this index those are full label scans — O(N) at 250k+ entities.
-ENTITY_NAME_INDEX_CYPHER = (
-    "CREATE INDEX entity_name IF NOT EXISTS "
-    "FOR (e:__Entity__) ON (e.name)"
-)
+ENTITY_NAME_INDEX_CYPHER = "CREATE INDEX entity_name IF NOT EXISTS FOR (e:__Entity__) ON (e.name)"
 
 # Range index on `__Entity__.mention_count`.  Backs the incremental-ER
 # window's ``ORDER BY n.mention_count DESC`` so the planner can return the
 # most-mentioned canonicals without sorting the whole label.
 ENTITY_MENTION_COUNT_INDEX_CYPHER = (
-    "CREATE INDEX entity_mention_count IF NOT EXISTS "
-    "FOR (e:__Entity__) ON (e.mention_count)"
+    "CREATE INDEX entity_mention_count IF NOT EXISTS FOR (e:__Entity__) ON (e.mention_count)"
 )
 
 
@@ -146,9 +141,7 @@ def ensure_community_report_vector_index(store, dim: int) -> bool:
     without the native index and fall back to lexical/summary search.
     """
     try:
-        store.structured_query(
-            COMMUNITY_REPORT_VECTOR_INDEX_CYPHER, param_map={"dim": int(dim)}
-        )
+        store.structured_query(COMMUNITY_REPORT_VECTOR_INDEX_CYPHER, param_map={"dim": int(dim)})
         return True
     except Exception as exc:  # broad by design — fail-open
         logger.warning("ensure_community_report_vector_index failed: {e}", e=exc)
@@ -167,9 +160,7 @@ def ensure_community_report_vector_index(store, dim: int) -> bool:
 COMMUNITY_LEVEL_INDEX_CYPHER = (
     "CREATE INDEX community_level IF NOT EXISTS FOR (c:Community) ON (c.level)"
 )
-CHUNK_DOC_ID_INDEX_CYPHER = (
-    "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)"
-)
+CHUNK_DOC_ID_INDEX_CYPHER = "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)"
 
 
 def ensure_community_indexes(store) -> bool:
@@ -190,12 +181,10 @@ def ensure_community_indexes(store) -> bool:
 # parse_and_chunk); the graph post-filter reads them off retrieved chunks,
 # and these indexes keep any future chunk-level date predicate scalable.
 CHUNK_DOC_DATE_INDEX_CYPHER = (
-    "CREATE INDEX chunk_doc_date_epoch IF NOT EXISTS "
-    "FOR (c:Chunk) ON (c.doc_date_epoch)"
+    "CREATE INDEX chunk_doc_date_epoch IF NOT EXISTS FOR (c:Chunk) ON (c.doc_date_epoch)"
 )
 CHUNK_INSERTED_AT_INDEX_CYPHER = (
-    "CREATE INDEX chunk_inserted_at_epoch IF NOT EXISTS "
-    "FOR (c:Chunk) ON (c.inserted_at_epoch)"
+    "CREATE INDEX chunk_inserted_at_epoch IF NOT EXISTS FOR (c:Chunk) ON (c.inserted_at_epoch)"
 )
 
 
@@ -213,6 +202,32 @@ def ensure_chunk_date_indexes(store) -> bool:
     return ok
 
 
+# Range index on ``__Entity__.created_at`` — E1 (Wave 0 first-seen feature).
+# Backs the "what's new" query path that filters entities by epoch-day.
+# NOTE: relationship created_at index needs per-type DDL in Neo4j; deferred
+# (edge first_seen queries scan until added).
+ENTITY_CREATED_AT_INDEX_CYPHER = (
+    "CREATE INDEX entity_created_at IF NOT EXISTS FOR (e:__Entity__) ON (e.created_at)"
+)
+
+
+def ensure_first_seen_indexes(store) -> bool:
+    """Idempotently create the ``created_at`` index on entities (E1 Wave 0).
+
+    Relationship-level ``created_at`` indexing is deferred — Neo4j requires
+    per-type DDL (``FOR ()-[r:TYPE]-()``) which is not yet wired.
+
+    Fail-open like the other ensure-index helpers: any error is logged
+    and swallowed.  Returns True only if the DDL succeeded.
+    """
+    try:
+        store.structured_query(ENTITY_CREATED_AT_INDEX_CYPHER)
+        return True
+    except Exception as exc:  # broad by design — fail-open
+        logger.warning("ensure_first_seen_indexes failed: {e}", e=exc)
+        return False
+
+
 def _parse_triplets_strip_thinking(response: str, **kwargs):
     """Wrap the upstream parser with a `<think>...</think>` stripper.
 
@@ -223,6 +238,7 @@ def _parse_triplets_strip_thinking(response: str, **kwargs):
     to near-zero on qwen3:8b.
     """
     return default_parse_triplets_fn(strip_thinking(response), **kwargs)
+
 
 KGExtractor = TransformComponent
 
@@ -383,7 +399,7 @@ _MULTILINGUAL_TRIPLET_EXTRACT_PROMPT = (
     "4. Predicate can be in source language or English — prefer source.\n"
     "5. Do not invent entities not present in the text.\n"
     "6. Skip stop-words and pronouns as standalone subjects/objects.\n"
-    "7. Do NOT output literal placeholders like \"Subject\"/\"Object\" — "
+    '7. Do NOT output literal placeholders like "Subject"/"Object" — '
     "those are template markers, not values to copy.\n"
     "\n"
     "--- Examples (multiple languages, document types) ---\n"

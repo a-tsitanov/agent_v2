@@ -1,0 +1,8 @@
+{
+  "text": "On April 2, 2024, a data breach at Vostok Bank exposed thousands of customer records. Following an investigation, Vostok Bank paid a 2 million dollar fine to the Central Bank on April 20, 2024.",
+  "lang": "en",
+  "expected": [
+    {"event_type": "incident", "participants": ["Vostok Bank"], "event_ts": "2024-04-02"},
+    {"event_type": "payment", "participants": ["Vostok Bank", "Central Bank"], "event_ts": "2024-04-20"}
+  ]
+}

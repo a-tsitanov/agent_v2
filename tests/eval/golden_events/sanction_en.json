@@ -1,0 +1,7 @@
+{
+  "text": "On May 5, 2024, the US Treasury imposed sanctions on Orion Trading for violating export controls tied to a shipment routed through Cyprus.",
+  "lang": "en",
+  "expected": [
+    {"event_type": "sanction", "participants": ["US Treasury", "Orion Trading"], "event_ts": "2024-05-05"}
+  ]
+}

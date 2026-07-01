@@ -54,9 +54,14 @@ from src.workflow.activities import (
     SEARCH_ACTIVITIES,
     synthesize_answer,
 )
+from src.workflow.analytics.activities import ANALYTICS_ACTIVITIES, ANALYTICS_LARGE_ACTIVITIES
+from src.workflow.analytics.materialize_workflow import AnalyticsMaterializeWorkflow
+from src.workflow.analytics.workflow import AnalyticalQueryWorkflow
 from src.workflow.document_ingest import DocumentIngestWorkflow
-from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
 from src.workflow.graph_build import GraphBuildWorkflow
+from src.workflow.ingest_scheduler import IngestSchedulerWorkflow
+from src.workflow.monitor.activities import MONITOR_ACTIVITIES
+from src.workflow.monitor.workflow import MonitorSweepWorkflow
 from src.workflow.search.activities import (
     GRAPH_BUILD_ACTIVITIES,
     SEARCH_V2_ACTIVITIES,
@@ -67,14 +72,34 @@ from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 from src.workflow.wiki.wiki_sweep import (
-    WikiSweepWorkflow, select_dirty_entities, write_entity_article,
+    WikiSweepWorkflow,
+    select_dirty_entities,
+    write_entity_article,
 )
 
 # Canonical pool groups, in fork order.  The index also fixes each
 # process's Prometheus port offset.
 WORKER_GROUPS: list[str] = [
-    "main", "llm", "merge", "search", "large", "graph_build", "wiki",
+    "main",
+    "llm",
+    "merge",
+    "search",
+    "large",
+    "graph_build",
+    "wiki",
     "scheduler",
+    "monitor",
+]
+
+# Module-level workflow/activity lists — referenced in _build_worker and
+# inspected by tests without a live Temporal connection.
+SEARCH_WORKFLOWS = [
+    SearchOrchestratorWorkflow,
+    SubQueryRetrievalWorkflow,
+    GlobalSearchWorkflow,
+    DriftSearchWorkflow,
+    AutoSearchWorkflow,
+    AnalyticalQueryWorkflow,
 ]
 
 
@@ -89,8 +114,7 @@ def select_groups(spec: str | None) -> list[str]:
     unknown = requested - set(WORKER_GROUPS)
     if unknown:
         raise ValueError(
-            f"unknown WORKER_GROUPS: {sorted(unknown)} "
-            f"(valid: {WORKER_GROUPS})",
+            f"unknown WORKER_GROUPS: {sorted(unknown)} (valid: {WORKER_GROUPS})",
         )
     return [g for g in WORKER_GROUPS if g in requested]
 
@@ -125,14 +149,17 @@ def _build_runtime(group: str) -> Runtime | None:
         runtime = Runtime(
             telemetry=TelemetryConfig(
                 metrics=PrometheusConfig(
-                    bind_address=bind, durations_as_seconds=True,
+                    bind_address=bind,
+                    durations_as_seconds=True,
                 ),
             ),
         )
-    except Exception as exc:  # noqa: BLE001 — metrics are best-effort
+    except Exception as exc:
         logger.warning(
-            "worker[{g}]  prometheus bind {a} failed ({e}) — "
-            "running WITHOUT metrics", g=group, a=bind, e=exc,
+            "worker[{g}]  prometheus bind {a} failed ({e}) — running WITHOUT metrics",
+            g=group,
+            a=bind,
+            e=exc,
         )
         return None
     logger.info("worker[{g}]  prometheus exporter  addr={a}", g=group, a=bind)
@@ -144,7 +171,8 @@ def _build_worker(client: Client, group: str) -> Worker:
     t = settings.temporal
     if group == "main":
         return Worker(
-            client, task_queue=t.task_queue,
+            client,
+            task_queue=t.task_queue,
             workflows=[DocumentIngestWorkflow],
             activities=MAIN_ACTIVITIES,
             max_concurrent_activities=t.activity_concurrency,
@@ -155,50 +183,66 @@ def _build_worker(client: Client, group: str) -> Worker:
         # task processing. Workflow-only (no activities); it starts the
         # DocumentIngestWorkflow CHILDREN on `task_queue` (main).
         return Worker(
-            client, task_queue=t.scheduler_task_queue,
+            client,
+            task_queue=t.scheduler_task_queue,
             workflows=[IngestSchedulerWorkflow],
         )
     if group == "llm":
         # extract_kg only — concurrency throttled further by the LLMPool.
         return Worker(
-            client, task_queue=t.llm_task_queue, activities=EXTRACT_ACTIVITIES,
+            client,
+            task_queue=t.llm_task_queue,
+            activities=EXTRACT_ACTIVITIES,
             max_concurrent_activities=t.llm_activity_concurrency,
         )
     if group == "merge":
         return Worker(
-            client, task_queue=t.merge_task_queue,
-            workflows=[GraphBuildWorkflow], activities=MERGE_ACTIVITIES,
+            client,
+            task_queue=t.merge_task_queue,
+            workflows=[GraphBuildWorkflow],
+            activities=MERGE_ACTIVITIES,
             max_concurrent_activities=t.merge_activity_concurrency,
         )
     if group == "search":
         return Worker(
-            client, task_queue=t.search_task_queue,
-            workflows=[
-                SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow,
-                GlobalSearchWorkflow, DriftSearchWorkflow, AutoSearchWorkflow,
-            ],
-            activities=SEARCH_ACTIVITIES + SEARCH_V2_ACTIVITIES,
+            client,
+            task_queue=t.search_task_queue,
+            workflows=SEARCH_WORKFLOWS,
+            activities=SEARCH_ACTIVITIES + SEARCH_V2_ACTIVITIES + ANALYTICS_ACTIVITIES,
             max_concurrent_activities=t.search_activity_concurrency,
         )
     if group == "large":
         # large-tier synthesis only; the orchestrator pins synthesize_answer
         # here via execute_activity(task_queue=large_task_queue).
         return Worker(
-            client, task_queue=t.large_task_queue, activities=[synthesize_answer],
+            client,
+            task_queue=t.large_task_queue,
+            activities=[synthesize_answer, *ANALYTICS_LARGE_ACTIVITIES],
             max_concurrent_activities=t.large_activity_concurrency,
         )
     if group == "graph_build":
         return Worker(
-            client, task_queue=t.graph_build_task_queue,
-            workflows=[CommunityBuildWorkflow], activities=GRAPH_BUILD_ACTIVITIES,
+            client,
+            task_queue=t.graph_build_task_queue,
+            workflows=[CommunityBuildWorkflow, AnalyticsMaterializeWorkflow],
+            activities=GRAPH_BUILD_ACTIVITIES,
             max_concurrent_activities=t.graph_build_activity_concurrency,
         )
     if group == "wiki":
         return Worker(
-            client, task_queue=settings.wiki.task_queue,
+            client,
+            task_queue=settings.wiki.task_queue,
             workflows=[WikiSweepWorkflow],
             activities=[select_dirty_entities, write_entity_article],
             max_concurrent_activities=settings.wiki.activity_concurrency,
+        )
+    if group == "monitor":
+        return Worker(
+            client,
+            task_queue=settings.monitor.task_queue,
+            workflows=[MonitorSweepWorkflow],
+            activities=MONITOR_ACTIVITIES,
+            max_concurrent_activities=settings.monitor.activity_concurrency,
         )
     raise ValueError(f"unknown group: {group!r}")
 
@@ -208,10 +252,12 @@ async def _run_one(group: str) -> None:
     # Surface LiteLLM model-config mistakes at boot, not at the first
     # activity that hits the proxy and gets a 500.
     from src.observability.litellm_models import validate_litellm_models
+
     validate_litellm_models(source=f"worker:{group}")
 
     if group == "main":
         from src.config import settings as _settings
+
         problems = _settings.preflight(_settings)
         if problems:
             msg = "preflight: " + "; ".join(problems)
@@ -229,12 +275,15 @@ async def _run_one(group: str) -> None:
     worker = _build_worker(client, group)
     logger.info(
         "worker[{g}]  started  target={t}  pid={p}",
-        g=group, t=settings.temporal.target, p=os.getpid(),
+        g=group,
+        t=settings.temporal.target,
+        p=os.getpid(),
     )
     try:
         await worker.run()
     finally:
         from src.storage.pg_pool import close_pg_pool
+
         await close_pg_pool()
 
 
@@ -248,7 +297,8 @@ def _child_main(group: str) -> None:
         # Surface the real cause in the log stream — otherwise the
         # launcher's "stopping siblings" buries it.
         logger.opt(exception=True).error(
-            "worker[{g}]  crashed during startup/run", g=group,
+            "worker[{g}]  crashed during startup/run",
+            g=group,
         )
         raise
 
@@ -267,7 +317,9 @@ def _run_launcher(groups: Sequence[str]) -> None:
         procs.append(p)
     logger.info(
         "worker launcher  pools={n}  groups={g}  pid={p}",
-        n=len(procs), g=list(groups), p=os.getpid(),
+        n=len(procs),
+        g=list(groups),
+        p=os.getpid(),
     )
 
     stopping = {"flag": False}
@@ -276,8 +328,7 @@ def _run_launcher(groups: Sequence[str]) -> None:
         if stopping["flag"]:
             return
         stopping["flag"] = True
-        logger.info("worker launcher  signal={s}  stopping {n} pools",
-                    s=signum, n=len(procs))
+        logger.info("worker launcher  signal={s}  stopping {n} pools", s=signum, n=len(procs))
         for p in procs:
             if p.is_alive():
                 p.terminate()
@@ -293,7 +344,8 @@ def _run_launcher(groups: Sequence[str]) -> None:
             if not p.is_alive():
                 logger.warning(
                     "worker[{n}]  exited code={c} — stopping siblings",
-                    n=p.name, c=p.exitcode,
+                    n=p.name,
+                    c=p.exitcode,
                 )
                 _shutdown(signal.SIGTERM, None)
                 break

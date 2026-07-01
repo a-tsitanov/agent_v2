@@ -38,22 +38,23 @@ from llama_index.core.graph_stores.types import (
     KG_NODES_KEY,
     KG_RELATIONS_KEY,
 )
-from llama_index.core.llms import LLM
 from llama_index.core.schema import BaseNode, MetadataMode, TransformComponent
 from loguru import logger
 from pydantic import ConfigDict, Field
 
+from src.graph.event_extract import events_to_graph
 from src.graph.lightrag_parse import (
+    _normalize_entity_name,
     ensure_orphan_entities,
     parse_lightrag_output,
     parsed_relations_to_relations,
-    _normalize_entity_name,
 )
 from src.graph.lightrag_prompts import (
     COMPLETE_DELIM,
     ENTITY_CONTINUE_EXTRACTION_USER,
     ENTITY_EXTRACTION_SYSTEM,
     ENTITY_EXTRACTION_USER,
+    EVENT_INSTRUCTION,
     EXAMPLES_DEFAULT,
     TUPLE_DELIM,
     render_examples,
@@ -74,9 +75,8 @@ def _extraction_text(node: BaseNode) -> str:
     as well.  A substring guard prevents double-inclusion on the
     ``MetadataMode.LLM`` path (which already carries the augment).
     """
-    chunk_text = (
-        (node.metadata or {}).get("translated_text")
-        or node.get_content(metadata_mode=MetadataMode.LLM)
+    chunk_text = (node.metadata or {}).get("translated_text") or node.get_content(
+        metadata_mode=MetadataMode.LLM
     )
     augment = (node.metadata or {}).get(_AUGMENT_METADATA_KEY) or ""
     if augment and augment not in chunk_text:
@@ -126,7 +126,11 @@ class LightRAGExtractor(TransformComponent):
     # ── TransformComponent contract ─────────────────────────────────
 
     def __call__(
-        self, nodes: list[BaseNode], *, show_progress: bool = False, **kwargs: Any,
+        self,
+        nodes: list[BaseNode],
+        *,
+        show_progress: bool = False,
+        **kwargs: Any,
     ) -> list[BaseNode]:
         """Sync entry point.  Forwards to async via asyncio.run.
 
@@ -139,7 +143,11 @@ class LightRAGExtractor(TransformComponent):
         return asyncio.run(self.acall(nodes, show_progress=show_progress, **kwargs))
 
     async def acall(
-        self, nodes: list[BaseNode], *, show_progress: bool = False, **kwargs: Any,
+        self,
+        nodes: list[BaseNode],
+        *,
+        show_progress: bool = False,
+        **kwargs: Any,
     ) -> list[BaseNode]:
         jobs = [self._aextract(n) for n in nodes]
         return await run_jobs(
@@ -152,6 +160,10 @@ class LightRAGExtractor(TransformComponent):
     # ── per-chunk extract + gleaning ─────────────────────────────────
 
     async def _aextract(self, node: BaseNode) -> BaseNode:
+        from src.config import settings as _settings
+
+        events_enabled: bool = _settings.events.extraction_enabled
+
         chunk_text = _extraction_text(node)
         entity_types_str = ", ".join(self.entity_types)
         examples_rendered = render_examples(
@@ -166,6 +178,11 @@ class LightRAGExtractor(TransformComponent):
             tuple_delimiter=TUPLE_DELIM,
             completion_delimiter=COMPLETE_DELIM,
         )
+        if events_enabled:
+            system_msg = system_msg + EVENT_INSTRUCTION.format(
+                tuple_delimiter=TUPLE_DELIM,
+                completion_delimiter=COMPLETE_DELIM,
+            )
         user_msg = ENTITY_EXTRACTION_USER.format(
             entity_types=entity_types_str,
             input_text=chunk_text,
@@ -180,10 +197,11 @@ class LightRAGExtractor(TransformComponent):
         # 1. Initial extraction call.
         try:
             initial_text = await self._chat(system_msg, user_msg)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # broad catch — LLM call can fail in many ways
             logger.warning(
                 "lightrag-extract chunk={c} initial failed: {err}",
-                c=chunk_id, err=exc,
+                c=chunk_id,
+                err=exc,
             )
             # Preserve the contract — downstream readers expect the
             # keys to be present (possibly empty).
@@ -211,10 +229,11 @@ class LightRAGExtractor(TransformComponent):
             )
             try:
                 glean_text = await self._chat_history(history, glean_user)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # broad catch — LLM call can fail in many ways
                 logger.warning(
                     "lightrag-extract chunk={c} gleaning failed: {err}",
-                    c=chunk_id, err=exc,
+                    c=chunk_id,
+                    err=exc,
                 )
                 break
             glean = parse_lightrag_output(
@@ -235,9 +254,7 @@ class LightRAGExtractor(TransformComponent):
         # 3. Resolve relation src/tgt names → entity ids; synthesise
         #    orphan entities for any unreferenced endpoint so the
         #    relation can still be stored.
-        id_by_name: dict[str, str] = {
-            _normalize_entity_name(e.name): e.id for e in parsed.entities
-        }
+        id_by_name: dict[str, str] = {_normalize_entity_name(e.name): e.id for e in parsed.entities}
         orphans = ensure_orphan_entities(
             parsed.relations,
             id_by_name,
@@ -249,6 +266,11 @@ class LightRAGExtractor(TransformComponent):
             id_by_name,
             source_chunk_id=chunk_id,
         )
+
+        if events_enabled and parsed.events:
+            ev_nodes, ev_rels = events_to_graph(parsed.events, id_by_name=id_by_name)
+            parsed.entities.extend(ev_nodes)
+            relations.extend(ev_rels)
 
         node.metadata[KG_NODES_KEY] = parsed.entities
         node.metadata[KG_RELATIONS_KEY] = relations
@@ -265,11 +287,11 @@ class LightRAGExtractor(TransformComponent):
         return resp.message.content or ""
 
     async def _chat_history(
-        self, history: list[ChatMessage], next_user_msg: str,
+        self,
+        history: list[ChatMessage],
+        next_user_msg: str,
     ) -> str:
-        messages = list(history) + [
-            ChatMessage(role=MessageRole.USER, content=next_user_msg),
-        ]
+        messages = [*history, ChatMessage(role=MessageRole.USER, content=next_user_msg)]
         resp = await self.llm.achat(messages)
         return resp.message.content or ""
 

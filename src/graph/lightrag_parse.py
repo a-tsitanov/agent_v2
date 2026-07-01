@@ -16,7 +16,6 @@ chunk's output.
 from __future__ import annotations
 
 import re
-import uuid
 from dataclasses import dataclass, field
 
 from llama_index.core.graph_stores.types import EntityNode, Relation
@@ -24,16 +23,15 @@ from llama_index.core.graph_stores.types import EntityNode, Relation
 from src.graph.lightrag_prompts import COMPLETE_DELIM, TUPLE_DELIM
 from src.retrieval._common import strip_thinking
 
-
 # ── Names: normalisation helpers ─────────────────────────────────────
 
 
 # Anything outside this set goes to `_` in a Cypher-safe relation label.
 _CYPHER_LABEL_RE = re.compile(r"[^A-Z0-9_]+")
 
-# Match a leading "ent"/"rel" prefix optionally followed by quotes — qwen3
+# Match a leading "ent"/"rel"/"event" prefix optionally followed by quotes — qwen3
 # sometimes wraps the line keyword in quotes (LightRAG's own examples too).
-_LEADING_KIND_RE = re.compile(r'^[\s"]*"?(?P<kind>entity|relation)"?[\s"]*$', re.IGNORECASE)
+_LEADING_KIND_RE = re.compile(r'^[\s"]*"?(?P<kind>entity|relation|event)"?[\s"]*$', re.IGNORECASE)
 
 
 def _normalize_entity_name(raw: str) -> str:
@@ -115,23 +113,38 @@ def _parse_temporal(raw: str) -> tuple[str | None, str | None]:
 
 
 @dataclass
+class ParsedEvent:
+    """Intermediate parsed event tuple."""
+
+    event_type: str
+    trigger: str
+    participants: list[str]
+    event_ts: str | None
+    location: str | None
+    polarity: str
+    source_chunk_id: str
+    file_path: str
+
+
+@dataclass
 class ParsedRelation:
     """Intermediate parsed relation before resolving names → node ids."""
 
     source_name: str
     target_name: str
-    keywords: str           # raw "kw1, kw2"
+    keywords: str  # raw "kw1, kw2"
     description: str
     weight: float = 1.0
-    polarity: str = "affirmed"        # affirmed | negated | uncertain
-    valid_from: str | None = None     # window start (opaque ISO string)
-    valid_to: str | None = None       # window end
+    polarity: str = "affirmed"  # affirmed | negated | uncertain
+    valid_from: str | None = None  # window start (opaque ISO string)
+    valid_to: str | None = None  # window end
 
 
 @dataclass
 class ParseResult:
     entities: list[EntityNode] = field(default_factory=list)
     relations: list[ParsedRelation] = field(default_factory=list)
+    events: list[ParsedEvent] = field(default_factory=list)
 
 
 def parse_lightrag_output(
@@ -195,7 +208,49 @@ def parse_lightrag_output(
                 continue
             out.relations.append(rel)
 
+        elif kind == "event":
+            ev = _parse_event(
+                fields=fields,
+                source_chunk_id=source_chunk_id,
+                file_path=file_path,
+            )
+            if ev is None:
+                continue
+            out.events.append(ev)
+
     return out
+
+
+def _parse_event(
+    fields: list[str],
+    *,
+    source_chunk_id: str | None,
+    file_path: str | None,
+) -> ParsedEvent | None:
+    """Parse an event line.
+
+    Full format: event<|#|>event_type<|#|>trigger<|#|>participants(;)<|#|>time<|#|>location<|#|>polarity
+    Fields[0] is the `event` kind keyword; data starts at fields[1].
+    """
+    if len(fields) < 3:
+        return None
+    event_type = (fields[1] if len(fields) > 1 else "").strip() or "event"
+    trigger = (fields[2] if len(fields) > 2 else "").strip()
+    raw_parts = fields[3] if len(fields) > 3 else ""
+    participants = [p.strip() for p in raw_parts.split(";") if p.strip()]
+    event_ts = (fields[4].strip() or None) if len(fields) > 4 else None
+    location = (fields[5].strip() or None) if len(fields) > 5 else None
+    polarity = _normalize_polarity(fields[6]) if len(fields) > 6 else "affirmed"
+    return ParsedEvent(
+        event_type=event_type,
+        trigger=trigger,
+        participants=participants,
+        event_ts=event_ts,
+        location=location,
+        polarity=polarity,
+        source_chunk_id=source_chunk_id or "",
+        file_path=file_path or "",
+    )
 
 
 def _parse_entity(
@@ -245,9 +300,7 @@ def _parse_relation(fields: list[str]) -> ParsedRelation | None:
     if not description.strip():
         return None
     polarity = _normalize_polarity(fields[4]) if len(fields) > 4 else "affirmed"
-    valid_from, valid_to = (
-        _parse_temporal(fields[5]) if len(fields) > 5 else (None, None)
-    )
+    valid_from, valid_to = _parse_temporal(fields[5]) if len(fields) > 5 else (None, None)
     return ParsedRelation(
         source_name=src,
         target_name=tgt,
@@ -289,12 +342,14 @@ def parsed_relations_to_relations(
         }
         if source_chunk_id:
             properties["source_chunk_id"] = source_chunk_id
-        out.append(Relation(
-            label=label,
-            source_id=sid,
-            target_id=tid,
-            properties=properties,
-        ))
+        out.append(
+            Relation(
+                label=label,
+                source_id=sid,
+                target_id=tid,
+                properties=properties,
+            )
+        )
     return out
 
 
@@ -335,6 +390,7 @@ def ensure_orphan_entities(
 
 __all__ = [
     "ParseResult",
+    "ParsedEvent",
     "ParsedRelation",
     "ensure_orphan_entities",
     "parse_lightrag_output",
