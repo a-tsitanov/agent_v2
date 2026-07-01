@@ -18,9 +18,11 @@ def build_burst_cypher(*, watched_only: bool) -> str:
         "WHERE (r.polarity IS NULL OR r.polarity <> 'negated') "
         "AND e.created_at >= $since_baseline "
         f"{watched}"
+        # count(DISTINCT e) so a duplicate (event)-[:PARTICIPATED_IN]->(participant)
+        # edge does not double-count the same event for that (entity, event_type).
         "WITH p.name AS entity, e.event_type AS event_type, "
-        "sum(CASE WHEN e.created_at >= $since_recent THEN 1 ELSE 0 END) AS recent, "
-        "sum(CASE WHEN e.created_at < $since_recent THEN 1 ELSE 0 END) AS baseline_total "
+        "count(DISTINCT CASE WHEN e.created_at >= $since_recent THEN e END) AS recent, "
+        "count(DISTINCT CASE WHEN e.created_at < $since_recent THEN e END) AS baseline_total "
         "WITH entity, event_type, recent, "
         "(toFloat(baseline_total) / $baseline_windows) AS baseline_rate "
         "WITH entity, event_type, recent, baseline_rate, "
