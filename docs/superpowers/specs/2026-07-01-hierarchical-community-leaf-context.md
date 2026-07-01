@@ -105,3 +105,17 @@ MATCH (c:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(comm:Community)
 - Инкрементальная поддержка иерархии, партиционирование кластеризации ([[community-detection-offload]] «вне scope»).
 - Изменение алгоритма детекции / бэкенда (gds↔leidenalg).
 - Дедуп member-context между уровнями.
+
+## Findings аудита поиска (2026-07-01)
+
+Вопрос: использует ли поиск уровни иерархии. Разбор `map_communities` (`src/workflow/search/activities/global_search.py`) + `community_dynamic_selection` (`src/config.py:662`).
+
+Три режима выбора сообществ (флаг `AGENT_COMMUNITY_DYNAMIC_SELECTION`, **default `lexical`**):
+- **`lexical` (default)** и **`semantic`** — читают summary на ОДНОМ фиксированном уровне `params.level` (`_LEVEL_CYPHER` `MATCH (c:Community {level:$level})`, semantic — ANN по `report_vec` того же уровня). Иерархию НЕ используют: берут один срез (по умолчанию level 0).
+- **`descent` (v2, `select_communities_descent`, global_search.py:174)** — ЕДИНСТВЕННЫЙ режим, реально идущий по иерархии: сидит от level 0 (`_DESCENT_ROOT_CYPHER`) и спускается через `PARENT_OF` к мелким уровням, читая `ch.summary` (`_DESCENT_CHILDREN_CYPHER`). Fix Task 1/2 как раз делает эти мелкие summary валидными → предпосылка для descent выполнена.
+
+**Вывод:** при дефолтном `lexical` иерархия поиском НЕ используется — она нужна только режиму `descent`. Чтобы задействовать иерархию (и выигрыш от leaf-context фикса), надо `AGENT_COMMUNITY_DYNAMIC_SELECTION=descent`.
+
+**Follow-up-риск (усиление того, что заметили в Task 2):** `map_communities` → `documents_for_communities` (`global_wf.py:259`) отдаёт выбранные community `id`. Task 2 заскоупил `_DOCS_FOR_COMMUNITIES_CYPHER` на `{level:0}` — это ВЕРНО для `lexical`/`semantic` (они читают level 0). Но `descent` возвращает сообщества level>0 → их `id` при level-0-скоупе не совпадут / сколлизят (id уникален лишь в пределах уровня). **Т.е. включение `descent` требует плюмбинга `(id, level)` парой в `documents_for_communities` (вместо `id IN $ids`).** Это отдельный follow-up, вне текущего плана.
+
+Итоговая рекомендация: хочешь пользоваться иерархией на проде — (1) `AGENT_COMMUNITY_DYNAMIC_SELECTION=descent`, (2) сделать `(id, level)`-плюмбинг в documents-for-communities. Иначе многоуровневая сборка поиском не читается (одноуровневый срез).
