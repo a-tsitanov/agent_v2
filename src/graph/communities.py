@@ -190,14 +190,14 @@ MATCH (e:__Entity__ {name: member_name})
 MERGE (e)-[:IN_COMMUNITY]->(c)
 """
 
-# Sub-community MERGE for level k > 0 (the finer dendrogram columns).  No
-# entity ``IN_COMMUNITY`` links at level > 0 — only level 0 carries those
-# (back-compat).  Instead we wire ``(parent:Community {level:$level-1})-
-# [:PARENT_OF]->(this)`` coarser→finer so the dendrogram is navigable.  The
-# parent is MATCHed (NOT merged): the caller writes communities
-# coarsest-first (``_group_by_levels`` sorts by level ascending), so the
-# level-$level-1 parent already exists by the time a level-$level child is
-# written — ordering-DEPENDENT by design.
+# Sub-community MERGE for level k > 0 (the finer dendrogram columns).  Now
+# writes entity ``IN_COMMUNITY`` links at all levels (not just level 0) so
+# that finest (leaf) communities have member context for summarisation.
+# Also wire ``(parent:Community {level:$level-1})-[:PARENT_OF]->(this)``
+# coarser→finer so the dendrogram is navigable.  The parent is MATCHed (NOT
+# merged): the caller writes communities coarsest-first (``_group_by_levels``
+# sorts by level ascending), so the level-$level-1 parent already exists by
+# the time a level-$level child is written — ordering-DEPENDENT by design.
 _MERGE_SUBCOMMUNITY_CYPHER = """
 MERGE (c:Community {id: $community_id, level: $level})
 SET c.member_count = $member_count, c.members_hash = $members_hash,
@@ -209,6 +209,13 @@ FOREACH (_ IN CASE WHEN $carry_report IS NULL THEN [] ELSE [1] END |
 WITH c
 MATCH (p:Community {id: $parent_id, level: $level - 1})
 MERGE (p)-[:PARENT_OF]->(c)
+WITH c
+OPTIONAL MATCH (c)<-[old:IN_COMMUNITY]-(:__Entity__)
+DELETE old
+WITH c
+UNWIND $members AS member_name
+MATCH (e:__Entity__ {name: member_name})
+MERGE (e)-[:IN_COMMUNITY]->(c)
 """
 
 
@@ -646,7 +653,7 @@ async def detect_hierarchy(
                     },
                 )
             else:
-                # Finer: PARENT_OF edge, no entity links.
+                # Finer: PARENT_OF edge + member IN_COMMUNITY links (leaf context).
                 await asyncio.to_thread(
                     _run_query, store, _MERGE_SUBCOMMUNITY_CYPHER,
                     {
@@ -654,6 +661,7 @@ async def detect_hierarchy(
                         "level": comm.level,
                         "member_count": comm.member_count,
                         "members_hash": comm.members_hash,
+                        "members": comm.members,
                         "parent_id": comm.parent_id,
                         **carry,
                     },
