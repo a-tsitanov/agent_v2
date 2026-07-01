@@ -846,6 +846,33 @@ class MonitorSettings(BaseSettings):
     risk_rise_delta: float = Field(
         default=0.1, gt=0.0, le=1.0, description="Порог роста risk_score для алерта"
     )
+    burst_enabled: bool = Field(
+        default=False, description="Включить burst-детектор событий в монитор-свипе (E3)"
+    )
+    burst_window_days: int = Field(
+        default=7, ge=1, description="Окно (дни) для подсчёта недавних событий в burst-детекторе"
+    )
+    burst_baseline_windows: int = Field(
+        default=4, ge=1, description="Сколько предыдущих окон усреднять как базовую ставку burst"
+    )
+    burst_min_count: int = Field(
+        default=2,
+        ge=1,
+        description="Мин. число недавних событий, чтобы пара (сущность,тип) считалась всплеском",
+    )
+    burst_ratio: float = Field(
+        default=3.0, gt=1.0, description="Порог burst_score (recent/base) для алерта о всплеске"
+    )
+    webhook_url: str = Field(
+        default="",
+        description="URL генеричного webhook для доставки алертов (пусто — доставка выключена)",
+    )
+    webhook_timeout_s: float = Field(
+        default=5.0, gt=0.0, description="Таймаут POST на webhook доставки алертов, сек"
+    )
+    deliver_batch: int = Field(
+        default=100, ge=1, description="Сколько непушенных алертов доставлять за один свип"
+    )
 
 
 class ClassifierSettings(BaseSettings):
