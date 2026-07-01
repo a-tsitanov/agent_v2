@@ -23,7 +23,7 @@ from src.workflow.contracts import (
 # caution as the GDS Cypher in src/graph/communities.py). Verify the chunk
 # doc_id property name on the live store before relying on it.
 _DOCS_FOR_COMMUNITIES_CYPHER = """
-MATCH (c:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(comm:Community)
+MATCH (c:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(comm:Community {level: 0})
 WHERE comm.id IN $ids
 RETURN DISTINCT c.doc_id AS doc_id
 """
