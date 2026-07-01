@@ -1,5 +1,26 @@
 services:
 
+  # ── Ingest queue: RabbitMQ (INGEST_QUEUE_BACKEND=rabbitmq) ──────────
+  # Opt-in via `--profile rabbitmq` — mirrors docker-compose.prod.yml.
+  rabbitmq:
+    image: rabbitmq:3-management
+    profiles: ["rabbitmq"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
   # ── Infrastructure: etcd (Milvus metadata) ──────────────────────────
   etcd:
     image: quay.io/coreos/etcd:v3.5.16
@@ -363,6 +384,7 @@ services:
       temporal: {condition: service_started}
 
 volumes:
+  rabbitmq_data:
   etcd_data:
   minio_data:
   milvus_data:
