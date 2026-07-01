@@ -136,3 +136,13 @@ class MonitorResult(_Frozen):
     risk_rise_alerts: int = 0
     burst_alerts: int = 0
     error: str = ""
+
+
+class DeliverIn(_Frozen):
+    cap: int = 100
+
+
+class DeliverResult(_Frozen):
+    delivered: int = 0
+    failed: int = 0
+    error: str = ""

@@ -17,13 +17,14 @@ from typing import Any
 from loguru import logger
 from temporalio import activity
 
-from src.analytics.contracts import MonitorIn, MonitorResult
+from src.analytics.contracts import DeliverIn, DeliverResult, MonitorIn, MonitorResult
 from src.analytics.events_burst import build_burst_cypher
 from src.config import settings
 from src.graph.alerts import upsert_alert
 from src.graph.store import build_neo4j_graph_store
 from src.retrieval.date_filters import today_epoch_days
 from src.workflow.heartbeat import heartbeat_every
+from src.workflow.monitor.delivery import post_alert
 
 # Maximum rows per sweep pass — keeps a single sweep bounded even on large graphs.
 _TOP_N = 200
@@ -146,4 +147,45 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
         return MonitorResult(error=str(exc))
 
 
-MONITOR_ACTIVITIES = [detect_alerts]
+_UNPUSHED = (
+    "MATCH (a:Alert) WHERE a.pushed_at IS NULL "
+    "RETURN a.key AS key, a.kind AS kind, a.entity AS entity, "
+    "a.detail AS detail, a.created_at AS created_at "
+    "ORDER BY a.created_at DESC LIMIT $cap"
+)
+_MARK_PUSHED = "MATCH (a:Alert {key:$key}) SET a.pushed_at = $now"
+
+
+@activity.defn
+async def deliver_alerts(p: DeliverIn) -> DeliverResult:
+    """Deliver unpushed :Alert records to the configured webhook; mark pushed_at. Fail-soft."""
+    url = settings.monitor.webhook_url
+    if not url:
+        return DeliverResult(delivered=0)
+    try:
+        store = _get_store()
+        now = today_epoch_days()
+        delivered = 0
+        failed = 0
+        async with heartbeat_every(30.0, {"stage": "deliver"}):
+            rows = await asyncio.to_thread(
+                store.structured_query, _UNPUSHED, param_map={"cap": p.cap}
+            )
+            for r in rows:
+                ok = await post_alert(url, dict(r), timeout_s=settings.monitor.webhook_timeout_s)
+                if ok:
+                    await asyncio.to_thread(
+                        store.structured_query,
+                        _MARK_PUSHED,
+                        param_map={"key": r["key"], "now": now},
+                    )
+                    delivered += 1
+                else:
+                    failed += 1
+        return DeliverResult(delivered=delivered, failed=failed)
+    except Exception as exc:
+        logger.warning("deliver_alerts failed: {e}", e=exc)
+        return DeliverResult(error=str(exc))
+
+
+MONITOR_ACTIVITIES = [detect_alerts, deliver_alerts]
