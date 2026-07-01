@@ -1,0 +1,170 @@
+I'll verify the current state of Spring Data OpenSearch and its Spring Boot 4 compatibility before giving you code, since version details matter a lot here.Let me check the compatibility matrix and current version details from the official repo.I have the compatibility matrix now. Let me verify the exact configuration properties the starter's auto-configuration uses, since those are the config details you need to get right.Let me confirm the Spring Boot 4 package name for the auto-configuration class, since Boot 4 repackaged auto-configurations into new modules.Let me confirm the exact class name in Spring Boot 4, since the naming changed along with the package.Отличный вопрос — тут есть пара неочевидных моментов именно для Spring Boot 4 (переехали пакеты автоконфигураций) и для чтения из data stream. Разберу по шагам.
+
+## Версии (это важно — цифры поменялись под Boot 4)
+
+Стартер называется `org.opensearch.client:spring-data-opensearch-starter`. Актуальная матрица совместимости из репозитория проекта:
+
+| Spring Boot | spring-data-opensearch(-starter) | Spring Data Elasticsearch | Spring Framework | JDK |
+|---|---|---|---|---|
+| 4.1.x | 3.1.x | 6.1.x | 7.0.x | 21+ |
+| 4.0.x | 3.0.x | 6.0.x | 7.0.x | 21+ |
+
+Spring Data OpenSearch следует релизной модели Spring Data Elasticsearch / Spring Boot и построен поверх Spring Data Elasticsearch — поэтому все аннотации сущностей и репозиториев берутся из пакетов `spring-data-elasticsearch`. Дальше примеры под **Boot 4.1 + starter 3.1.0** (для 4.0 просто поставьте 3.0.x).
+
+## 1. Зависимость (Maven)
+
+По умолчанию стартер тянет `RestHighLevelClient` — для чтения этого более чем достаточно, и настраивается он одними свойствами.
+
+```xml
+<properties>
+    <java.version>21</java.version>
+</properties>
+
+<dependencies>
+    <dependency>
+        <groupId>org.opensearch.client</groupId>
+        <artifactId>spring-data-opensearch-starter</artifactId>
+        <version>3.1.0</version>
+    </dependency>
+</dependencies>
+```
+
+## 2. application.yml
+
+Ключевой нюанс: префикс свойств — `opensearch.*` (не `spring.opensearch` и не `spring.elasticsearch`). Это подтверждается официальным примером в репозитории:
+
+```yaml
+opensearch:
+  uris: https://localhost:9200
+  username: admin
+  password: ${OPENSEARCH_PASSWORD}
+  # доступны также connection-timeout, socket-timeout, path-prefix, ssl-bundle
+```
+
+## 3. Главный класс приложения
+
+Здесь два обязательных момента под Boot 4:
+
+- Исключить автоконфигурацию Elasticsearch-слоя, иначе поднимется «эластиковый» `ElasticsearchTemplate` и будет конфликтовать с OpenSearch. **В Boot 4 класс переименован и переехал**: теперь это `DataElasticsearchAutoConfiguration` в пакете `org.springframework.boot.data.elasticsearch.autoconfigure` (в Boot 3 было `ElasticsearchDataAutoConfiguration`).
+- Явно включить сканирование репозиториев через `@EnableElasticsearchRepositories`.
+
+```java
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.data.elasticsearch.autoconfigure.DataElasticsearchAutoConfiguration;
+import org.springframework.data.elasticsearch.repository.config.EnableElasticsearchRepositories;
+
+@SpringBootApplication(exclude = { DataElasticsearchAutoConfiguration.class })
+@EnableElasticsearchRepositories(basePackages = "com.example.demo.repository")
+public class Application {
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}
+```
+
+## 4. Сущность (mapping под data stream)
+
+Тут самый важный момент для вашего сценария. Data stream в OpenSearch — это, по сути, абстракция над скрытыми backing-индексами; для **чтения** (`_search`, `GET`) он ведёт себя как обычный индекс, поэтому в `@Document` вы просто указываете имя стрима.
+
+Критично: поставить `createIndex = false`. По умолчанию Spring Data Elasticsearch при старте пытается создать индекс с маппингом по имени из `@Document`. Для data stream это не нужно и вредно — стрим управляется index template + ISM снаружи приложения, а попытка автосоздания приведёт к ошибке/конфликту.
+
+```java
+import org.springframework.data.annotation.Id;
+import org.springframework.data.elasticsearch.annotations.DateFormat;
+import org.springframework.data.elasticsearch.annotations.Document;
+import org.springframework.data.elasticsearch.annotations.Field;
+import org.springframework.data.elasticsearch.annotations.FieldType;
+
+import java.time.Instant;
+
+@Document(
+        indexName = "logs-my-app",   // имя data stream
+        createIndex = false          // не пытаться создавать/маппить индекс
+)
+public class LogEvent {
+
+    @Id
+    private String id;               // маппится на _id (автогенерируемый в стриме)
+
+    @Field(name = "@timestamp", type = FieldType.Date, format = DateFormat.date_optional_time)
+    private Instant timestamp;       // у data stream всегда есть @timestamp
+
+    @Field(name = "message", type = FieldType.Text)
+    private String message;
+
+    @Field(name = "level", type = FieldType.Keyword)
+    private String level;
+
+    @Field(name = "service", type = FieldType.Keyword)
+    private String service;
+
+    // геттеры/сеттеры
+}
+```
+
+## 5. Репозиторий
+
+Обычный `ElasticsearchRepository` (это и есть репозиторий из Spring Data OpenSearch — переиспользуется инфраструктура SDE). Для стрима используйте только read-методы:
+
+```java
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.elasticsearch.repository.ElasticsearchRepository;
+import org.springframework.stereotype.Repository;
+
+import java.time.Instant;
+import java.util.List;
+
+@Repository
+public interface LogEventRepository extends ElasticsearchRepository<LogEvent, String> {
+
+    Page<LogEvent> findByService(String service, Pageable pageable);
+
+    List<LogEvent> findByLevelAndTimestampBetween(String level, Instant from, Instant to);
+}
+```
+
+## 6. Использование (сервис)
+
+```java
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.util.List;
+
+@Service
+public class LogQueryService {
+
+    private final LogEventRepository repository;
+
+    public LogQueryService(LogEventRepository repository) {
+        this.repository = repository;
+    }
+
+    public List<LogEvent> recentErrors(Instant from, Instant to) {
+        return repository.findByLevelAndTimestampBetween("ERROR", from, to);
+    }
+
+    public List<LogEvent> byService(String service) {
+        var page = PageRequest.of(0, 50, Sort.by(Sort.Direction.DESC, "@timestamp"));
+        return repository.findByService(service, page).getContent();
+    }
+}
+```
+
+## Что важно помнить именно про data stream
+
+Только чтение. `save()`, `saveAll()`, `delete*()` через репозиторий работать не будут — data stream принимает запись лишь append-операцией с `op_type=create`, а Spring Data по умолчанию шлёт обычный `index`. Если приложению нужно и писать — это отдельная история (через `OpenSearchClient` с bulk `create`), но для чтения репозитория достаточно.
+
+Про `_class`. Если стрим наполняется внешним пайплайном (Data Prepper, Logstash, Fluent Bit), в документах нет служебного поля `_class`. Для чтения это не мешает — Spring Data мапит в известный тип репозитория напрямую, type hint нужен только на запись.
+
+Глубокая пагинация. `Pageable` внутри использует `from/size` и упрётся в `max_result_window` (10k) на больших стримах. Для больших выгрузок берите `OpenSearchOperations` (аналог `ElasticsearchOperations`) с `search_after` или `SearchHitsIterator` — это даёт стриминговое чтение без ограничения окна.
+
+---
+
+Небольшое замечание: README проекта местами всё ещё написан в терминах «Spring Boot 3.x», хотя матрица совместимости уже мапит ветку 3.x стартера на Boot 4 — ориентируйтесь именно на таблицу версий, а не на текст.
+
+Если захотите вариант на новом клиенте `opensearch-java` вместо `RestHighLevelClient` (он предпочтителен и поддерживает AOT/native) — там нужно исключить `opensearch-rest-high-level-client`, добавить `opensearch-java` и `@Configuration extends OpenSearchConfiguration`. Скажите — накидаю и его.
