@@ -52,8 +52,10 @@ class MonitorSweepWorkflow:
             "deliver_alerts",
             DeliverIn(cap=settings.monitor.deliver_batch),
             result_type=DeliverResult,
-            start_to_close_timeout=timedelta(minutes=5),
-            schedule_to_close_timeout=timedelta(minutes=15),
+            # serial FIFO delivery: worst case ≈ deliver_batch × webhook_timeout_s
+            # (default 100 × 5s = 500s) — keep start_to_close comfortably above it.
+            start_to_close_timeout=timedelta(minutes=12),
+            schedule_to_close_timeout=timedelta(minutes=25),
             heartbeat_timeout=timedelta(minutes=2),
             retry_policy=_RETRY,
         )
