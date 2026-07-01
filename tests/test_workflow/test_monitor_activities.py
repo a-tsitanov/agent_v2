@@ -99,3 +99,40 @@ async def test_detect_alerts_failsoft(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "neo4j gone" in result.error
     assert result.new_connection_alerts == 0
     assert result.risk_rise_alerts == 0
+
+
+class _BurstStore(_FakeStore):
+    def structured_query(self, cypher: str, param_map: dict | None = None) -> list[dict]:
+        self.calls.append((cypher, param_map or {}))
+        if "burst_score" in cypher:
+            return [
+                {
+                    "entity": "Acme",
+                    "event_type": "lawsuit",
+                    "recent": 6,
+                    "baseline_rate": 1.0,
+                    "burst_score": 6.0,
+                }
+            ]
+        return []  # no edges, no risk rows
+
+
+@pytest.mark.asyncio
+async def test_detect_alerts_burst_gated_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _BurstStore()
+    monkeypatch.setattr(ma, "_get_store", lambda: store)
+    monkeypatch.setattr(ma.settings.monitor, "burst_enabled", True, raising=False)
+    result = await ma.detect_alerts(MonitorIn(window_days=7, risk_rise_delta=0.1))
+    assert result.burst_alerts == 1
+    merge_calls = [c for c, _ in store.calls if _MERGE_HINT in c]
+    assert len(merge_calls) == 1  # one burst alert MERGEd
+
+
+@pytest.mark.asyncio
+async def test_detect_alerts_burst_gated_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _BurstStore()
+    monkeypatch.setattr(ma, "_get_store", lambda: store)
+    monkeypatch.setattr(ma.settings.monitor, "burst_enabled", False, raising=False)
+    result = await ma.detect_alerts(MonitorIn())
+    assert result.burst_alerts == 0
+    assert [c for c, _ in store.calls if "burst_score" in c] == []  # burst query never issued

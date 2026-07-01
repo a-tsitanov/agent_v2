@@ -134,4 +134,5 @@ class MonitorIn(_Frozen):
 class MonitorResult(_Frozen):
     new_connection_alerts: int = 0
     risk_rise_alerts: int = 0
+    burst_alerts: int = 0
     error: str = ""

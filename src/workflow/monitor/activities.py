@@ -18,6 +18,8 @@ from loguru import logger
 from temporalio import activity
 
 from src.analytics.contracts import MonitorIn, MonitorResult
+from src.analytics.events_burst import build_burst_cypher
+from src.config import settings
 from src.graph.alerts import upsert_alert
 from src.graph.store import build_neo4j_graph_store
 from src.retrieval.date_filters import today_epoch_days
@@ -55,9 +57,11 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
     """
     try:
         store = _get_store()
-        since = today_epoch_days() - p.window_days
+        today = today_epoch_days()
+        since = today - p.window_days
         new_conn_count = 0
         risk_rise_count = 0
+        burst_count = 0
 
         async with heartbeat_every(30.0, {"stage": "monitor"}):
             # ── (a) new-connection alerts ────────────────────────────────
@@ -101,13 +105,41 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
                     kind="risk_rise",
                     entity=row["name"],
                     detail=str(row["score"]),
-                    created_at=today_epoch_days(),
+                    created_at=today,
                 )
                 risk_rise_count += 1
+
+            # ── (c) burst alerts (gated) ─────────────────────────────────
+            if settings.monitor.burst_enabled:
+                m = settings.monitor
+                bw = max(m.burst_baseline_windows, 1)
+                burst_rows = await asyncio.to_thread(
+                    store.structured_query,
+                    build_burst_cypher(watched_only=True),
+                    param_map={
+                        "since_recent": today - m.burst_window_days,
+                        "since_baseline": today - m.burst_window_days * (bw + 1),
+                        "baseline_windows": bw,
+                        "min_count": m.burst_min_count,
+                        "ratio": m.burst_ratio,
+                        "top_n": _TOP_N,
+                    },
+                )
+                for row in burst_rows:
+                    await asyncio.to_thread(
+                        upsert_alert,
+                        store,
+                        kind="burst",
+                        entity=row["entity"],
+                        detail=f"{row['event_type']}:x{round(row['burst_score'], 1)}",
+                        created_at=today,
+                    )
+                    burst_count += 1
 
         return MonitorResult(
             new_connection_alerts=new_conn_count,
             risk_rise_alerts=risk_rise_count,
+            burst_alerts=burst_count,
         )
     except Exception as exc:
         logger.warning("detect_alerts failed: {e}", e=exc)
