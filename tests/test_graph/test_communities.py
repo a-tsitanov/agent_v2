@@ -18,10 +18,11 @@ from src.graph.communities import detect_communities
 
 @pytest.fixture(autouse=True)
 def _force_gds_backend(monkeypatch):
-    """Ensure tests run with GDS backend regardless of .env configuration.
+    """Ensure tests run with GDS backend for deterministic test behavior.
 
-    The fake store is designed for GDS path; leidenalg requires edge queries
-    that the fake store doesn't support.
+    _FakeStore returns GDS-stream-shaped rows, so this fixture pins the
+    community_backend to "gds" to ensure deterministic results regardless
+    of the resolved default configuration.
     """
     import src.graph.communities as communities
     monkeypatch.setattr(communities.settings.temporal, "community_backend", "gds")

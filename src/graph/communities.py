@@ -529,9 +529,11 @@ async def detect_hierarchy(
 
     level 0 == coarsest (today's ``communityId``) and keeps
     ``(:__Entity__)-[:IN_COMMUNITY]->(:Community {level:0})`` exactly as
-    ``detect_communities`` does.  level k>0 (finer) carries NO entity links;
-    instead ``(:Community {level:k-1})-[:PARENT_OF]->(:Community {level:k})``
-    wires the dendrogram coarser→finer.  Every level stamps
+    ``detect_communities`` does.  All levels (including finer k>0)
+    keep ``(:__Entity__)-[:IN_COMMUNITY]->(:Community)`` member links
+    for leaf context; finer levels additionally wire
+    ``(:Community {level:k-1})-[:PARENT_OF]->(:Community {level:k})``
+    to form the dendrogram coarser→finer.  Every level stamps
     ``member_count`` + ``members_hash``.
 
     A rebuild prunes ALL prior ``:Community`` (every level) up front since
