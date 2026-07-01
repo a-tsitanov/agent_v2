@@ -21,7 +21,7 @@ then proceed. Everything is reversible: flip the flag back + recreate the worker
 ```yaml
 # ── E1 first_seen (Phase 1) ──
 EVENTS_FIRST_SEEN_ENABLED: "false"          # → true only AFTER backfill
-EVENTS_FIRST_SEEN_BACKFILL_EPOCH: "0"       # sentinel stamp for pre-existing nodes (set to today's epoch-day at backfill)
+EVENTS_FIRST_SEEN_BACKFILL_EPOCH: "0"       # KEEP 0 — sentinel marks pre-existing nodes as ANCIENT so they are never mis-flagged as "new". Do NOT set to today.
 # ── Arc-2 monitor (Phase 3) ──
 MONITOR_ENABLED: "false"                    # → true in Phase 3
 MONITOR_TASK_QUEUE: "kb-monitor"
@@ -52,7 +52,7 @@ changing it.
 
 **Phase 1 — E1 first_seen (foundation for E3):**
 1. `docker compose exec <worker> python -m scripts.backfill_first_seen --dry-run` → review counts.
-2. Set `EVENTS_FIRST_SEEN_BACKFILL_EPOCH` = today's epoch-day, then run for real: `... python -m scripts.backfill_first_seen`.
+2. Run for real (keep `EVENTS_FIRST_SEEN_BACKFILL_EPOCH=0` — the sentinel marks pre-existing nodes as ancient): `... python -m scripts.backfill_first_seen`. Verify `MATCH (e:__Entity__) WHERE e.created_at IS NULL RETURN count(e)` → `0`.
 3. Set `EVENTS_FIRST_SEEN_ENABLED: "true"` in the anchor → `docker compose up -d --force-recreate <worker>`.
 4. Verify: ingest a doc; `MATCH (e:__Entity__) WHERE e.created_at IS NOT NULL RETURN count(e)` grows; the `new_events` primitive returns rows.
 
