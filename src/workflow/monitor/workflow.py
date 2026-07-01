@@ -13,7 +13,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from src.analytics.contracts import MonitorIn, MonitorResult
+    from src.analytics.contracts import (
+        DeliverIn,
+        DeliverResult,
+        MonitorIn,
+        MonitorResult,
+        SweepResult,
+    )
     from src.config import settings
 
 _RETRY = RetryPolicy(
@@ -28,12 +34,12 @@ class MonitorSweepWorkflow:
     """One-shot sweep: detect new-connection + risk-rise alerts for watched entities."""
 
     @workflow.run
-    async def run(self) -> MonitorResult:
+    async def run(self) -> SweepResult:
         monitor_in = MonitorIn(
             window_days=settings.monitor.new_window_days,
             risk_rise_delta=settings.monitor.risk_rise_delta,
         )
-        return await workflow.execute_activity(
+        result = await workflow.execute_activity(
             "detect_alerts",
             monitor_in,
             result_type=MonitorResult,
@@ -41,4 +47,21 @@ class MonitorSweepWorkflow:
             schedule_to_close_timeout=timedelta(minutes=15),
             heartbeat_timeout=timedelta(minutes=2),
             retry_policy=_RETRY,
+        )
+        deliver = await workflow.execute_activity(
+            "deliver_alerts",
+            DeliverIn(cap=settings.monitor.deliver_batch),
+            result_type=DeliverResult,
+            start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=15),
+            heartbeat_timeout=timedelta(minutes=2),
+            retry_policy=_RETRY,
+        )
+        return SweepResult(
+            new_connection_alerts=result.new_connection_alerts,
+            risk_rise_alerts=result.risk_rise_alerts,
+            burst_alerts=result.burst_alerts,
+            delivered=deliver.delivered,
+            failed=deliver.failed,
+            error=result.error or deliver.error,
         )

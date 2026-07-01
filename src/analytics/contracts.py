@@ -146,3 +146,12 @@ class DeliverResult(_Frozen):
     delivered: int = 0
     failed: int = 0
     error: str = ""
+
+
+class SweepResult(_Frozen):
+    new_connection_alerts: int = 0
+    risk_rise_alerts: int = 0
+    burst_alerts: int = 0
+    delivered: int = 0
+    failed: int = 0
+    error: str = ""
