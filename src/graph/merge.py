@@ -167,6 +167,7 @@ async def merge_kg_extraction(
     force_summary_on_chars: int = DEFAULT_FORCE_SUMMARY_ON_CHARS,
     summary_max_tokens: int = DEFAULT_SUMMARY_MAX_TOKENS,
     language: str = "Russian",
+    observed_at: str | None = None,
 ) -> tuple[list[EntityNode], list[Relation]]:
     """Merge per-chunk extraction into a deduplicated graph patch.
 
@@ -325,6 +326,11 @@ async def merge_kg_extraction(
                 "polarity": polarity,
                 "valid_from": valid_from,
                 "valid_to": valid_to,
+                # Transaction-time provenance: when the fact was first
+                # observed (ingest wall-clock). Used by the analytics
+                # temporal layer as the fallback when no valid window
+                # exists. None on legacy edges (backfilled separately).
+                "observed_at": observed_at,
                 "source_chunks": distinct_chunks,
                 "mention_count": mention_count,
             },

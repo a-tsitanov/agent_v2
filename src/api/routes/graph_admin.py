@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from src.analytics import temporal
 from src.api.auth import require_api_key
 from src.graph import analysis
 
@@ -66,4 +67,25 @@ async def graph_shortest_path(
     """Shortest path between two entities by exact name."""
     return await analysis.shortest_path(
         _store(), source, target, max_hops=max_hops,
+    )
+
+
+@router.post("/snapshot", dependencies=[Depends(require_api_key)])
+async def graph_snapshot(as_of: str, include_untimed: bool = True) -> dict:
+    """Bitemporal graph state alive at ``as_of`` (ISO date/datetime).
+
+    Returns edges + nodes + ``coverage`` (how much rests on real dates vs
+    the ingest-time fallback). ``include_untimed`` keeps relations that
+    have no temporal information at all (default on)."""
+    return await temporal.snapshot(
+        _store(), as_of, include_untimed=include_untimed,
+    )
+
+
+@router.post("/diff", dependencies=[Depends(require_api_key)])
+async def graph_diff(t1: str, t2: str, include_untimed: bool = True) -> dict:
+    """What changed between two moments: added / removed / persisted edges
+    (``snapshot(t2) ⊖ snapshot(t1)``), with both coverages."""
+    return await temporal.diff(
+        _store(), t1, t2, include_untimed=include_untimed,
     )
