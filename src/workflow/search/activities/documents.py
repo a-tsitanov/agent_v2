@@ -1,7 +1,10 @@
 """``documents_for_communities`` activity — map community ids to the
 source documents their member entities were extracted from.
 
-Graph path: (:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(:Community).
+Graph path: (:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(:Community {level:0}).
+The entity→community hop is pinned to level 0: member links now exist at
+every hierarchy level, but community ``id`` is unique only per level, so the
+``comm.id IN $ids`` filter must be scoped to one level to avoid collisions.
 Fail-open: a missing store or any Cypher error → empty list (the answer
 is never blocked on document provenance).
 """
