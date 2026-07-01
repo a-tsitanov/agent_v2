@@ -28,8 +28,8 @@ Order rationale: risk-rise alerts (Phase 3) need materialized `risk_score` (Phas
 
 Nothing to flip; just confirm the catalog is live.
 
-- Confirm the worker/API import `src.analytics.primitives` so `CATALOG` populates at runtime (Wave-0 integration requirement). Check: `POST /api/v1/analyze {"query": "..."}` returns a plan/answer, and MCP `kb_analyze` is registered.
-- Confirm `CATALOG` has **42** primitives in the running process (not just tests). Materialize-dependent primitives (`risk_score`, `top_central_entities`, `link_prediction`) return empty until Phase 2 — expected.
+- **VERIFIED 2026-07-01 (static):** the **worker** process populates `CATALOG=42` (`src/workflow/analytics/activities.py:17` does `import src.analytics.primitives`). The **API/MCP** process has `CATALOG=0` **by design** — `POST /api/v1/analyze` (`analyze.py:36`) and MCP `kb_analyze` (`search_server.py`) both `start_workflow(AnalyticalQueryWorkflow.run, …)` on the search queue, so all planning/execution runs on the worker (where the catalog is full). API CATALOG=0 is NOT a bug; do not "fix" it with an import unless the API ever plans in-process.
+- Runtime check on the live stack: `POST /api/v1/analyze {"query": "..."}` returns a plan/answer (proves the worker's catalog is reachable end-to-end). Materialize-dependent primitives (`risk_score`, `top_central_entities`, `link_prediction`) return empty until Phase 2 — expected.
 - **Rollback:** n/a.
 
 ## Phase 1 — E1 first_seen stamping
