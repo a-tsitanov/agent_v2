@@ -74,5 +74,25 @@ def test_mark_watched_is_fail_soft():
 
 def test_read_alerts_cypher_shape():
     assert "ORDER BY a.created_at DESC" in read_alerts_cypher
-    for col in ("a.key", "a.kind", "a.entity", "a.detail", "a.created_at"):
+    for col in ("a.key", "a.kind", "a.entity", "a.detail", "a.created_at", "a.score"):
         assert col in read_alerts_cypher, f"missing column reference: {col}"
+
+
+# ── scored alerts (one :Alert per entity, score updated in place) ─────────────
+
+
+def test_upsert_alert_scored_updates_on_match():
+    s = _Rec()
+    upsert_alert(s, kind="burst", entity="Acme", detail="lawsuit", created_at=100, score=6.0)
+    cypher, params = s.calls[0]
+    assert "ON MATCH SET" in cypher and "a.score" in cypher
+    assert params["score"] == 6.0
+    # the volatile score is NOT part of the dedup key → no churn on score drift
+    assert params["key"] == "burst:Acme:lawsuit"
+
+
+def test_upsert_alert_unscored_is_oncreate_only():
+    s = _Rec()
+    upsert_alert(s, kind="new_connection", entity="Acme", detail="KNOWS:Bob", created_at=100)
+    cypher, _ = s.calls[0]
+    assert "ON CREATE" in cypher and "ON MATCH" not in cypher

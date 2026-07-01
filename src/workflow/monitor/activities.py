@@ -105,8 +105,9 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
                     store,
                     kind="risk_rise",
                     entity=row["name"],
-                    detail=str(row["score"]),
+                    detail="",  # one alert per entity; the score lives on a.score
                     created_at=today,
+                    score=row["score"],
                 )
                 risk_rise_count += 1
 
@@ -132,8 +133,9 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
                         store,
                         kind="burst",
                         entity=row["entity"],
-                        detail=f"{row['event_type']}:x{round(row['burst_score'], 1)}",
+                        detail=row["event_type"],  # one alert per (entity, event_type)
                         created_at=today,
+                        score=round(float(row["burst_score"]), 3),
                     )
                     burst_count += 1
 
@@ -150,7 +152,7 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
 _UNPUSHED = (
     "MATCH (a:Alert) WHERE a.pushed_at IS NULL "
     "RETURN a.key AS key, a.kind AS kind, a.entity AS entity, "
-    "a.detail AS detail, a.created_at AS created_at "
+    "a.detail AS detail, a.created_at AS created_at, a.score AS score "
     "ORDER BY a.created_at ASC LIMIT $cap"  # FIFO — deliver oldest unpushed first
 )
 _MARK_PUSHED = "MATCH (a:Alert {key:$key}) SET a.pushed_at = $now"

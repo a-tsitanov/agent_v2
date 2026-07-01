@@ -21,6 +21,23 @@ ON CREATE SET
   a.created_at = $created_at
 """
 
+# Scored variant: the volatile value (risk/burst score) is NOT in the key, so
+# one :Alert per (kind, entity, detail) is kept and its score is refreshed in
+# place on re-detection (ON MATCH) instead of minting a new node each drift.
+_UPSERT_ALERT_SCORED = """
+MERGE (a:Alert {key: $key})
+ON CREATE SET
+  a.kind       = $kind,
+  a.entity     = $entity,
+  a.detail     = $detail,
+  a.created_at = $created_at,
+  a.score      = $score,
+  a.updated_at = $created_at
+ON MATCH SET
+  a.score      = $score,
+  a.updated_at = $created_at
+"""
+
 _MARK_WATCHED = """
 UNWIND $names AS n
 MATCH (e:__Entity__ {name: n})
@@ -36,7 +53,8 @@ read_alerts_cypher = (
     "AND ($entity IS NULL OR a.entity = $entity) "
     "AND ($since IS NULL OR a.created_at >= $since) "
     "RETURN a.key AS key, a.kind AS kind, a.entity AS entity, "
-    "a.detail AS detail, a.created_at AS created_at "
+    "a.detail AS detail, a.created_at AS created_at, "
+    "a.score AS score, a.updated_at AS updated_at "
     "ORDER BY a.created_at DESC LIMIT $top_n"
 )
 
@@ -60,20 +78,28 @@ def upsert_alert(
     entity: str,
     detail: str,
     created_at: int,
+    score: float | None = None,
 ) -> None:
-    """MERGE an :Alert node keyed on (kind, entity, detail); fail-soft on error."""
+    """MERGE an :Alert node keyed on (kind, entity, detail); fail-soft on error.
+
+    When ``score`` is given, the value is stored as ``a.score`` and refreshed
+    in place on re-detection (ON MATCH) — one alert per (kind, entity, detail),
+    no churn as the score drifts. The score is never part of the dedup key.
+    """
     key = alert_key(kind, entity, detail)
+    params: dict[str, Any] = {
+        "key": key,
+        "kind": kind,
+        "entity": entity,
+        "detail": detail,
+        "created_at": created_at,
+    }
+    cypher = _UPSERT_ALERT
+    if score is not None:
+        params["score"] = score
+        cypher = _UPSERT_ALERT_SCORED
     try:
-        store.structured_query(
-            _UPSERT_ALERT,
-            param_map={
-                "key": key,
-                "kind": kind,
-                "entity": entity,
-                "detail": detail,
-                "created_at": created_at,
-            },
-        )
+        store.structured_query(cypher, param_map=params)
     except Exception as exc:
         logger.warning("upsert_alert failed (non-fatal): {e}", e=exc)
 
