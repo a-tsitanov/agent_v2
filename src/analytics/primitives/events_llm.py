@@ -7,8 +7,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
+from src.analytics.events_burst import build_burst_cypher
 from src.analytics.ids import clamp_top_n
 from src.analytics.store_query import run_rows
+from src.retrieval.date_filters import today_epoch_days
 
 
 class _Params(BaseModel):
@@ -50,13 +52,6 @@ async def event_dossier(store: Any | None, *, name: str, top_n: int = 25) -> Pri
     return PrimitiveResult(cypher=cypher, params=params, rows=[row])
 
 
-_EVENT_TIMELINE = (
-    "MATCH (p:__Entity__ {name:$entity})-[]-(e:__Entity__:EventOrAction) "
-    "RETURN e.name AS name, e.event_type AS event_type, e.event_ts AS event_ts "
-    "ORDER BY e.event_ts DESC LIMIT $top_n"
-)
-
-
 class EventTimelineParams(_Params):
     entity: str
     window_days: int | None = None
@@ -72,11 +67,52 @@ async def event_timeline(
 ) -> PrimitiveResult:
     """Events a named entity participated in, ordered by event_ts."""
     top_n = clamp_top_n(top_n, default=50)
-    params = {"entity": entity, "top_n": top_n}
+    params: dict[str, Any] = {"entity": entity, "top_n": top_n}
+    where = ""
     if window_days is not None:
-        params["window_days"] = window_days
+        params["since"] = today_epoch_days() - int(window_days)
+        where = "WHERE e.created_at >= $since "
+    cypher = (
+        "MATCH (p:__Entity__ {name:$entity})-[]-(e:__Entity__:EventOrAction) "
+        f"{where}"
+        "RETURN e.name AS name, e.event_type AS event_type, e.event_ts AS event_ts "
+        "ORDER BY e.event_ts DESC LIMIT $top_n"
+    )
+    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+
+
+_TRENDING = build_burst_cypher(watched_only=False)
+
+
+class TrendingEventsParams(_Params):
+    window_days: int = 7
+    baseline_windows: int = 4
+    min_count: int = 2
+    top_n: int = 20
+
+
+async def trending_events(
+    store: Any | None,
+    *,
+    window_days: int = 7,
+    baseline_windows: int = 4,
+    min_count: int = 2,
+    top_n: int = 20,
+) -> PrimitiveResult:
+    """(entity, event_type) pairs whose event ingest-rate surged recently."""
+    top_n = clamp_top_n(top_n, default=20)
+    bw = max(int(baseline_windows), 1)
+    today = today_epoch_days()
+    params = {
+        "since_recent": today - int(window_days),
+        "since_baseline": today - int(window_days) * (bw + 1),
+        "baseline_windows": bw,
+        "min_count": int(min_count),
+        "ratio": 1.0,
+        "top_n": top_n,
+    }
     return PrimitiveResult(
-        cypher=_EVENT_TIMELINE, params=params, rows=await run_rows(store, _EVENT_TIMELINE, params)
+        cypher=_TRENDING, params=params, rows=await run_rows(store, _TRENDING, params)
     )
 
 
@@ -94,5 +130,13 @@ register(
         event_timeline,
         EventTimelineParams,
         "Events a named entity participated in, ordered by event_ts.",
+    )
+)
+register(
+    Primitive(
+        "trending_events",
+        trending_events,
+        TrendingEventsParams,
+        "Surging (entity × event_type) pairs by recent event ingest-rate vs baseline (E3).",
     )
 )

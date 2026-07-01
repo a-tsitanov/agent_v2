@@ -101,3 +101,39 @@ async def test_event_timeline_top_n_clamping():
     store = _FakeStore(rows=[])
     await events_llm.event_timeline(store, entity="test", top_n=5000)
     assert store.last_params["top_n"] <= 200  # hard_max clamp
+
+
+@pytest.mark.asyncio
+async def test_trending_events_windows_and_shape(monkeypatch):
+    monkeypatch.setattr(events_llm, "today_epoch_days", lambda: 19900)
+    store = _FakeStore(
+        rows=[
+            {
+                "entity": "Acme",
+                "event_type": "lawsuit",
+                "recent": 6,
+                "baseline_rate": 1.0,
+                "burst_score": 6.0,
+            }
+        ]
+    )
+    res = await events_llm.trending_events(store, window_days=7, baseline_windows=4)
+    assert res.params["since_recent"] == 19900 - 7
+    assert res.params["since_baseline"] == 19900 - 7 * (4 + 1)
+    assert res.params["ratio"] == 1.0
+    assert "burst_score" in res.cypher
+    assert res.rows[0]["event_type"] == "lawsuit"
+
+
+@pytest.mark.asyncio
+async def test_trending_events_fail_soft_none_store():
+    res = await events_llm.trending_events(None)
+    assert res.rows == []
+
+
+@pytest.mark.asyncio
+async def test_event_timeline_window_days_applies_since(monkeypatch):
+    monkeypatch.setattr(events_llm, "today_epoch_days", lambda: 19900)
+    res = await events_llm.event_timeline(_FakeStore(rows=[]), entity="Acme", window_days=30)
+    assert res.params["since"] == 19900 - 30
+    assert "e.created_at >= $since" in res.cypher
