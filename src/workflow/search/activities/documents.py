@@ -1,7 +1,10 @@
 """``documents_for_communities`` activity — map community ids to the
 source documents their member entities were extracted from.
 
-Graph path: (:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(:Community).
+Graph path: (:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(:Community {level:0}).
+The entity→community hop is pinned to level 0: member links now exist at
+every hierarchy level, but community ``id`` is unique only per level, so the
+``comm.id IN $ids`` filter must be scoped to one level to avoid collisions.
 Fail-open: a missing store or any Cypher error → empty list (the answer
 is never blocked on document provenance).
 """
@@ -23,7 +26,7 @@ from src.workflow.contracts import (
 # caution as the GDS Cypher in src/graph/communities.py). Verify the chunk
 # doc_id property name on the live store before relying on it.
 _DOCS_FOR_COMMUNITIES_CYPHER = """
-MATCH (c:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(comm:Community)
+MATCH (c:Chunk)-[:MENTIONS]->(:__Entity__)-[:IN_COMMUNITY]->(comm:Community {level: 0})
 WHERE comm.id IN $ids
 RETURN DISTINCT c.doc_id AS doc_id
 """

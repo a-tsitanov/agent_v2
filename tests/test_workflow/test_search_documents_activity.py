@@ -53,3 +53,13 @@ def test_surviving_community_ids():
         MapPartialResult(community_id="3", partial="y", score=0.5),
     ]
     assert surviving_community_ids(partials) == ["1", "3"]
+
+
+def test_docs_for_communities_cypher_scoped_to_level0():
+    """После линковки членов на всех уровнях адресация по comm.id
+    коллизит между уровнями; траверс должен быть заскоуплен на level 0."""
+    from src.workflow.search.activities import documents
+
+    cy = documents._DOCS_FOR_COMMUNITIES_CYPHER
+    assert "-[:IN_COMMUNITY]->(comm:Community {level: 0})" in cy
+    assert "comm.id IN $ids" in cy

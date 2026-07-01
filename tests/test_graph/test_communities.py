@@ -16,6 +16,18 @@ import pytest
 from src.graph.communities import detect_communities
 
 
+@pytest.fixture(autouse=True)
+def _force_gds_backend(monkeypatch):
+    """Ensure tests run with GDS backend for deterministic test behavior.
+
+    _FakeStore returns GDS-stream-shaped rows, so this fixture pins the
+    community_backend to "gds" to ensure deterministic results regardless
+    of the resolved default configuration.
+    """
+    import src.graph.communities as communities
+    monkeypatch.setattr(communities.settings.temporal, "community_backend", "gds")
+
+
 class _FakeStore:
     """Records Cypher calls; returns canned rows for the leiden-stream
     read (the query that RETURNs ``name``/``communityId``)."""
@@ -143,6 +155,19 @@ async def test_detect_none_store_returns_empty():
     assert await detect_communities(None, min_size=3) == []
 
 
+def test_subcommunity_cypher_writes_member_links():
+    """level>0 MERGE теперь и wires PARENT_OF, и линкует членов —
+    иначе у листовых сообществ нет источника member-context."""
+    from src.graph import communities
+
+    cy = communities._MERGE_SUBCOMMUNITY_CYPHER
+    assert "-[:PARENT_OF]->(c)" in cy                      # дендрограмма
+    assert "OPTIONAL MATCH (c)<-[old:IN_COMMUNITY]-" in cy  # чистка старых
+    assert "UNWIND $members AS member_name" in cy
+    assert "MATCH (e:__Entity__ {name: member_name})" in cy
+    assert "MERGE (e)-[:IN_COMMUNITY]->(c)" in cy
+
+
 def test_members_hash_order_insensitive():
     from src.graph.communities import members_hash
     assert members_hash(["B","A"]) == members_hash(["A","B"])
@@ -202,6 +227,11 @@ async def test_detect_hierarchy_materialises_levels_and_parents():
     _c, parent_params = next((c, p) for c, p in store.calls if "PARENT_OF" in c)
     assert parent_params.get("parent_id") == "1"
     assert parent_params.get("level") == 1
+
+    # level>0 MERGE теперь И wires PARENT_OF, И линкует членов, и передаёт members
+    sub_cypher, sub_params = next((c, p) for c, p in store.calls if "PARENT_OF" in c)
+    assert "IN_COMMUNITY" in sub_cypher            # тот же MERGE линкует членов
+    assert sub_params.get("members")               # непустой список членов на level>0
 
 
 # --- Phase 2b: incremental report carry-over -----------------------------
