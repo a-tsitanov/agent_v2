@@ -3,7 +3,7 @@ enqueue each via POST /api/v1/ingest (which uploads to MinIO + publishes to
 the rabbit queue). One-shot backfill, text-only, document_date = post date.
 
 Runbook:
-  1. docker compose --profile rabbitmq up -d rabbitmq
+  1. docker compose up -d rabbitmq   # (starts by default, no profile flag)
   2. export INGEST_QUEUE_BACKEND=rabbitmq RABBITMQ_URL=amqp://guest:guest@localhost:5672/
      export RABBITMQ_QUEUES=<name>
   3. uv run python -m src.ingest_queue.consumer        # queue → DocumentIngestWorkflow

@@ -17,7 +17,7 @@ A test harness to exercise the RabbitMQ-backed ingest pipeline with real content
 ## Components
 
 ### 1. RabbitMQ in dev compose (infra for the test)
-Add a `rabbitmq` service to **`docker-compose.yml`** behind a `rabbitmq` profile (mirror `docker-compose.prod.yml`): `image: rabbitmq:3-management`, ports `5672`/`15672`, healthcheck (`rabbitmq-diagnostics -q ping`), a named volume. Off by default; started with `docker compose --profile rabbitmq up -d rabbitmq`.
+Add a `rabbitmq` service to **`docker-compose.yml`** (mirror `docker-compose.prod.yml`, but NO profile): `image: rabbitmq:3-management`, ports `5672`/`15672`, healthcheck (`rabbitmq-diagnostics -q ping`), a named volume. In the **default** service set — `docker compose up -d` brings it up, no extra flags.
 
 ### 2. `scripts/tg_ingest.py` (the reader → enqueuer)
 Small, focused units:
@@ -33,7 +33,7 @@ Small, focused units:
 Add **`telethon`** as an **optional/dev** dependency group (e.g. `[project.optional-dependencies].tg`) so it doesn't bloat the core app image — the harness is tooling, not runtime. `httpx` is already present.
 
 ### 4. Runbook (short, in the script docstring + a docs note)
-1. `docker compose --profile rabbitmq up -d rabbitmq`
+1. `docker compose up -d rabbitmq` (default service, no profile flag)
 2. Host env: `INGEST_QUEUE_BACKEND=rabbitmq`, `RABBITMQ_URL=amqp://guest:guest@localhost:5672/`, `RABBITMQ_QUEUES=<name>`.
 3. Start consumer: `uv run python -m src.ingest_queue.consumer`.
 4. Start API: `uv run uvicorn src.api.main:app --port 8000`.

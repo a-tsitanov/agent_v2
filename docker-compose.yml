@@ -1,10 +1,10 @@
 services:
 
   # ── Ingest queue: RabbitMQ (INGEST_QUEUE_BACKEND=rabbitmq) ──────────
-  # Opt-in via `--profile rabbitmq` — mirrors docker-compose.prod.yml.
+  # Starts by default with `docker compose up` (no profile) so the RabbitMQ
+  # ingest-queue path is available for local testing without extra flags.
   rabbitmq:
     image: rabbitmq:3-management
-    profiles: ["rabbitmq"]
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}

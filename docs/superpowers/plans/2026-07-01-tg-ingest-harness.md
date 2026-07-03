@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A `scripts/tg_ingest.py` harness that reads the last N messages from Telegram channels (Telethon) and enqueues each as a document via `POST /api/v1/ingest`, plus a profile-gated `rabbitmq` service in the dev compose so the queue path can be exercised.
+**Goal:** A `scripts/tg_ingest.py` harness that reads the last N messages from Telegram channels (Telethon) and enqueues each as a document via `POST /api/v1/ingest`, plus a default `rabbitmq` service in the dev compose (up with plain `docker compose up`) so the queue path can be exercised.
 
 **Architecture:** One-shot backfill. Pure `_message_to_doc` (message → filename/text/post-date) + fail-soft async `post_ingest` (httpx multipart to the real route) + `read_and_enqueue` orchestration + a thin `main` that owns the Telethon client. Telethon is imported lazily inside `main` only, so the module (and its unit tests) run without the dependency.
 
@@ -36,14 +36,13 @@ Design: `docs/superpowers/specs/2026-07-01-tg-ingest-harness-design.md`.
 - Modify: `pyproject.toml` (`[project.optional-dependencies]` add `tg`)
 - Modify: `.gitignore` (add `*.session`)
 
-**Interfaces — Produces:** a `rabbitmq` compose service (profile `rabbitmq`, ports 5672/15672) startable via `docker compose --profile rabbitmq up -d rabbitmq`; `pip install '.[tg]'` provides `telethon`.
+**Interfaces — Produces:** a default `rabbitmq` compose service (ports 5672/15672) started by `docker compose up -d rabbitmq` (no profile flag); `pip install '.[tg]'` provides `telethon`.
 
 - [ ] **Step 1: Add the rabbitmq service** — in `docker-compose.yml`, under `services:`, add (mirrors `docker-compose.prod.yml`):
 
 ```yaml
   rabbitmq:
     image: rabbitmq:3-management
-    profiles: ["rabbitmq"]
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
@@ -77,10 +76,10 @@ tg = ["telethon>=1.36,<2"]
 *.session-journal
 ```
 
-- [ ] **Step 4: Verify** — the compose parses with the profile:
+- [ ] **Step 4: Verify** — the compose parses and rabbitmq is in the default set:
 
-Run: `docker compose --profile rabbitmq config >/dev/null && echo OK`
-Expected: `OK` (no YAML/schema error).
+Run: `docker compose config >/dev/null && docker compose config --services | grep -qx rabbitmq && echo OK`
+Expected: `OK` (valid YAML + `rabbitmq` starts without a profile flag).
 
 - [ ] **Step 5: Commit**
 
@@ -175,7 +174,7 @@ enqueue each via POST /api/v1/ingest (which uploads to MinIO + publishes to
 the rabbit queue). One-shot backfill, text-only, document_date = post date.
 
 Runbook:
-  1. docker compose --profile rabbitmq up -d rabbitmq
+  1. docker compose up -d rabbitmq   # (default service, no profile flag)
   2. export INGEST_QUEUE_BACKEND=rabbitmq RABBITMQ_URL=amqp://guest:guest@localhost:5672/
      export RABBITMQ_QUEUES=<name>
   3. uv run python -m src.ingest_queue.consumer        # queue → DocumentIngestWorkflow
