@@ -41,3 +41,7 @@ docs/presentation/*.html
 worktrees/
 
 .claude/settings.local.json
+
+# Telethon session for the tg_ingest harness
+*.session
+*.session-journal
