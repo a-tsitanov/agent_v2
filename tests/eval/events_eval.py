@@ -31,7 +31,21 @@ GOLDEN_DIR_DEFAULT = Path(__file__).resolve().parent / "golden_events"
 
 
 def _ts_epoch(ev: dict) -> int | None:
-    got = resolve_ts(ev.get("event_ts"), None)  # golden/predicted ts are absolute ISO — no anchor needed
+    """Resolve an event's timestamp to an epoch, preferring an already-resolved value.
+
+    Two paths feed this:
+      * LIVE predicted events carry ``event_start_epoch`` — the epoch ingestion
+        already resolved on the node using the document's anchor date. Relative
+        phrases ("вчера", "в марте") only resolve correctly with that anchor, which
+        this eval harness does not have, so we must reuse the node's own result
+        rather than re-resolving from the raw phrase with ``anchor=None``.
+      * GOLDEN cases (and any dict without a carried epoch) fall back to
+        resolving ``event_ts`` as an absolute ISO date — no anchor needed.
+    """
+    carried = ev.get("event_start_epoch")
+    if isinstance(carried, int):
+        return carried
+    got = resolve_ts(ev.get("event_ts"), None)
     return got[0] if got else None
 
 
@@ -173,6 +187,7 @@ def _llm_events_extractor_factory() -> EventsExtractor:  # pragma: no cover - in
                         "event_type": p.get("event_type", ""),
                         "participants": list(p.get("participants") or []),
                         "event_ts": p.get("event_ts_raw"),
+                        "event_start_epoch": p.get("event_start_epoch"),
                     }
                 )
         return events

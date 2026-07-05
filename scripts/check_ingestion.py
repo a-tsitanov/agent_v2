@@ -118,7 +118,7 @@ def check_events() -> None:
             ):
                 print(f"    unresolved ×{r['n']}: {r['raw']!r}")
     except Exception as exc:
-        print(f"  unreachable: {exc}\n")
+        print(f"  unreachable: {exc}")
 
 
 async def main() -> None:
