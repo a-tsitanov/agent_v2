@@ -44,6 +44,7 @@ from src.mcp._shared import (
     log_banner,
     parse_args,
 )
+from src.retrieval.date_filters import DateBounds, bounds_from_iso, iso_to_epoch_days
 from src.workflow.client import get_temporal_client
 from src.workflow.contracts import (
     GlobalSearchParams,
@@ -74,20 +75,75 @@ mcp = FastMCP(
 # ── shared helpers ─────────────────────────────────────────────────
 
 
-def _local_params(query: str, max_refinements: int = 3) -> OrchestratorParams:
+def _local_params(
+    query: str,
+    max_refinements: int = 3,
+    bounds: DateBounds | None = None,
+) -> OrchestratorParams:
     """Build OrchestratorParams for the local plan-execute flow,
     mirroring the FastAPI ``/search/local`` route defaults.
 
     ``top_k`` is intentionally left at the OrchestratorParams default —
     the MCP tools don't expose a per-call retrieval-pool knob (the FastAPI
-    route surfaces it via SearchRequest; both default to 10)."""
+    route surfaces it via SearchRequest; both default to 10).
+
+    ``bounds`` carries the epoch-day date filters (already converted from
+    ISO strings by ``_bounds_or_error`` — see the date-filters spec); None
+    means "no filter set" (all four epoch fields stay None)."""
+    b = bounds or DateBounds()
     return OrchestratorParams(
         query=query,
         max_subqueries=settings.agent.max_subqueries,
         max_refinements=max_refinements,
         coverage_check_enabled=settings.agent.coverage_check_enabled,
         max_coverage_rounds=settings.agent.max_coverage_rounds,
+        doc_date_after_epoch=b.doc_after,
+        doc_date_before_epoch=b.doc_before,
+        inserted_after_epoch=b.ins_after,
+        inserted_before_epoch=b.ins_before,
     )
+
+
+def _bounds_or_error(
+    doc_date_after: str | None,
+    doc_date_before: str | None,
+    created_after: str | None,
+    created_before: str | None,
+) -> DateBounds | dict[str, Any]:
+    """Convert the four optional ISO (YYYY-MM-DD) date params to epoch-day
+    bounds via ``bounds_from_iso`` — the same conversion the FastAPI
+    ``/search/local`` route runs outside the Temporal sandbox (see
+    ``src.api.routes.search_v2._local_params``).
+
+    Unlike the REST route (whose ``SearchRequest`` field validator already
+    rejects malformed dates with a 422 before this ever runs), the MCP
+    tools have no such gate — so this never raises: on a ValueError it
+    returns the tool's error-dict shape naming the offending field instead
+    of crashing the tool call."""
+    try:
+        return bounds_from_iso(
+            doc_after=doc_date_after, doc_before=doc_date_before,
+            ins_after=created_after, ins_before=created_before,
+        )
+    except ValueError:
+        for name, val in (
+            ("doc_date_after", doc_date_after),
+            ("doc_date_before", doc_date_before),
+            ("created_after", created_after),
+            ("created_before", created_before),
+        ):
+            if val is None:
+                continue
+            try:
+                iso_to_epoch_days(val)
+            except ValueError:
+                return {
+                    "error": "invalid date format, expected YYYY-MM-DD",
+                    "field": name,
+                }
+        # Defensive — bounds_from_iso raised but no individual field did
+        # (shouldn't happen; it converts the same four fields).
+        return {"error": "invalid date format, expected YYYY-MM-DD", "field": "unknown"}
 
 
 def _global_params(query: str, *, drift_mode: bool = False) -> GlobalSearchParams:
@@ -163,6 +219,10 @@ async def kb_search(
     query: str,
     ctx: Context,
     max_refinements: int = 3,
+    doc_date_after: str | None = None,
+    doc_date_before: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
 ) -> dict[str, Any]:
     """Orchestrated LOCAL deep-search over the knowledge base: decomposes
     the question into sub-questions, retrieves each over vector + graph in
@@ -180,6 +240,12 @@ async def kb_search(
     Args:
       query: question in Russian (or the source-document language).
       max_refinements: cap for the reflective synthesis loop.
+      doc_date_after / doc_date_before: ISO YYYY-MM-DD, inclusive bounds —
+        filters by document date (the client-supplied date the document
+        itself is about/dated, not when it was ingested).
+      created_after / created_before: ISO YYYY-MM-DD, inclusive bounds —
+        filters by insertion date (when the document was ingested into
+        the knowledge base).
 
     Returns:
       {
@@ -191,10 +257,14 @@ async def kb_search(
         "step_stats": [...],
         "latency_ms": int,
       }
+      On a malformed date param: {"error": str, "field": str} instead.
     """
+    bounds = _bounds_or_error(doc_date_after, doc_date_before, created_after, created_before)
+    if isinstance(bounds, dict):
+        return bounds
     handle = await (await get_temporal_client()).start_workflow(
         SearchOrchestratorWorkflow.run,
-        _local_params(query, max_refinements),
+        _local_params(query, max_refinements, bounds),
         id=f"mcp-search-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
@@ -222,6 +292,9 @@ async def kb_global_search(
     NOT FOR: a specific fact about one entity / document — use `kb_search`
     (local) or the atomic MCP-2 tools.
     COST: heavy map-reduce workflow (up to ~30 min).
+    NOTE: date filters are not applicable to global mode — community
+    summaries are undated, so this tool has no doc_date_*/created_*
+    params (unlike `kb_search`, `kb_drift_search`, `kb_auto_search`).
 
     Returns the same shape as `kb_search` (answer + sources + citations +
     uncertainties + latency_ms; mode == "global").
@@ -245,6 +318,10 @@ async def kb_global_search(
 async def kb_drift_search(
     query: str,
     ctx: Context,
+    doc_date_after: str | None = None,
+    doc_date_before: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
 ) -> dict[str, Any]:
     """Drift search: run the local plan-execute flow first, then expand
     with a global GraphRAG pass seeded by the local sources, and
@@ -258,13 +335,24 @@ async def kb_drift_search(
     hit the shared 1800s tool timeout. If it does, prefer `kb_search` or
     `kb_global_search` alone.
 
-    Returns the same shape as `kb_search` (mode == "drift").
+    Args:
+      doc_date_after / doc_date_before: ISO YYYY-MM-DD, inclusive bounds —
+        filters by document date. Applied to the LOCAL pass only (the
+        global community-summary pass is undated, same as `kb_global_search`).
+      created_after / created_before: ISO YYYY-MM-DD, inclusive bounds —
+        filters by insertion date. Applied to the LOCAL pass only.
+
+    Returns the same shape as `kb_search` (mode == "drift"); on a
+    malformed date param: {"error": str, "field": str} instead.
     """
+    bounds = _bounds_or_error(doc_date_after, doc_date_before, created_after, created_before)
+    if isinstance(bounds, dict):
+        return bounds
     handle = await (await get_temporal_client()).start_workflow(
         DriftSearchWorkflow.run,
         # drift_mode=True mirrors the FastAPI /search/drift route; the
         # workflow also forces it internally, so this is defensive.
-        args=[_local_params(query), _global_params(query, drift_mode=True)],
+        args=[_local_params(query, bounds=bounds), _global_params(query, drift_mode=True)],
         id=f"mcp-drift-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
@@ -278,6 +366,10 @@ async def kb_drift_search(
 async def kb_auto_search(
     query: str,
     ctx: Context,
+    doc_date_after: str | None = None,
+    doc_date_before: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
 ) -> dict[str, Any]:
     """Auto-routed search: a small-tier LLM router classifies the query
     and dispatches to local / global / drift, then returns that mode's
@@ -287,12 +379,23 @@ async def kb_auto_search(
     decide. Fail-safe: routing errors fall back to local.
     COST: a quick routing LLM call + the chosen workflow (up to ~30 min).
 
+    Args:
+      doc_date_after / doc_date_before: ISO YYYY-MM-DD, inclusive bounds —
+        filters by document date. Only applied if the router picks local
+        or drift (the global route is undated, same as `kb_global_search`).
+      created_after / created_before: ISO YYYY-MM-DD, inclusive bounds —
+        filters by insertion date. Same local/drift-only caveat.
+
     Returns the same shape as `kb_search`; `mode` reflects the chosen
-    route ("local" / "global" / "drift").
+    route ("local" / "global" / "drift"). On a malformed date param:
+    {"error": str, "field": str} instead.
     """
+    bounds = _bounds_or_error(doc_date_after, doc_date_before, created_after, created_before)
+    if isinstance(bounds, dict):
+        return bounds
     handle = await (await get_temporal_client()).start_workflow(
         AutoSearchWorkflow.run,
-        args=[_local_params(query), _global_params(query)],
+        args=[_local_params(query, bounds=bounds), _global_params(query)],
         id=f"mcp-auto-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
