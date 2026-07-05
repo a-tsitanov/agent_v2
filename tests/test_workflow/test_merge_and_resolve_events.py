@@ -49,12 +49,17 @@ def _make_event(
     event_start_epoch: int | None = _DEFAULT_EPOCH,
     event_end_epoch: int | None = None,
     event_ts_precision: str | None = "day",
+    trigger: str = "провели встречу",
 ) -> EntityNode:
+    """A pipeline-produced event node -- always carries ``trigger`` (only
+    ``events_to_graph`` writes it), which is what gates it into the
+    event-dedup flow instead of the regular entity flow (Fix A)."""
     return EntityNode(
         name=name,
         label="EventOrAction",
         properties={
             "event_type": event_type,
+            "trigger": trigger,
             "participants": participants or ["Alice", "Bob"],
             "event_ts_raw": event_ts_raw,
             "event_start_epoch": event_start_epoch,
@@ -314,3 +319,48 @@ async def test_event_relations_rewritten_after_dedup():
     assert all(r.source_id != "EV_chunk2" for r in out_relations), (
         "Non-canonical event name must be rewritten to canonical"
     )
+
+
+# ── Fix A: pipeline-signature gate ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_entity_kind_event_or_action_bypasses_event_pipeline():
+    """EventOrAction nodes with NO event-pipeline signature (no ``trigger``)
+    must stay in the regular entity flow -- untouched by ``merge_events``.
+
+    Before Fix A, the EventOrAction/label-only split routed these into
+    merge_events, where they all share the untimed dedup key
+    ``("event", frozenset(), "∅")`` and mass-merge, and the type-vote
+    default stamps a spurious ``event_type='event'`` property onto them.
+    """
+    nodes = [MagicMock(node_id="a")]
+    # Entity-extractor nodes: label EventOrAction, but no pipeline props
+    # (no `trigger`, no `participants`, no `event_start_epoch`).
+    ent1 = EntityNode(name="Meeting Alpha", label="EventOrAction", properties={"description": "x"})
+    ent2 = EntityNode(name="Meeting Beta", label="EventOrAction", properties={"description": "y"})
+
+    merged_entities = [ent1, ent2]
+    merged_relations = []
+
+    fake_settings = MagicMock()
+    fake_settings.agent.er_enabled = False
+    fake_settings.events.extraction_enabled = True
+
+    patches = _base_patches(nodes, merged_entities, merged_relations, fake_settings)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        await merge_and_resolve(_ctx())
+
+    written_tuple = patches[0].kwargs["return_value"].write_pickle.call_args.args[2]
+    out_entities, _out_relations, _ = written_tuple
+
+    event_out = [e for e in out_entities if e.label == "EventOrAction"]
+    # Must NOT collapse -- each stays a distinct node, exactly like any
+    # other entity that happens to share a dedup key by coincidence.
+    assert len(event_out) == 2, f"Expected 2 distinct entity-kind nodes, got {len(event_out)}"
+    assert {e.name for e in event_out} == {"Meeting Alpha", "Meeting Beta"}
+    # Must NOT gain the merge_events type-vote stamp.
+    for e in event_out:
+        assert "event_type" not in (e.properties or {}), (
+            f"{e.name} must not be stamped with event_type by merge_events"
+        )

@@ -163,3 +163,18 @@ async def test_event_timeline_window_filters_on_start_with_created_fallback():
     res = await events_llm.event_timeline(None, entity="X", window_days=7)
     assert "coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs" in res.cypher
     assert "since_secs" in res.params
+
+
+@pytest.mark.asyncio
+async def test_event_timeline_counts_only_participation_edges():
+    """event_timeline must traverse PARTICIPATED_IN only -- not any edge.
+
+    A live-data finding: matching any edge (`-[]-`) pulls in unrelated
+    relationship types (e.g. MENTIONS, RELATES_TO) between the entity and
+    an EventOrAction node, inflating the timeline with events the entity
+    never actually participated in.  event_dossier's any-edge actor list
+    is intentional and must NOT change.
+    """
+    res = await events_llm.event_timeline(None, entity="X")
+    assert "-[:PARTICIPATED_IN]-" in res.cypher
+    assert "-[]-" not in res.cypher

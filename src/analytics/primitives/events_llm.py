@@ -78,7 +78,7 @@ async def event_timeline(
         params["since_secs"] = (today_epoch_days() - int(window_days)) * 86400
         where = "WHERE coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs "
     cypher = (
-        "MATCH (p:__Entity__ {name:$entity})-[]-(e:__Entity__:EventOrAction) "
+        "MATCH (p:__Entity__ {name:$entity})-[:PARTICIPATED_IN]-(e:__Entity__:EventOrAction) "
         f"{where}"
         "RETURN e.name AS name, e.event_type AS event_type, e.event_ts_raw AS event_ts_raw, "
         "e.event_start_epoch AS event_start_epoch, e.event_end_epoch AS event_end_epoch, "

@@ -108,9 +108,13 @@ def check_events() -> None:
         with GraphDatabase.driver(nj.uri, auth=auth) as driver, driver.session(database=nj.database) as s:
             row = s.run(
                 "MATCH (e:__Entity__:EventOrAction) RETURN count(e) AS total, "
-                "count(e.event_ts_raw) AS ts_present, count(e.event_start_epoch) AS ts_resolved"
+                "count(e.event_ts_raw) AS ts_present, count(e.event_start_epoch) AS ts_resolved, "
+                "count(e.trigger) AS pipeline_events"
             ).single()
-            print(f"  events {row['total']}  ts_present {row['ts_present']}  ts_resolved {row['ts_resolved']}")
+            print(
+                f"  events {row['total']} (pipeline {row['pipeline_events']})  "
+                f"ts_present {row['ts_present']}  ts_resolved {row['ts_resolved']}"
+            )
             for r in s.run(
                 "MATCH (e:__Entity__:EventOrAction) "
                 "WHERE e.event_ts_raw IS NOT NULL AND e.event_start_epoch IS NULL "

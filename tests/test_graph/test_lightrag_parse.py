@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.graph.lightrag_parse import (
     _cypher_safe_label,
     _first_keyword,
@@ -390,6 +392,18 @@ def test_sanitize_event_ts_rejects_non_temporal() -> None:
     ]
     for bad in bad_values:
         assert _sanitize_event_ts(bad) is None, f"Failed to reject: {bad}"
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["нет времени", "нет даты", "время не указано"],
+)
+def test_sanitize_event_ts_rejects_new_placeholders(placeholder: str) -> None:
+    """Live-data finding: these Russian "no time" placeholders were slipping
+    through as verbatim ts phrases (Fix C)."""
+    from src.graph.lightrag_parse import _sanitize_event_ts
+
+    assert _sanitize_event_ts(placeholder) is None, f"Failed to reject: {placeholder}"
 
 
 def test_sanitize_event_ts_keeps_phrases() -> None:

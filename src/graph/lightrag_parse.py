@@ -157,6 +157,7 @@ _TS_POLARITY_LITERALS = {"affirmed", "negated", "uncertain"}
 _TS_PLACEHOLDERS = {
     "empty", "unknown", "none", "null", "n/a", "-", "not specified",
     "не указано", "не указана", "неизвестно", "дата неизвестна", "дата не указана",
+    "нет времени", "нет даты", "время не указано",
 }
 _TS_COORD_RE = re.compile(r"^-?\d{1,3}\.\d+\s*[,;]\s*-?\d{1,3}\.\d+$")
 _TS_MAX_LEN = 64

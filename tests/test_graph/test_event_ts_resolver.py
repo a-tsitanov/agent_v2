@@ -82,6 +82,38 @@ def test_intraday_span_with_day():
         _utc(2026, 7, 6, 12, 0), _utc(2026, 7, 6, 18, 0), "datetime")
 
 
+# ── Fix D: day-of-month with unknown month («N числа») ───────────────
+
+
+def test_n_chisla_resolves_nearest_month():
+    # Anchor is 2026-07-05; "7 числа" is 2 days away in July vs. ~28/33
+    # days away in June/August -- nearest wins.
+    assert resolve("7 числа", ANCHOR_DAYS) == (
+        _utc(2026, 7, 7), _utc(2026, 7, 7, 23, 59, 59), "day")
+
+
+def test_n_chisla_with_go_suffix_resolves_same():
+    assert resolve("7-го числа", ANCHOR_DAYS) == (
+        _utc(2026, 7, 7), _utc(2026, 7, 7, 23, 59, 59), "day")
+
+
+def test_n_chisla_none_without_anchor():
+    assert resolve("7 числа", None) is None
+    assert resolve("7-го числа", None) is None
+
+
+# ── Fix D: «в течение дня» — anchor day itself ────────────────────────
+
+
+def test_v_techenie_dnya_resolves_to_anchor_day():
+    assert resolve("в течение дня", ANCHOR_DAYS) == (
+        _utc(2026, 7, 5), _utc(2026, 7, 5, 23, 59, 59), "day")
+
+
+def test_v_techenie_dnya_none_without_anchor():
+    assert resolve("в течение дня", None) is None
+
+
 # ── unresolvable ⇒ None, never an invention ──────────────────────────
 
 @pytest.mark.parametrize("garbage", [

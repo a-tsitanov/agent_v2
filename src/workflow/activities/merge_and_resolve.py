@@ -153,12 +153,25 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     # Split EventOrAction nodes out BEFORE ER so ER never touches them;
     # their dedup is handled deterministically by merge_events.  When the
     # feature is off the lists are passed through unchanged.
+    #
+    # The split is gated on the event-PIPELINE signature (label +
+    # `trigger` property), not label alone: entity-extractor nodes can
+    # also carry label="EventOrAction" but have no pipeline props (no
+    # `trigger` -- only `events_to_graph` in src/graph/event_extract.py
+    # writes it).  Routing those into merge_events stamps a spurious
+    # `event_type='event'` default and mass-merges them under the shared
+    # untimed dedup key.  Non-pipeline EventOrAction nodes must flow
+    # through the regular entity path (ER etc.) untouched, exactly like
+    # any other entity.
     _held_ev_nodes: list = []
     _held_ev_rels: list = []
     if settings.events.extraction_enabled:
-        _event_names = {e.name for e in merged_entities if e.label == "EventOrAction"}
-        _ev_in = [e for e in merged_entities if e.label == "EventOrAction"]
-        _non_ev_entities = [e for e in merged_entities if e.label != "EventOrAction"]
+        def _is_pipeline_event(e) -> bool:
+            return e.label == "EventOrAction" and "trigger" in (e.properties or {})
+
+        _event_names = {e.name for e in merged_entities if _is_pipeline_event(e)}
+        _ev_in = [e for e in merged_entities if _is_pipeline_event(e)]
+        _non_ev_entities = [e for e in merged_entities if not _is_pipeline_event(e)]
         _ev_rels = [
             r
             for r in merged_relations

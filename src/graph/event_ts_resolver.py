@@ -51,6 +51,12 @@ _HALF_RE = re.compile(r"^(перв|втор)\w*\s+полугоди\w*$")
 _QUARTER_RE = re.compile(r"^(?:q\s*([1-4])|([1-4])\s*-?й?\s*квартал\w*)(?:\s+(\d{4}))?$")
 _INTRADAY_RE = re.compile(r"^(.*?)\s*с\s*(\d{1,2}):(\d{2})\s*до\s*(\d{1,2}):(\d{2})(?:\s*\S+)?$")
 _PREPOSITION_RE = re.compile(r"^(?:в|на|к|до|около|примерно)\s+")
+# «7 числа» / «7-го числа» — day-of-month with the month left unstated.
+_NUM_CHISLA_RE = re.compile(r"^(\d{1,2})\s*-?(?:го|е)?\s*числа$")
+# «в течение дня» — the anchor day itself, as a day interval.  Written to
+# match with or without the leading preposition since it is checked
+# against `text` directly (before `_PREPOSITION_RE` strips "в ").
+_TECHENIE_DNYA_RE = re.compile(r"^(?:в\s+)?течение\s+дня$")
 
 _EPOCH = date(1970, 1, 1)
 
@@ -90,6 +96,25 @@ def _nearest_year(day: int, month: int, anchor: date) -> int | None:
             continue
         if best is None or delta < best[0]:
             best = (delta, y)
+    return best[1] if best else None
+
+
+def _nearest_month_day(day: int, anchor: date) -> date | None:
+    """Date for a fixed ``day`` falling in the anchor month or ±1 month,
+    whichever candidate lands closest to the anchor (mirrors
+    ``_nearest_year`` but slides over months instead of years)."""
+    best: tuple[int, date] | None = None
+    for delta in (-1, 0, 1):
+        total = anchor.month - 1 + delta
+        year = anchor.year + total // 12
+        month = total % 12 + 1
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue
+        dist = abs((candidate - anchor).days)
+        if best is None or dist < best[0]:
+            best = (dist, candidate)
     return best[1] if best else None
 
 
@@ -207,6 +232,10 @@ def _resolve(raw: str | None, doc_date_epoch_days: int | None) -> Resolved | Non
         end = _ts(day.year, day.month, day.day, int(m.group(4)), int(m.group(5)))
         return (start, end, "datetime") if start <= end else None
 
+    m = _TECHENIE_DNYA_RE.match(text)
+    if m:
+        return (*_day_bounds(anchor), "day") if anchor else None
+
     stripped = _PREPOSITION_RE.sub("", text)
 
     m = _DAY_SPAN_RE.match(stripped)
@@ -227,6 +256,14 @@ def _resolve(raw: str | None, doc_date_epoch_days: int | None) -> Resolved | Non
         if year is None:
             return None
         return (*_month_bounds(year, month), "month")
+
+    m = _NUM_CHISLA_RE.match(stripped)
+    if m:
+        if not anchor:
+            return None
+        day = int(m.group(1))
+        d = _nearest_month_day(day, anchor)
+        return (*_day_bounds(d), "day") if d else None
 
     if not re.search(r"[а-яa-z0-9]", stripped):
         return None
