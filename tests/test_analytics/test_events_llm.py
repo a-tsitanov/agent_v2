@@ -17,7 +17,7 @@ async def test_event_dossier_assembles_core_and_actors():
                 {
                     "name": "Murder of Sergei",
                     "event_type": "ASSASSINATION",
-                    "event_ts": 1234567890,
+                    "event_ts_raw": 1234567890,
                     "polarity": "negated",
                 }
             ],  # core
@@ -31,7 +31,7 @@ async def test_event_dossier_assembles_core_and_actors():
     row = res.rows[0]
     assert row["core"]["name"] == "Murder of Sergei"
     assert row["core"]["event_type"] == "ASSASSINATION"
-    assert row["core"]["event_ts"] == 1234567890
+    assert row["core"]["event_ts_raw"] == 1234567890
     assert len(row["actors"]) == 2
     assert row["actors"][0]["actor_name"] == "Ivan"
     assert res.params["name"] == "Murder of Sergei"
@@ -46,7 +46,7 @@ async def test_event_dossier_empty_actors():
                 {
                     "name": "Market Rally",
                     "event_type": "MARKET_EVENT",
-                    "event_ts": 1234567890,
+                    "event_ts_raw": 1234567890,
                     "polarity": None,
                 }
             ],  # core
@@ -68,19 +68,30 @@ async def test_event_dossier_top_n_clamping():
 
 
 @pytest.mark.asyncio
-async def test_event_timeline_orders_by_event_ts():
-    """event_timeline returns events ordered by event_ts property."""
+async def test_event_dossier_cypher_returns_interval_fields():
+    """event_dossier cypher includes interval fields contract."""
+    res = await events_llm.event_dossier(None, name="X")
+    # Verify interval fields are selected
+    for field in ("event_ts_raw", "event_start_epoch", "event_end_epoch", "event_ts_precision"):
+        assert f"e.{field} AS {field}" in res.cypher
+    # Verify legacy field is gone
+    assert "e.event_ts AS" not in res.cypher
+
+
+@pytest.mark.asyncio
+async def test_event_timeline_passes_rows_through():
+    """event_timeline returns rows from the store unchanged."""
     store = _FakeStore(
         rows=[
-            {"name": "Event A", "event_type": "PROTEST", "event_ts": 1000},
-            {"name": "Event B", "event_type": "ARREST", "event_ts": 2000},
-            {"name": "Event C", "event_type": "RELEASE", "event_ts": 1500},
+            {"name": "Event A", "event_type": "PROTEST", "event_ts_raw": 1000},
+            {"name": "Event B", "event_type": "ARREST", "event_ts_raw": 2000},
+            {"name": "Event C", "event_type": "RELEASE", "event_ts_raw": 1500},
         ]
     )
     res = await events_llm.event_timeline(store, entity="John")
-    # Caller should order; we just check they came back
+    # Verify row pass-through
     assert len(res.rows) == 3
-    assert res.rows[1]["name"] == "Event B"  # middle one if ordering preserved
+    assert res.rows[1]["name"] == "Event B"
     assert res.params["entity"] == "John"
 
 
