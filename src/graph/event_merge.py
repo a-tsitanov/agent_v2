@@ -115,4 +115,4 @@ def merge_events(
     return merged, out_rels
 
 
-__all__ = ["_ts_bucket", "event_key", "merge_events"]
+__all__ = ["event_key", "merge_events"]

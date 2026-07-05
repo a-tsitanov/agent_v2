@@ -25,17 +25,25 @@ def test_event_key_buckets_on_epoch():
 
 
 def test_merge_events_keeps_earliest_interval():
-    def node(start, end):
+    def node(start, end, ts_raw, precision):
         return EntityNode(name=f"deal: подписали {start}", label="EventOrAction", properties={
             "event_type": "deal", "participants": ["Иванов"],
-            "event_ts_raw": "x", "event_start_epoch": start, "event_end_epoch": end,
-            "event_ts_precision": "day", "source_chunks": [f"c{start}"],
+            "event_ts_raw": ts_raw, "event_start_epoch": start, "event_end_epoch": end,
+            "event_ts_precision": precision, "source_chunks": [f"c{start}"],
         })
 
     early, late = _epoch(2026, 7, 1), _epoch(2026, 7, 2)
-    merged, _ = merge_events([node(late, late + 86399), node(early, early + 86399)], [])
+    merged, _ = merge_events(
+        [node(late, late + 86399, "raw-late", "datetime"),
+         node(early, early + 86399, "raw-early", "day")],
+        []
+    )
     assert len(merged) == 1
+    # Verify all timestamp fields are taken from earliest member
     assert merged[0].properties["event_start_epoch"] == early
+    assert merged[0].properties["event_end_epoch"] == early + 86399
+    assert merged[0].properties["event_ts_raw"] == "raw-early"
+    assert merged[0].properties["event_ts_precision"] == "day"
 
 
 def test_event_key_is_participant_order_insensitive_and_epoch_bucketed():
@@ -145,10 +153,10 @@ def test_earliest_event_epoch_selected():
         label="EventOrAction",
         properties={
             "event_type": "deal",
-            "event_ts_raw": "x",
+            "event_ts_raw": "raw-late",
             "event_start_epoch": late,
             "event_end_epoch": late + 86399,
-            "event_ts_precision": "day",
+            "event_ts_precision": "datetime",
             "participants": ["X", "Y"],
             "source_chunks": ["c1"],
         },
@@ -158,7 +166,7 @@ def test_earliest_event_epoch_selected():
         label="EventOrAction",
         properties={
             "event_type": "deal",
-            "event_ts_raw": "x",
+            "event_ts_raw": "raw-early",
             "event_start_epoch": early,
             "event_end_epoch": early + 86399,
             "event_ts_precision": "day",
@@ -168,7 +176,11 @@ def test_earliest_event_epoch_selected():
     )
     nodes, _ = merge_events([ev1, ev2], [])
     assert len(nodes) == 1
+    # Verify all timestamp fields are taken from earliest member (ev2)
     assert nodes[0].properties["event_start_epoch"] == early
+    assert nodes[0].properties["event_end_epoch"] == early + 86399
+    assert nodes[0].properties["event_ts_raw"] == "raw-early"
+    assert nodes[0].properties["event_ts_precision"] == "day"
 
 
 def test_no_ts_sentinel_groups_correctly():
