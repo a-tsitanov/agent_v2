@@ -183,6 +183,7 @@ class LightRAGExtractor(TransformComponent):
             system_msg = system_msg + EVENT_INSTRUCTION.format(
                 tuple_delimiter=TUPLE_DELIM,
                 completion_delimiter=COMPLETE_DELIM,
+                taxonomy=", ".join(_settings.events.taxonomy) + ", other",
             )
         user_msg = ENTITY_EXTRACTION_USER.format(
             entity_types=entity_types_str,

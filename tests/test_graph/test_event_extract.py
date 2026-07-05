@@ -291,3 +291,36 @@ async def test_extractor_gated_on_emits_event_nodes(monkeypatch) -> None:
     assert event_nodes[0].properties["event_type"] == "deal"
     part_rels = [r for r in rels if r.label == "PARTICIPATED_IN"]
     assert len(part_rels) == 2
+
+
+def test_event_instruction_declares_verbatim_and_taxonomy():
+    from src.graph.lightrag_prompts import EVENT_INSTRUCTION
+
+    assert "{taxonomy}" in EVENT_INSTRUCTION
+    assert "VERBATIM" in EVENT_INSTRUCTION
+    assert "NEVER guess" in EVENT_INSTRUCTION
+    # the old contract must be gone: no ISO normalization request
+    assert "ISO date or range" not in EVENT_INSTRUCTION
+    # the few-shot must demonstrate the empty-ts case
+    assert "нет времени в тексте" in EVENT_INSTRUCTION or "no time stated" in EVENT_INSTRUCTION
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_carries_configured_taxonomy(monkeypatch) -> None:
+    from src.config import settings as _settings
+
+    monkeypatch.setattr(_settings.events, "extraction_enabled", True)
+    monkeypatch.setattr(_settings.events, "taxonomy", ["deal", "meeting"])
+    captured: dict = {}
+
+    extractor = LightRAGExtractor(llm=_ScriptedLLM(responses=[_event_payload()]), num_workers=1)
+
+    orig = extractor._chat
+
+    async def spy(system_msg, user_msg):
+        captured["system"] = system_msg
+        return await orig(system_msg, user_msg)
+
+    extractor._chat = spy
+    await extractor.acall([TextNode(id_="tax1", text="text")])
+    assert "deal, meeting, other" in captured["system"]
