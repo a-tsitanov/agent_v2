@@ -399,7 +399,7 @@ event{tuple_delimiter}deal{tuple_delimiter}одобрил слияние{tuple_d
 """
 """Addendum appended to the system prompt when event extraction is enabled.
 
-Contains the tuple spec and one few-shot.  Append to
+Contains the tuple spec and few-shot examples.  Append to
 `ENTITY_EXTRACTION_SYSTEM` (after `.format(...)`) only when events are
 requested — do NOT include in the default entity/relation prompt.
 """

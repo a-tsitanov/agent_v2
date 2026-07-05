@@ -97,13 +97,13 @@ def check_neo4j() -> None:
 
 
 def check_events() -> None:
-    from neo4j import GraphDatabase
-
     print(_SEP)
     print("Neo4j — E2 events / time-frames")
     print(_SEP)
     nj = settings.neo4j
     try:
+        from neo4j import GraphDatabase
+
         auth = (nj.user, nj.password.get_secret_value())
         with GraphDatabase.driver(nj.uri, auth=auth) as driver, driver.session(database=nj.database) as s:
             row = s.run(

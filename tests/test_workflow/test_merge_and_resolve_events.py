@@ -12,6 +12,7 @@ Mirrors the harness in test_merge_and_resolve.py.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,12 +30,25 @@ def _ctx() -> KGExtracted:
     return KGExtracted(parsed=parsed, nodes_with_kg_uri="s3://kb-staging/r/kg.pkl")
 
 
+def _epoch(y: int, m: int, d: int) -> int:
+    return int(datetime(y, m, d, tzinfo=UTC).timestamp())
+
+
+# Default epoch used by _make_event: 2024-01-15 (ISO week 2024-W03). merge_events
+# buckets by ISO year-week (bucket_days=7 default), so two default-epoch fixtures
+# fall in the same bucket and are expected to dedup.
+_DEFAULT_EPOCH = _epoch(2024, 1, 15)
+
+
 def _make_event(
     name: str,
     *,
     event_type: str = "meeting",
     participants: list[str] | None = None,
-    event_ts: str | None = "2024-01-15",
+    event_ts_raw: str | None = "2024-01-15",
+    event_start_epoch: int | None = _DEFAULT_EPOCH,
+    event_end_epoch: int | None = None,
+    event_ts_precision: str | None = "day",
 ) -> EntityNode:
     return EntityNode(
         name=name,
@@ -42,7 +56,10 @@ def _make_event(
         properties={
             "event_type": event_type,
             "participants": participants or ["Alice", "Bob"],
-            "event_ts": event_ts,
+            "event_ts_raw": event_ts_raw,
+            "event_start_epoch": event_start_epoch,
+            "event_end_epoch": event_end_epoch,
+            "event_ts_precision": event_ts_precision,
         },
     )
 
@@ -88,7 +105,11 @@ def _base_patches(nodes, merged_entities, merged_relations, fake_settings):
 
 @pytest.mark.asyncio
 async def test_event_dedup_enabled_collapses_duplicate_events():
-    """Two EventOrAction nodes with the same event_key → one survives."""
+    """Two EventOrAction nodes with the same event_key → one survives.
+
+    Both use the default epoch (2024-01-15, ISO week 2024-W03), so they share
+    the same key: type + participants + ts_bucket.
+    """
     nodes = [MagicMock(node_id="a")]
     ev1 = _make_event("EventMeeting_chunk1")
     ev2 = _make_event("EventMeeting_chunk2")  # same key: type+participants+ts_bucket
@@ -119,6 +140,95 @@ async def test_event_dedup_enabled_collapses_duplicate_events():
     assert any(e.name == "Alice" for e in out_entities)
     # Entity names on the Merged contract reflect post-dedup state
     assert len([n for n in out.entity_names if n.startswith("EventMeeting")]) == 1
+
+
+@pytest.mark.asyncio
+async def test_event_dedup_different_ts_bucket_does_not_collapse():
+    """Same type+participants but different ISO-week ts_bucket → both survive.
+
+    This exercises the dated-dedup path itself (distinct ts_bucket keys),
+    as opposed to the untimed ``∅`` bucket.
+    """
+    nodes = [MagicMock(node_id="a")]
+    ev1 = _make_event(
+        "EventMeeting_jan",
+        event_ts_raw="2024-01-15",
+        event_start_epoch=_epoch(2024, 1, 15),
+    )
+    ev2 = _make_event(
+        "EventMeeting_jun",
+        event_ts_raw="2024-06-15",
+        event_start_epoch=_epoch(2024, 6, 15),
+    )
+    regular = _make_entity("Alice")
+
+    merged_entities = [ev1, ev2, regular]
+    merged_relations = [
+        _make_relation("EventMeeting_jan", "Alice"),
+        _make_relation("EventMeeting_jun", "Alice"),
+    ]
+
+    fake_settings = MagicMock()
+    fake_settings.agent.er_enabled = False
+    fake_settings.events.extraction_enabled = True
+
+    patches = _base_patches(nodes, merged_entities, merged_relations, fake_settings)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        out = await merge_and_resolve(_ctx())
+
+    written_tuple = patches[0].kwargs["return_value"].write_pickle.call_args.args[2]
+    out_entities, _out_relations, _ = written_tuple
+
+    event_out = [e for e in out_entities if e.label == "EventOrAction"]
+    # Different ts_bucket ⇒ distinct event_key ⇒ no collapse
+    assert len(event_out) == 2, f"Expected 2 event nodes (different ts-bucket), got {len(event_out)}"
+    assert len([n for n in out.entity_names if n.startswith("EventMeeting")]) == 2
+
+
+@pytest.mark.asyncio
+async def test_event_dedup_untimed_events_still_collapse():
+    """Events with no resolvable timestamp share the untimed ``∅`` bucket.
+
+    Preserves coverage of the untimed path: a re-reported event with no
+    extractable date must still dedup on type+participants alone.
+    """
+    nodes = [MagicMock(node_id="a")]
+    ev1 = _make_event(
+        "EventMeeting_untimed1",
+        event_ts_raw=None,
+        event_start_epoch=None,
+        event_end_epoch=None,
+        event_ts_precision=None,
+    )
+    ev2 = _make_event(
+        "EventMeeting_untimed2",
+        event_ts_raw=None,
+        event_start_epoch=None,
+        event_end_epoch=None,
+        event_ts_precision=None,
+    )
+    regular = _make_entity("Alice")
+
+    merged_entities = [ev1, ev2, regular]
+    merged_relations = [
+        _make_relation("EventMeeting_untimed1", "Alice"),
+        _make_relation("EventMeeting_untimed2", "Alice"),
+    ]
+
+    fake_settings = MagicMock()
+    fake_settings.agent.er_enabled = False
+    fake_settings.events.extraction_enabled = True
+
+    patches = _base_patches(nodes, merged_entities, merged_relations, fake_settings)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        await merge_and_resolve(_ctx())
+
+    written_tuple = patches[0].kwargs["return_value"].write_pickle.call_args.args[2]
+    out_entities, _out_relations, _ = written_tuple
+
+    event_out = [e for e in out_entities if e.label == "EventOrAction"]
+    # Untimed ⇒ shared ∅ bucket ⇒ still collapses to ONE canonical node
+    assert len(event_out) == 1, f"Expected 1 event node (untimed ∅ bucket), got {len(event_out)}"
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,14 @@ def test_bare_year():
     assert resolve("2023", ANCHOR_DAYS) == (_utc(2023, 1, 1), _utc(2023, 12, 31, 23, 59, 59), "year")
 
 
+def test_bare_year_implausible_clamped_to_none():
+    # Bare 4-digit numbers outside a plausible calendar-year range must not be
+    # treated as years (avoids e.g. "1200" → year 1200 with a negative epoch).
+    assert resolve("1200", ANCHOR_DAYS) is None
+    assert resolve("3000", ANCHOR_DAYS) is None
+    assert resolve("2023", ANCHOR_DAYS) is not None
+
+
 def test_year_range_with_word():
     assert resolve("2026–2027 годы", ANCHOR_DAYS) == (_utc(2026, 1, 1), _utc(2027, 12, 31, 23, 59, 59), "year")
 
@@ -94,5 +102,6 @@ def test_no_anchor_relative_returns_none():
 
 
 def test_never_raises_on_weird_input():
-    assert resolve("6 " * 30, ANCHOR_DAYS) is None  # >64 chars → None fast-path
+    assert resolve("6 " * 30, ANCHOR_DAYS) is None  # gibberish — rejected by dateparser fallback (59 chars)
+    assert resolve("6 " * 40, ANCHOR_DAYS) is None  # 79 chars — length fast-path
     assert resolve("99 микабря 20260", ANCHOR_DAYS) is None

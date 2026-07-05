@@ -16,9 +16,13 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime, timedelta
 
+from loguru import logger
+
 Resolved = tuple[int, int, str]
 
 _MAX_LEN = 64
+_MIN_YEAR = 1900
+_MAX_YEAR = 2100
 
 _MONTHS = {
     "январь": 1, "января": 1, "январе": 1,
@@ -133,7 +137,8 @@ def _dateparser_day(text: str, anchor: date | None) -> date | None:
 def resolve(raw: str | None, doc_date_epoch_days: int | None) -> Resolved | None:
     try:
         return _resolve(raw, doc_date_epoch_days)
-    except Exception:  # resolver must never break extraction
+    except Exception as exc:  # resolver must never break extraction
+        logger.debug("event-ts resolve failed for {raw!r}: {exc}", raw=raw, exc=exc)
         return None
 
 
@@ -164,13 +169,18 @@ def _resolve(raw: str | None, doc_date_epoch_days: int | None) -> Resolved | Non
     m = _YEAR_RANGE_RE.match(text)
     if m:
         y1, y2 = int(m.group(1)), int(m.group(2))
+        if not (_MIN_YEAR <= y1 <= _MAX_YEAR and _MIN_YEAR <= y2 <= _MAX_YEAR):
+            return None
         if y1 <= y2:
             return _year_bounds(y1)[0], _year_bounds(y2)[1], "year"
         return None
 
     m = _BARE_YEAR_RE.match(text)
     if m:
-        return (*_year_bounds(int(m.group(1))), "year")
+        y = int(m.group(1))
+        if not _MIN_YEAR <= y <= _MAX_YEAR:
+            return None
+        return (*_year_bounds(y), "year")
 
     m = _HALF_RE.match(text)
     if m and anchor:
