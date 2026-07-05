@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import UTC, datetime
 
 from llama_index.core.graph_stores.types import EntityNode, Relation
 
 from src.graph.lightrag_parse import _normalize_entity_name
 
 _NO_TS = "∅"
+_TS_PROPS = ("event_ts_raw", "event_start_epoch", "event_end_epoch", "event_ts_precision")
 
 
-def _ts_bucket(event_ts: str | None, bucket_days: int) -> str:
-    if not event_ts:
+def _ts_bucket(event_start_epoch: int | None, bucket_days: int) -> str:
+    if event_start_epoch is None:
         return _NO_TS
-    from datetime import date
-
-    try:
-        d = date.fromisoformat(event_ts[:10])
-    except ValueError:
-        return event_ts[:7]  # fall back to month string
+    d = datetime.fromtimestamp(int(event_start_epoch), tz=UTC).date()
     if bucket_days == 7:
         # Use ISO year-week so calendar weeks are never split at bucket boundaries.
         year, week, _ = d.isocalendar()
@@ -30,7 +27,7 @@ def _ts_bucket(event_ts: str | None, bucket_days: int) -> str:
 def event_key(
     event_type: str,
     participants: list[str],
-    event_ts: str | None,
+    event_start_epoch: int | None,
     *,
     bucket_days: int = 7,
 ) -> tuple:
@@ -40,7 +37,7 @@ def event_key(
         ``(event_type_lower, frozenset(normalised_participant_names), ts_bucket)``
     """
     parts = frozenset(_normalize_entity_name(p) for p in participants if p)
-    return ((event_type or "event").strip().lower(), parts, _ts_bucket(event_ts, bucket_days))
+    return ((event_type or "event").strip().lower(), parts, _ts_bucket(event_start_epoch, bucket_days))
 
 
 def merge_events(
@@ -54,7 +51,7 @@ def merge_events(
     The canonical node retains:
     * majority ``event_type`` (Counter.most_common);
     * union of ``source_chunks`` (dedup-ordered, earliest-first);
-    * earliest ``event_ts`` across members.
+    * interval of the earliest-starting member.
 
     Argument edges (``source_id`` / ``target_id``) are rewritten to point
     at the canonical node's ``name`` (the first member in insertion order).
@@ -69,7 +66,7 @@ def merge_events(
         k = event_key(
             p.get("event_type", ""),
             p.get("participants", []) or [],
-            p.get("event_ts"),
+            p.get("event_start_epoch"),
             bucket_days=bucket_days,
         )
         groups[k].append(n)
@@ -81,20 +78,25 @@ def merge_events(
         first = members[0]
         chunks: list[str] = []
         type_votes: Counter = Counter()
-        ts_vals: list[str] = []
 
         for m in members:
             mp = m.properties or {}
             chunks += list(mp.get("source_chunks", []) or [])
             type_votes[mp.get("event_type", "event")] += 1
-            if mp.get("event_ts"):
-                ts_vals.append(mp["event_ts"])
             canonical_id[m.name] = first.name
 
+        earliest = min(
+            (m for m in members if (m.properties or {}).get("event_start_epoch") is not None),
+            key=lambda m: m.properties["event_start_epoch"],
+            default=None,
+        )
         props = dict(first.properties or {})
         props["event_type"] = type_votes.most_common(1)[0][0]
         props["source_chunks"] = list(dict.fromkeys(chunks))
-        props["event_ts"] = min(ts_vals) if ts_vals else props.get("event_ts")
+        if earliest is not None:
+            for k in _TS_PROPS:
+                if k in (earliest.properties or {}):
+                    props[k] = earliest.properties[k]
         merged.append(EntityNode(name=first.name, label="EventOrAction", properties=props))
 
     # rewrite argument edges to the canonical event node
@@ -113,4 +115,4 @@ def merge_events(
     return merged, out_rels
 
 
-__all__ = ["event_key", "merge_events"]
+__all__ = ["_ts_bucket", "event_key", "merge_events"]
