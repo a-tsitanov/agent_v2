@@ -172,7 +172,7 @@ def _llm_events_extractor_factory() -> EventsExtractor:  # pragma: no cover - in
                     {
                         "event_type": p.get("event_type", ""),
                         "participants": list(p.get("participants") or []),
-                        "event_ts": p.get("event_ts"),
+                        "event_ts": p.get("event_ts_raw"),
                     }
                 )
         return events
