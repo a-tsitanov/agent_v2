@@ -113,7 +113,7 @@ def test_parse_skips_malformed_lines() -> None:
         f"entity{TUPLE_DELIM}X",        # missing fields → skip
         f"entity{TUPLE_DELIM}Y{TUPLE_DELIM}Concept{TUPLE_DELIM}A real entity.",
         f"relation{TUPLE_DELIM}Y",      # missing fields → skip
-        f"random text without a delimiter",
+        "random text without a delimiter",
         COMPLETE_DELIM,
     ])
     res = parse_lightrag_output(raw)
@@ -317,3 +317,98 @@ def test_parsed_relations_to_relations_carries_polarity_temporal() -> None:
     assert props["polarity"] == "negated"
     assert props["valid_from"] is None
     assert props["valid_to"] == "2020"
+
+
+# ── temporal validation: only ISO YYYY[-MM[-DD]] survives ────────────
+# (2026-07-05: 40 rels landed in prod with valid_from="2024-XX" and
+#  similar LLM improvisations — opaque pass-through poisoned the
+#  whats_changed date-window comparisons; now each bound is validated)
+
+
+def test_parse_temporal_accepts_iso_shapes():
+    from src.graph.lightrag_parse import _parse_temporal
+
+    assert _parse_temporal("2015..2020") == ("2015", "2020")
+    assert _parse_temporal("2015-03..2020-11") == ("2015-03", "2020-11")
+    assert _parse_temporal("2024-03-15") == ("2024-03-15", None)
+    assert _parse_temporal("..2020") == (None, "2020")
+    assert _parse_temporal("2015..") == ("2015", None)
+
+
+def test_parse_temporal_rejects_non_iso_bounds():
+    from src.graph.lightrag_parse import _parse_temporal
+
+    assert _parse_temporal("2024-XX") == (None, None)          # LLM-заглушка
+    assert _parse_temporal("март 2024") == (None, None)        # словесная дата
+    assert _parse_temporal("Q1 2024") == (None, None)
+    assert _parse_temporal("2024-13-40") == (None, None)       # мусорный месяц/день
+    assert _parse_temporal("20240315") == (None, None)         # без дефисов
+    # смешанное окно: валидная сторона живёт, мусорная — None
+    assert _parse_temporal("2024-XX..2025") == (None, "2025")
+    assert _parse_temporal("2015..когда-нибудь") == ("2015", None)
+
+
+def test_drop_unsupported_dates_requires_year_in_chunk_text():
+    """Анти-копипаста дат из промпта: extraction не видит дату документа,
+    поэтому дата, чей ГОД не встречается в тексте чанка, физически не могла
+    быть извлечена из текста — только скопирована из инструкции/примеров
+    (342 ребра с датой из few-shot дошли до прода, 2026-07-05)."""
+    from src.graph.lightrag_parse import ParsedRelation, drop_unsupported_dates
+
+    def rel(vf, vt=None):
+        return ParsedRelation(
+            source_name="A", target_name="B", keywords="k",
+            description="d", valid_from=vf, valid_to=vt,
+        )
+
+    text = "Договор подписан 15 марта 2024 года, действует до конца 2025."
+    rels = [
+        rel("2024-03-15"),            # 2024 есть в тексте → живёт
+        rel("2024", "2025"),          # оба года в тексте → живут
+        rel("2015"),                  # 2015 в тексте нет → None
+        rel("2023-01-01", "2025"),    # from дропается, to живёт
+        rel(None, None),              # нечего проверять
+    ]
+    dropped = drop_unsupported_dates(rels, text)
+    assert dropped == 2
+    assert rels[0].valid_from == "2024-03-15"
+    assert rels[1].valid_from == "2024" and rels[1].valid_to == "2025"
+    assert rels[2].valid_from is None
+    assert rels[3].valid_from is None and rels[3].valid_to == "2025"
+
+
+# ── event_ts sanity gate ─────────────────────────────────────────────
+
+
+def test_sanitize_event_ts_rejects_non_temporal() -> None:
+    from src.graph.lightrag_parse import _sanitize_event_ts
+
+    bad_values = [
+        "affirmed", "uncertain", "empty", "unknown", "Не указано", "неизвестно",
+        "52.164866, 32.929911", "Бразилия;Норвегия",
+        "Упоминается роль Норвегии как крупнейшего донора в программе НАТО PURL.",
+    ]
+    for bad in bad_values:
+        assert _sanitize_event_ts(bad) is None, f"Failed to reject: {bad}"
+
+
+def test_sanitize_event_ts_keeps_phrases() -> None:
+    from src.graph.lightrag_parse import _sanitize_event_ts
+
+    good_values = ["вчера", "6 июля с 12:00 до 18:00 мск", "1 марта 2024", "2024-07-06"]
+    for good in good_values:
+        assert _sanitize_event_ts(good) == good, f"Failed to keep: {good}"
+
+
+def test_event_line_with_missing_fields_gets_untimed() -> None:
+    # Only 5 fields: participants slid into the ts position — ts must be dropped.
+    line = TUPLE_DELIM.join(["event", "meeting", "провели встречу", "Иванов;Петров", "Москва"])
+    out = parse_lightrag_output(line + "\n" + COMPLETE_DELIM)
+    assert len(out.events) == 1
+    assert out.events[0].event_ts is None
+
+
+def test_full_event_line_keeps_verbatim_ts() -> None:
+    line = TUPLE_DELIM.join(["event", "meeting", "провели встречу", "Иванов", "вчера", "Москва", "affirmed"])
+    out = parse_lightrag_output(line + "\n" + COMPLETE_DELIM)
+    assert out.events[0].event_ts == "вчера"

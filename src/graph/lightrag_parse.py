@@ -88,6 +88,26 @@ def _normalize_polarity(raw: str) -> str:
     return "affirmed"
 
 
+# Validity bound: ISO YYYY / YYYY-MM / YYYY-MM-DD only. Anything else the
+# LLM improvises ("2024-XX", "март 2024", "Q1 2024") is dropped to None —
+# non-ISO strings poison the lexicographic date-window comparisons in
+# whats_changed/relationship_timeline (40 such rels reached prod, 2026-07-05).
+_ISO_BOUND_RE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
+
+
+def _valid_bound(raw: str) -> str | None:
+    val = (raw or "").strip()
+    m = _ISO_BOUND_RE.match(val)
+    if not m:
+        return None
+    _, mm, dd = m.groups()
+    if mm is not None and not 1 <= int(mm) <= 12:
+        return None
+    if dd is not None and not 1 <= int(dd) <= 31:
+        return None
+    return val
+
+
 def _parse_temporal(raw: str) -> tuple[str | None, str | None]:
     """Parse a `from..to` validity window into `(valid_from, valid_to)`.
 
@@ -97,16 +117,62 @@ def _parse_temporal(raw: str) -> tuple[str | None, str | None]:
     * bare `"2024-03-15"` (no `..`) → `("2024-03-15", None)` (point/start)
     * empty / `none` / `null` → `(None, None)`
 
-    Dates are kept as opaque strings (ISO `YYYY`/`YYYY-MM-DD` recommended)
-    so they sort lexicographically for the merge window-widening.
+    Each bound must be ISO `YYYY[-MM[-DD]]` (see ``_valid_bound``) so dates
+    sort lexicographically for the merge window-widening; a non-ISO bound
+    is dropped independently (the other side of the window survives).
     """
     val = (raw or "").strip()
     if not val or val.lower() in {"none", "null", "n/a", "-"}:
         return None, None
     if ".." in val:
         left, _, right = val.partition("..")
-        return (left.strip() or None, right.strip() or None)
-    return (val, None)
+        return (_valid_bound(left), _valid_bound(right))
+    return (_valid_bound(val), None)
+
+
+def drop_unsupported_dates(relations: list[ParsedRelation], chunk_text: str) -> int:
+    """Null out ``valid_from``/``valid_to`` bounds whose YEAR does not
+    literally appear in ``chunk_text``; returns how many bounds were dropped.
+
+    Anti-fabrication guard: the extraction model never sees the document
+    date, so a date whose year is absent from the chunk cannot have been
+    read from the text — it was copied from the prompt's instructions or
+    few-shot examples (342 prod rels carried a few-shot date, 2026-07-05).
+    Year-substring is a deliberate heuristic: it keeps «15.03.2024» /
+    «в 2024 году» dates and only lets a copied date through when the same
+    year genuinely occurs in the chunk for other reasons."""
+    dropped = 0
+    for rel in relations:
+        for attr in ("valid_from", "valid_to"):
+            bound = getattr(rel, attr)
+            if bound and bound[:4] not in chunk_text:
+                setattr(rel, attr, None)
+                dropped += 1
+    return dropped
+
+
+# ── Event ts sanity gate ────────────────────────────────────────────
+
+_TS_POLARITY_LITERALS = {"affirmed", "negated", "uncertain"}
+_TS_PLACEHOLDERS = {
+    "empty", "unknown", "none", "null", "n/a", "-", "not specified",
+    "не указано", "не указана", "неизвестно", "дата неизвестна", "дата не указана",
+}
+_TS_COORD_RE = re.compile(r"^-?\d{1,3}\.\d+\s*[,;]\s*-?\d{1,3}\.\d+$")
+_TS_MAX_LEN = 64
+
+
+def _sanitize_event_ts(value: str | None) -> str | None:
+    """Verbatim time phrase or None — reject polarity/location/participant
+    debris that slides into the ts position on malformed tuples."""
+    v = (value or "").strip()
+    if not v or len(v) > _TS_MAX_LEN:
+        return None
+    if v.lower().strip("().") in _TS_POLARITY_LITERALS | _TS_PLACEHOLDERS:
+        return None
+    if ";" in v or _TS_COORD_RE.match(v):
+        return None
+    return v
 
 
 # ── Parsing ─────────────────────────────────────────────────────────
@@ -238,7 +304,9 @@ def _parse_event(
     trigger = (fields[2] if len(fields) > 2 else "").strip()
     raw_parts = fields[3] if len(fields) > 3 else ""
     participants = [p.strip() for p in raw_parts.split(";") if p.strip()]
-    event_ts = (fields[4].strip() or None) if len(fields) > 4 else None
+    # ts position is only trustworthy on a full 7-field tuple; on shorter
+    # tuples neighboring fields slide into it (audited 2026-07-05).
+    event_ts = _sanitize_event_ts(fields[4]) if len(fields) >= 7 else None
     location = (fields[5].strip() or None) if len(fields) > 5 else None
     polarity = _normalize_polarity(fields[6]) if len(fields) > 6 else "affirmed"
     return ParsedEvent(
