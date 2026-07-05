@@ -96,10 +96,36 @@ def check_neo4j() -> None:
         print(f"  unreachable: {exc}")
 
 
+def check_events() -> None:
+    from neo4j import GraphDatabase
+
+    print(_SEP)
+    print("Neo4j — E2 events / time-frames")
+    print(_SEP)
+    nj = settings.neo4j
+    try:
+        auth = (nj.user, nj.password.get_secret_value())
+        with GraphDatabase.driver(nj.uri, auth=auth) as driver, driver.session(database=nj.database) as s:
+            row = s.run(
+                "MATCH (e:__Entity__:EventOrAction) RETURN count(e) AS total, "
+                "count(e.event_ts_raw) AS ts_present, count(e.event_start_epoch) AS ts_resolved"
+            ).single()
+            print(f"  events {row['total']}  ts_present {row['ts_present']}  ts_resolved {row['ts_resolved']}")
+            for r in s.run(
+                "MATCH (e:__Entity__:EventOrAction) "
+                "WHERE e.event_ts_raw IS NOT NULL AND e.event_start_epoch IS NULL "
+                "RETURN e.event_ts_raw AS raw, count(*) AS n ORDER BY n DESC LIMIT 15"
+            ):
+                print(f"    unresolved ×{r['n']}: {r['raw']!r}")
+    except Exception as exc:
+        print(f"  unreachable: {exc}\n")
+
+
 async def main() -> None:
     await check_postgres()
     check_milvus()
     check_neo4j()
+    check_events()
 
 
 if __name__ == "__main__":

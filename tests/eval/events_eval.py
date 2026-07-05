@@ -25,8 +25,14 @@ from pathlib import Path
 from typing import Protocol
 
 from src.graph.event_merge import event_key
+from src.graph.event_ts_resolver import resolve as resolve_ts
 
 GOLDEN_DIR_DEFAULT = Path(__file__).resolve().parent / "golden_events"
+
+
+def _ts_epoch(ev: dict) -> int | None:
+    got = resolve_ts(ev.get("event_ts"), None)  # golden/predicted ts are absolute ISO — no anchor needed
+    return got[0] if got else None
 
 
 @dataclass
@@ -63,7 +69,7 @@ def _keys_by_type(events: list[dict], bucket_days: int) -> dict[str, set[tuple]]
         key = event_key(
             etype,
             list(ev.get("participants") or []),
-            ev.get("event_ts"),
+            _ts_epoch(ev),
             bucket_days=bucket_days,
         )
         by_type.setdefault(etype, set()).add(key)
@@ -95,8 +101,14 @@ def run_eval(
     golden_dir: Path = GOLDEN_DIR_DEFAULT,
     *,
     bucket_days: int = 7,
+    all_predicted: list[dict] | None = None,
 ) -> tuple[dict[str, EventStats], float]:
-    """Return (per_type_stats, total_seconds)."""
+    """Return (per_type_stats, total_seconds).
+
+    ``all_predicted``, if passed, is extended in place with every predicted
+    event dict across cases — used by the CLI report to compute the
+    ``event_ts`` resolve-rate without changing this function's return shape.
+    """
     files = sorted(golden_dir.glob("*.json"))
     if not files:
         raise FileNotFoundError(f"no golden event cases under {golden_dir}")
@@ -108,6 +120,8 @@ def run_eval(
         predicted = extractor(case["text"])
         elapsed += time.perf_counter() - t0
         score_case(case.get("expected", []), predicted, per_type, bucket_days=bucket_days)
+        if all_predicted is not None:
+            all_predicted.extend(predicted)
     return per_type, elapsed
 
 
@@ -172,8 +186,17 @@ def main() -> int:  # pragma: no cover - CLI
     p.add_argument("--bucket-days", type=int, default=7)
     args = p.parse_args()
     extractor = _llm_events_extractor_factory()
-    per_type, elapsed = run_eval(extractor, args.golden, bucket_days=args.bucket_days)
+    all_predicted: list[dict] = []
+    per_type, elapsed = run_eval(
+        extractor, args.golden, bucket_days=args.bucket_days, all_predicted=all_predicted
+    )
     print(format_report(per_type, elapsed))
+    ts_present = sum(1 for ev in all_predicted if ev.get("event_ts"))
+    ts_resolved = sum(1 for ev in all_predicted if _ts_epoch(ev) is not None)
+    print(
+        f"ts resolve-rate: {ts_resolved}/{ts_present}"
+        f" ({(ts_resolved / ts_present * 100) if ts_present else 0:.0f}%)"
+    )
     return 0
 
 
