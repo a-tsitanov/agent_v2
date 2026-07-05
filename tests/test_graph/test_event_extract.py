@@ -324,3 +324,51 @@ async def test_system_prompt_carries_configured_taxonomy(monkeypatch) -> None:
     extractor._chat = spy
     await extractor.acall([TextNode(id_="tax1", text="text")])
     assert "deal, meeting, other" in captured["system"]
+
+
+# ── resolver + taxonomy wiring (Task 4) ─────────────────────────────
+
+ANCHOR_DAYS_2026_07_05 = 20639
+
+
+def _mk_event(ts, event_type="meeting"):
+    from src.graph.lightrag_parse import ParsedEvent
+
+    return ParsedEvent(
+        event_type=event_type, trigger="провели встречу", participants=["Иванов"],
+        event_ts=ts, location=None, polarity="affirmed",
+        source_chunk_id="c1", file_path="f",
+    )
+
+
+def test_events_to_graph_resolves_interval():
+    from src.graph.event_extract import events_to_graph
+
+    nodes, _ = events_to_graph([_mk_event("вчера")], id_by_name={}, doc_date_epoch_days=ANCHOR_DAYS_2026_07_05)
+    ev = next(n for n in nodes if n.label == "EventOrAction")
+    p = ev.properties
+    assert p["event_ts_raw"] == "вчера"
+    assert p["event_ts_precision"] == "day"
+    assert p["event_end_epoch"] - p["event_start_epoch"] == 86399
+    assert "event_ts" not in p  # legacy key gone
+
+
+def test_events_to_graph_unresolved_stays_untimed():
+    from src.graph.event_extract import events_to_graph
+
+    nodes, _ = events_to_graph([_mk_event("после праздников")], id_by_name={}, doc_date_epoch_days=ANCHOR_DAYS_2026_07_05)
+    p = next(n for n in nodes if n.label == "EventOrAction").properties
+    assert p["event_ts_raw"] == "после праздников"
+    assert "event_start_epoch" not in p and "event_ts_precision" not in p
+
+
+def test_events_to_graph_enforces_taxonomy(monkeypatch):
+    from src.config import settings as _settings
+    from src.graph.event_extract import events_to_graph
+
+    monkeypatch.setattr(_settings.events, "taxonomy", ["deal", "meeting"])
+    nodes, _ = events_to_graph(
+        [_mk_event(None, event_type="potential_journalists_work")], id_by_name={}, doc_date_epoch_days=None)
+    p = next(n for n in nodes if n.label == "EventOrAction").properties
+    assert p["event_type"] == "other"
+    assert p["event_type_raw"] == "potential_journalists_work"

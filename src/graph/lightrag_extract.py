@@ -281,9 +281,24 @@ class LightRAGExtractor(TransformComponent):
         )
 
         if events_enabled and parsed.events:
-            ev_nodes, ev_rels = events_to_graph(parsed.events, id_by_name=id_by_name)
+            _md = node.metadata or {}
+            ev_nodes, ev_rels = events_to_graph(
+                parsed.events,
+                id_by_name=id_by_name,
+                # anchor: document date; fallback ingest date (spec §4.3)
+                doc_date_epoch_days=_md.get("doc_date_epoch", _md.get("inserted_at_epoch")),
+            )
             parsed.entities.extend(ev_nodes)
             relations.extend(ev_rels)
+            n_raw = sum(1 for e in parsed.events if e.event_ts)
+            n_resolved = sum(
+                1 for n_ in ev_nodes
+                if n_.label == "EventOrAction" and "event_start_epoch" in (n_.properties or {})
+            )
+            logger.info(
+                "event-ts chunk={c} events={n} ts_raw={r} ts_resolved={s}",
+                c=chunk_id, n=len(parsed.events), r=n_raw, s=n_resolved,
+            )
 
         node.metadata[KG_NODES_KEY] = parsed.entities
         node.metadata[KG_RELATIONS_KEY] = relations
