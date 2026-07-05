@@ -3,8 +3,8 @@
 from src.config import settings
 
 
-def test_events_extraction_defaults_off():
-    assert settings.events.extraction_enabled is False
+def test_events_extraction_defaults_on():
+    assert settings.events.extraction_enabled is True
     assert "deal" in settings.events.taxonomy or len(settings.events.taxonomy) >= 1
 
 

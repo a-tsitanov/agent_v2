@@ -8,7 +8,12 @@ def test_analytics_layer_settings_defaults():
 
 
 def test_events_settings_defaults():
-    assert settings.events.first_seen_enabled is False  # OFF until backfill run
+    # CODE default is OFF (until backfill run). Check the field default,
+    # not the resolved instance — EventsSettings loads `.env`, and a dev
+    # machine with EVENTS_FIRST_SEEN_ENABLED=true would flake this test.
+    from src.config import EventsSettings
+
+    assert EventsSettings.model_fields["first_seen_enabled"].default is False
     assert settings.events.new_window_days == 14
     assert settings.events.backfill_sentinel == 0
 

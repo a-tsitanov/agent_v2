@@ -251,7 +251,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "CLASSIFIER_SKIP_EXTENSIONS": "JSON-список расширений, отсекаемых детерминированным правилом (exe, zip, png, mp4 и т.п.).",
     # ── EventsSettings (EVENTS_*) — детекция событий first_seen ─────────
     "EVENTS_BACKFILL_SENTINEL": "Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
-    "EVENTS_EXTRACTION_ENABLED": "Включить извлечение структурных LLM-событий в extract_kg (E2; по умолчанию выкл — доп. стоимость LLM).",
+    "EVENTS_EXTRACTION_ENABLED": "Извлечение структурных LLM-событий в extract_kg (E2; по умолчанию вкл — удлиняет промпт/вывод на каждый чанк, выключать при нехватке LLM-бюджета).",
     "EVENTS_FIRST_SEEN_ENABLED": "Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
     "EVENTS_NEW_WINDOW_DAYS": "Окно в днях для выборки новых событий (new_events) по умолчанию.",
     "EVENTS_TAXONOMY": "Закрытый список типов событий (event_type) для LLM-извлечения; с открытым fallback для длинного хвоста.",
@@ -325,6 +325,19 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
     "NEO4J_DATABASE": "Имя базы Neo4j.",
     "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",
+    "NEO4J_CONNECTION_ACQUISITION_TIMEOUT_S": "Сколько секунд ждать свободное соединение из пула драйвера Neo4j, прежде чем сдаться (защита от вечного зависания под write-контеншном).",
+    "NEO4J_CONNECTION_TIMEOUT_S": "Таймаут установления TCP-соединения с Neo4j, сек.",
+    "NEO4J_MAX_CONNECTION_POOL_SIZE": "Размер пула соединений драйвера Neo4j на процесс (Track A write-tune).",
+    "NEO4J_QUERY_LOG": "true → логировать каждый Cypher из приложения одной INFO-строкой (свёрнутый запрос, имена параметров, rows, ms) — подтверждать, что поиск ходит в граф.",
+    "NEO4J_WRITE_RETRY_BASE_DELAY_S": "Базовая задержка экспоненциального ретрая write-транзакций Neo4j при deadlock/transient-ошибках, сек.",
+    "NEO4J_WRITE_RETRY_MAX_ATTEMPTS": "Максимум попыток write-транзакции Neo4j при deadlock/transient-ошибках.",
+    "INGEST_QUEUE_BACKEND": "Бэкенд очереди ингеста: temporal (singleton IngestSchedulerWorkflow) | rabbitmq (брокер + ingest-consumer, допуск prefetch=K). Дефолтный путь — rabbitmq.",
+    "RABBITMQ_URL": "AMQP-URL брокера RabbitMQ для очереди ингеста (amqp://user:pass@host:5672/).",
+    "RABBITMQ_QUEUES": "Список очередей ингеста через запятую (RABBITMQ_QUEUES=a,b); первая — дефолтная, /ingest выбирает явным параметром queue.",
+    "RABBITMQ_DLX": "Имя dead-letter exchange для сообщений ингеста, исчерпавших обработку.",
+    "RABBITMQ_DLQ": "Имя dead-letter очереди (парная к RABBITMQ_DLX).",
+    "RABBITMQ_CONSUMER_TIMEOUT_MS": "x-consumer-timeout очереди, мс: сколько брокер ждёт ack по in-flight документу прежде чем закрыть канал (держать больше максимальной длительности ингеста одного документа).",
+    "RABBITMQ_REQUEUE_ON_FAILURE": "true → возвращать сообщение в очередь при падении обработки (после ретраев), false → в DLQ.",
     "NEO4J_URI": "Bolt-URI Neo4j (напр. bolt://localhost:7687).",
     "NEO4J_USER": "Пользователь Neo4j.",
     # ── PostgresSettings (POSTGRES_*) — метаданные / ingest_metrics ──

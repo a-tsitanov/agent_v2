@@ -263,7 +263,7 @@ def _event_payload() -> str:
 
 @pytest.mark.asyncio
 async def test_extractor_gated_off_produces_no_event_nodes(monkeypatch) -> None:
-    """With extraction_enabled=False (default) no EventOrAction nodes in output."""
+    """With extraction_enabled=False no EventOrAction nodes in output."""
     from src.config import settings as _settings
 
     monkeypatch.setattr(_settings.events, "extraction_enabled", False)

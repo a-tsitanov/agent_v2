@@ -764,8 +764,8 @@ class EventsSettings(BaseSettings):
         description="Метка эпохи-дня для узлов, созданных до включения first_seen (маркер бэкфила).",
     )
     extraction_enabled: bool = Field(
-        default=False,
-        description="Включить извлечение структурных LLM-событий в extract_kg (E2; по умолчанию выкл — доп. стоимость LLM)",
+        default=True,
+        description="Извлечение структурных LLM-событий в extract_kg (E2; по умолчанию вкл — удлиняет промпт/вывод на каждый чанк, выключать при нехватке LLM-бюджета)",
     )
     taxonomy: list[str] = Field(
         default_factory=lambda: [

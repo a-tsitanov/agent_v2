@@ -45,6 +45,7 @@ from pydantic import ConfigDict, Field
 from src.graph.event_extract import events_to_graph
 from src.graph.lightrag_parse import (
     _normalize_entity_name,
+    drop_unsupported_dates,
     ensure_orphan_entities,
     parse_lightrag_output,
     parsed_relations_to_relations,
@@ -250,6 +251,17 @@ class LightRAGExtractor(TransformComponent):
             parsed.relations.extend(glean.relations)
             history.append(ChatMessage(role=MessageRole.USER, content=glean_user))
             history.append(ChatMessage(role=MessageRole.ASSISTANT, content=glean_text))
+
+        # 2b. Anti-fabrication: a validity date whose year is absent from
+        #     the chunk text was copied from the prompt, not extracted.
+        dropped_dates = drop_unsupported_dates(
+            parsed.relations, node.get_content() or "",
+        )
+        if dropped_dates:
+            logger.debug(
+                "lightrag-extract chunk={c}: dropped {n} unsupported date bounds",
+                c=chunk_id, n=dropped_dates,
+            )
 
         # 3. Resolve relation src/tgt names → entity ids; synthesise
         #    orphan entities for any unreferenced endpoint so the
