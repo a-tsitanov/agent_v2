@@ -135,5 +135,20 @@ async def test_trending_events_fail_soft_none_store():
 async def test_event_timeline_window_days_applies_since(monkeypatch):
     monkeypatch.setattr(events_llm, "today_epoch_days", lambda: 19900)
     res = await events_llm.event_timeline(_FakeStore(rows=[]), entity="Acme", window_days=30)
-    assert res.params["since"] == 19900 - 30
-    assert "e.created_at >= $since" in res.cypher
+    assert res.params["since_secs"] == (19900 - 30) * 86400
+    assert "coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs" in res.cypher
+
+
+@pytest.mark.asyncio
+async def test_event_timeline_orders_by_start_epoch_untimed_last():
+    res = await events_llm.event_timeline(None, entity="X")
+    assert "ORDER BY e.event_start_epoch IS NULL, e.event_start_epoch DESC" in res.cypher
+    assert "e.event_ts_raw" in res.cypher
+    assert "e.event_ts AS" not in res.cypher  # legacy field gone
+
+
+@pytest.mark.asyncio
+async def test_event_timeline_window_filters_on_start_with_created_fallback():
+    res = await events_llm.event_timeline(None, entity="X", window_days=7)
+    assert "coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs" in res.cypher
+    assert "since_secs" in res.params

@@ -19,8 +19,9 @@ class _Params(BaseModel):
 
 _EVENT_CORE = (
     "MATCH (e:__Entity__:EventOrAction {name:$name}) "
-    "RETURN e.name AS name, e.event_type AS event_type, e.event_ts AS event_ts, "
-    "e.polarity AS polarity"
+    "RETURN e.name AS name, e.event_type AS event_type, e.event_ts_raw AS event_ts_raw, "
+    "e.event_start_epoch AS event_start_epoch, e.event_end_epoch AS event_end_epoch, "
+    "e.event_ts_precision AS event_ts_precision, e.polarity AS polarity"
 )
 _EVENT_ACTORS = (
     "MATCH (e:__Entity__:EventOrAction {name:$name})-[r]-(n) "
@@ -65,23 +66,24 @@ async def event_timeline(
     window_days: int | None = None,
     top_n: int = 50,
 ) -> PrimitiveResult:
-    """Events a named entity participated in, ordered by event_ts.
+    """Events a named entity participated in, ordered by resolved start time (untimed last).
 
-    When ``window_days`` is set, the window filters on ``created_at`` (ingest
-    epoch-days, the E1 axis), so events without a ``created_at`` stamp are
-    excluded; results are still ordered by ``event_ts``.
+    Ordered by event_start_epoch, untimed last; window filters on event_start_epoch
+    with created_at fallback.
     """
     top_n = clamp_top_n(top_n, default=50)
     params: dict[str, Any] = {"entity": entity, "top_n": top_n}
     where = ""
     if window_days is not None:
-        params["since"] = today_epoch_days() - int(window_days)
-        where = "WHERE e.created_at >= $since "
+        params["since_secs"] = (today_epoch_days() - int(window_days)) * 86400
+        where = "WHERE coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs "
     cypher = (
         "MATCH (p:__Entity__ {name:$entity})-[]-(e:__Entity__:EventOrAction) "
         f"{where}"
-        "RETURN e.name AS name, e.event_type AS event_type, e.event_ts AS event_ts "
-        "ORDER BY e.event_ts DESC LIMIT $top_n"
+        "RETURN e.name AS name, e.event_type AS event_type, e.event_ts_raw AS event_ts_raw, "
+        "e.event_start_epoch AS event_start_epoch, e.event_end_epoch AS event_end_epoch, "
+        "e.event_ts_precision AS event_ts_precision "
+        "ORDER BY e.event_start_epoch IS NULL, e.event_start_epoch DESC LIMIT $top_n"
     )
     return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
 
@@ -134,7 +136,7 @@ register(
         "event_timeline",
         event_timeline,
         EventTimelineParams,
-        "Events a named entity participated in, ordered by event_ts.",
+        "Events a named entity participated in, ordered by resolved start time (untimed last).",
     )
 )
 register(
