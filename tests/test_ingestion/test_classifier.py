@@ -52,8 +52,8 @@ import importlib
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.workflow.contracts import ClassifyIn, Ctx
 from src.ingestion.classifier import LLMVerdict
+from src.workflow.contracts import ClassifyIn, Ctx
 
 # `from src.workflow.activities import classify_document` resolves to the
 # FUNCTION (re-exported in the package __init__), shadowing the submodule.

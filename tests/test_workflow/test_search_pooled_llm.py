@@ -4,7 +4,6 @@ the global N semaphore actually counts these calls (audit finding #3)."""
 from __future__ import annotations
 
 import importlib
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

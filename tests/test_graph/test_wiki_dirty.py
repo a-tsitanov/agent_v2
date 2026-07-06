@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
-from src.graph.wiki_dirty import mark_dirty, select_dirty, clear_dirty
+
+from src.graph.wiki_dirty import clear_dirty, mark_dirty, select_dirty
 
 
 def test_mark_dirty_runs_cypher_with_names():

@@ -21,12 +21,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import psycopg  # noqa: E402
-from loguru import logger  # noqa: E402
+import psycopg
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
-
+from src.config import settings
+from src.utils.logging import configure_logging
 
 # ── Postgres ─────────────────────────────────────────────────────────
 
@@ -109,6 +108,7 @@ def setup_temporal_search_attributes() -> None:
     Postgres ingest_metrics path is unaffected).
     """
     import asyncio
+
     from temporalio.api.enums.v1 import IndexedValueType
     from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
     from temporalio.client import Client
@@ -134,7 +134,7 @@ def setup_temporal_search_attributes() -> None:
                 "search-attrs registered  names={n}",
                 n=list(_ANALYTICS_SEARCH_ATTRS.keys()),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             msg = str(exc).lower()
             if "already exists" in msg or "alreadyexist" in msg:
                 logger.info("search-attrs already registered (no-op)")
@@ -166,6 +166,7 @@ def setup_temporal_retention() -> None:
         return
 
     import asyncio
+
     from google.protobuf.duration_pb2 import Duration
     from temporalio.api.namespace.v1 import NamespaceConfig
     from temporalio.api.workflowservice.v1 import UpdateNamespaceRequest
@@ -190,7 +191,7 @@ def setup_temporal_retention() -> None:
                 "temporal retention set  namespace={ns}  days={d}",
                 ns=settings.temporal.namespace, d=days,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("temporal retention update failed  err={e}", e=exc)
 
     asyncio.run(_update())
@@ -204,10 +205,9 @@ def setup_postgres() -> None:
     )
     with psycopg.connect(
         pg.dsn, connect_timeout=pg.connect_timeout_s, autocommit=True,
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(_DOCUMENTS_DDL)
-            cur.execute(_INGEST_METRICS_DDL)
+    ) as conn, conn.cursor() as cur:
+        cur.execute(_DOCUMENTS_DDL)
+        cur.execute(_INGEST_METRICS_DDL)
     logger.info("postgres setup  done")
 
 

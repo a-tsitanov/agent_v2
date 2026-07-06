@@ -75,7 +75,7 @@ async def coverage_check(params: CoverageParams) -> CoverageResult:
     try:
         resp = await llm.achat(messages)
         result = _parse(resp.message.content or "")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Fail-open: never block the answer on a flaky completeness call.
         activity.logger.warning(
             "coverage_check  err=%s — treating as complete", exc,

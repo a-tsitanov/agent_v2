@@ -1,5 +1,6 @@
 import pytest
-from scripts.make_env import parse_example, Comment, Blank, Section, KV
+
+from scripts.make_env import KV, parse_example
 
 EX = """# ── Sec One ──────────
 # comment for A
@@ -38,6 +39,7 @@ def test_commented_out_var_is_comment_not_kv():
 
 
 from pathlib import Path
+
 from scripts.make_env import render
 
 
@@ -69,7 +71,8 @@ def test_parse_env_reads_keyvalues_ignores_comments_blanks():
 
 
 import re as _re
-from scripts.make_env import is_secret, gen_secret
+
+from scripts.make_env import gen_secret, is_secret
 
 
 def test_is_secret_matches_secret_keys():
@@ -95,7 +98,7 @@ def test_gen_secret_api_key_has_sk_prefix():
     assert gen_secret("API_KEYS").startswith("sk-")
 
 
-from scripts.make_env import validate, Issue
+from scripts.make_env import validate
 
 BASE = {
     "MILVUS_DIM": "1536",
@@ -208,7 +211,7 @@ def test_write_env_no_backup_when_absent(tmp_path):
     assert not (tmp_path / ".env.bak").exists()
 
 
-from scripts.make_env import iter_app_env_vars, build_reference
+from scripts.make_env import build_reference, iter_app_env_vars
 
 
 def test_iter_app_env_vars_covers_known_fields():
@@ -227,7 +230,6 @@ def test_iter_app_env_vars_covers_known_fields():
 
 
 from scripts.make_env import main
-
 
 _EXAMPLE_MIN = """# ── Models ──
 OPENAI_API_KEY=
@@ -295,7 +297,7 @@ def test_reference_is_deterministic():
 
 
 def test_every_env_var_has_russian_description():
-    from scripts.make_env import iter_app_env_vars, _ENV_DESCRIPTIONS
+    from scripts.make_env import _ENV_DESCRIPTIONS, iter_app_env_vars
     missing = [r.env for r in iter_app_env_vars() if r.env not in _ENV_DESCRIPTIONS]
     assert missing == [], f"env vars without a description: {missing}"
 

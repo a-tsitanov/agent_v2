@@ -23,6 +23,7 @@ from src.config import settings
 from src.workflow.contracts import (
     DocumentsForCommunitiesParams,
     DocumentsForCommunitiesResult,
+    GlobalSearchParams,
     MapCommunitiesParams,
     MapCommunitiesResult,
     MapPartialParams,
@@ -31,7 +32,6 @@ from src.workflow.contracts import (
     SynthesizeParams,
     SynthesizeResult,
 )
-from src.workflow.contracts import GlobalSearchParams
 from src.workflow.search.global_wf import GlobalSearchWorkflow
 
 
@@ -73,31 +73,30 @@ async def test_global_drift_decodes_params_not_dict(monkeypatch):
     except Exception as exc:  # pragma: no cover - infra-dependent
         pytest.skip(f"time-skipping test server unavailable: {exc}")
 
-    async with env:
-        async with Worker(
-            env.client,
-            task_queue="drift-test-q",
-            workflows=[GlobalSearchWorkflow],
-            activities=[
-                _map_communities, _map_community_partial, _synthesize_answer,
-                _documents_for_communities,
+    async with env, Worker(
+        env.client,
+        task_queue="drift-test-q",
+        workflows=[GlobalSearchWorkflow],
+        activities=[
+            _map_communities, _map_community_partial, _synthesize_answer,
+            _documents_for_communities,
+        ],
+        # Bypass the workflow sandbox: we're testing arg DECODING through
+        # the pydantic converter, not sandbox safety.  The sandbox
+        # re-imports modules and is sensitive to global state left by
+        # earlier tests in a full-suite run — unsandboxed keeps this
+        # regression guard deterministic regardless of test order.
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        outcome = await env.client.execute_workflow(
+            GlobalSearchWorkflow.run,
+            args=[
+                GlobalSearchParams(query="q", drift_mode=True),
+                [SerializedNode(chunk_id="c1", text="seed", score=0.9)],
             ],
-            # Bypass the workflow sandbox: we're testing arg DECODING through
-            # the pydantic converter, not sandbox safety.  The sandbox
-            # re-imports modules and is sensitive to global state left by
-            # earlier tests in a full-suite run — unsandboxed keeps this
-            # regression guard deterministic regardless of test order.
-            workflow_runner=UnsandboxedWorkflowRunner(),
-        ):
-            outcome = await env.client.execute_workflow(
-                GlobalSearchWorkflow.run,
-                args=[
-                    GlobalSearchParams(query="q", drift_mode=True),
-                    [SerializedNode(chunk_id="c1", text="seed", score=0.9)],
-                ],
-                id="drift-rt-1",
-                task_queue="drift-test-q",
-            )
+            id="drift-rt-1",
+            task_queue="drift-test-q",
+        )
 
     # Would be "global" (or raise AttributeError) if drift_mode were lost.
     assert outcome.mode == "drift"

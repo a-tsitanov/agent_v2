@@ -19,7 +19,7 @@ class _Params(BaseModel):
 
 _NEW_ENTITIES = (
     "MATCH (e:__Entity__) WHERE e.created_at >= $since "
-    "RETURN e.name AS name, [l IN labels(e) WHERE l<>'__Entity__'][0] AS type, "
+    "RETURN e.name AS name, [l IN labels(e) WHERE l<>'__Entity__' AND l<>'__Node__'][0] AS type, "
     "e.created_at AS created_at, e.first_doc_id AS first_doc_id "
     "ORDER BY e.created_at DESC LIMIT $top_n"
 )

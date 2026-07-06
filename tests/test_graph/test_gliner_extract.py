@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock
-from llama_index.core.schema import TextNode
+
 from llama_index.core.graph_stores.types import KG_NODES_KEY
+from llama_index.core.schema import TextNode
+
 from src.graph.gliner_extract import GLiNERExtractor
 
 

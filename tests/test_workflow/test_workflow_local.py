@@ -109,10 +109,9 @@ async def test_full_pipeline_happy_path(monkeypatch):
     assert result.chunk_count > 0
 
     # Verify Postgres terminal state.
-    with psycopg.connect(settings.postgres.dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT status FROM documents WHERE id = %s", (str(doc_id),),
-            )
-            (status,) = cur.fetchone()
+    with psycopg.connect(settings.postgres.dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT status FROM documents WHERE id = %s", (str(doc_id),),
+        )
+        (status,) = cur.fetchone()
     assert status in ("completed", "vector_only")

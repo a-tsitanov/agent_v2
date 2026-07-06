@@ -26,12 +26,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from loguru import logger  # noqa: E402
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.ingestion.identifiers import extract_identifiers  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
-
+from src.config import settings
+from src.ingestion.identifiers import extract_identifiers
+from src.utils.logging import configure_logging
 
 DEFAULT_IDENTIFIER_TYPES: frozenset[str] = frozenset({
     "PhoneNumber",
@@ -164,7 +163,7 @@ async def apply_merges(
                 "merged  type={t}  target={c!r}  sources={n}",
                 t=etype, c=canonical, n=names,
             )
-        except Exception as exc:  # noqa: BLE001 — keep job running
+        except Exception as exc:
             logger.warning(
                 "merge failed  type={t}  target={c!r}  err={err}",
                 t=etype, c=canonical, err=exc,

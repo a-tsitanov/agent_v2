@@ -1,5 +1,6 @@
 import asyncio
-from src.graph.entity_resolution import _llm_judge_pairs, ERConfig
+
+from src.graph.entity_resolution import ERConfig, _llm_judge_pairs
 
 
 class _Item:
@@ -26,7 +27,7 @@ class _SpyLLM:
         )
 
         class _Resp:
-            class message:  # noqa: N801
+            class message:
                 content = f"[{verdicts}]"
 
         return _Resp()

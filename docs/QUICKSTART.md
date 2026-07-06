@@ -115,15 +115,16 @@ curl -X POST http://localhost:8000/api/v1/search/local \
 
 ## 7. Включение опциональных возможностей (матрица)
 
-Большинство фич **уже включены по умолчанию**. «Спят» (opt-in) три вещи — выставь в `.env` и перезапусти воркер:
+Большинство фич **уже включены по умолчанию**. «Спят» (opt-in) четыре вещи — выставь в `.env` и перезапусти воркер:
 
 | Что включить | Переменные | Дефолт | Примечание |
 |---|---|---|---|
 | **Native-vector ER** (kNN по всему графу вместо окна 5000) | `AGENT_ER_USE_NATIVE_VECTOR_KNN=true` (+ `AGENT_ER_VECTOR_KNN_K=20`) | `false` | На **существующем** графе сперва прогнать backfill: `uv run python -m scripts.backfill_er_vector --no-dry-run`, и только потом флаг. На пустом графе можно сразу `true` (`er_vec` пишется при ингесте). |
 | **Иерархические сообщества + умный отбор** | `AGENT_COMMUNITY_MAX_LEVELS=3`, `AGENT_COMMUNITY_DYNAMIC_SELECTION=semantic` | `1`, `lexical` | `>1` уровень → многоуровневый Leiden; `semantic`/`descent` вместо `lexical` |
 | **Редактор wiki** (статьи MediaWiki по сущностям) | `WIKI_ENABLED=true` | `false` | `WIKI_DOCS_BASE_URL` уже верный для ссылок «Источники». Для sitelink'ов: `WIKIBASE_ENABLED=true` + `uv run python -m scripts.setup_wikibase`, и `WIKI_SITE_GLOBAL_ID` под реальный id вики |
+| **Мониторинг графа Arc-2** (свип: новые связи, рост risk, burst событий, алерты) | `MONITOR_ENABLED=true` (+ `MONITOR_SWEEP_INTERVAL_MINUTES`, `MONITOR_BURST_ENABLED`, `MONITOR_WEBHOOK_URL`) | `false` | Свип в пуле `monitor` воркера; алерты читаются через `/analyze` (примитивы `alerts`/`review_queue`). В прод-компоузе `MONITOR_*` нужно добавить в anchor `x-app-env`. Подробно — [`runbook/graph-analytics.md`](runbook/graph-analytics.md) |
 
-Уже включено по умолчанию: ER (judge + verdict-cache), история диалога (`AGENT_CONVERSATION_HISTORY_ENABLED`), dual walk-seed, Milvus HNSW.
+Уже включено по умолчанию: ER (judge + verdict-cache), история диалога (`AGENT_CONVERSATION_HISTORY_ENABLED`), dual walk-seed, Milvus HNSW, аналитика по графу (`POST /api/v1/analyze`; предвычисление центральности/risk — по запросу `POST /admin/graph/materialize` после наполнения).
 
 Полный разбор каждой фичи — [`FEATURES.md`](FEATURES.md); по моделям/ролям — [`MODELS.md`](MODELS.md); по очередям — [`QUEUES.md`](QUEUES.md).
 

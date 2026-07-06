@@ -111,7 +111,7 @@ async def main() -> int:
         off_lats, off_out, off_think = await _run_variant(
             model, {"think": False}, chunk, args.n, args.warmup
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"ERROR: backend call failed — is LiteLLM at {cfg.base_url} up "
               f"and serving a thinking model? ({exc})", file=sys.stderr)
         return 1

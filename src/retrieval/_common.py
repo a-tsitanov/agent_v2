@@ -14,7 +14,6 @@ from llama_index.core.schema import NodeWithScore
 
 from src.models.search import SourceCitation
 
-
 # Matches both <think>...</think> and <thinking>...</thinking>,
 # case-insensitive, DOTALL so multi-line thinking blocks are caught.
 # qwen3 emits these in normal completions; the parser of

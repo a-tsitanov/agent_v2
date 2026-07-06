@@ -27,13 +27,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from loguru import logger  # noqa: E402
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.graph.index import ensure_er_vector_index  # noqa: E402
-from src.graph.store import build_neo4j_graph_store  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
-
+from src.config import settings
+from src.graph.index import ensure_er_vector_index
+from src.graph.store import build_neo4j_graph_store
+from src.utils.logging import configure_logging
 
 _COUNT_CYPHER = (
     "MATCH (e:__Entity__) "

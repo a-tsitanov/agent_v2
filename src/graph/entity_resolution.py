@@ -59,12 +59,10 @@ from llama_index.core.schema import BaseNode
 from loguru import logger
 
 from src.graph.lightrag_parse import (
-    _cypher_safe_label,
     _normalize_entity_name,
 )
 from src.graph.merge import _maybe_summarize_descriptions
 from src.retrieval._common import strip_thinking
-
 
 # ── identifier labels excluded from ER ──────────────────────────────
 
@@ -240,7 +238,7 @@ _CONTENT_STOPWORDS: frozenset[str] = frozenset({
     "inc", "co", "corp", "group", "groupp", "jsc", "plc", "gmbh",
     "company", "компания", "группа", "холдинг", "корпорация",
     # Common filler punctuation traces.
-    "the", "a", "an", "и", "the", "of", "in",
+    "the", "a", "an", "и", "of", "in",
 })
 
 
@@ -383,7 +381,7 @@ async def _embed_entities(
             vectors = await asyncio.gather(*[
                 embed_model.aget_text_embedding(t) for t in texts
             ])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("ER embed batch failed: {err}", err=exc)
         return False
     for it, vec in zip(pending, vectors):
@@ -626,7 +624,7 @@ async def _llm_judge_pairs(
         try:
             resp = await llm.achat(messages)
             text = strip_thinking(resp.message.content or "")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "ER judge batch failed at offset={o}: {err}",
                 o=batch_start, err=exc,
@@ -700,7 +698,7 @@ async def _verify_cluster(
             ChatMessage(role=MessageRole.USER, content=_format_cluster_prompt(cluster_items)),
         ])
         raw = strip_thinking(resp.message.content or "")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "ER cluster verify failed (size={s}): {err}",
             s=len(cluster_items), err=exc,
@@ -834,7 +832,7 @@ def _load_verdict_cache(store, keys) -> dict[str, bool]:
             "RETURN v.key AS key, v.same AS same",
             param_map={"keys": keys},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("ER verdict cache load failed: {e}", e=exc)
         return {}
     return {r["key"]: bool(r["same"]) for r in (rows or []) if isinstance(r, dict)}
@@ -861,7 +859,7 @@ def _store_verdicts(store, entries: dict[str, bool]) -> None:
             "SET v.same = row.same, v.updated = datetime()",
             param_map={"rows": [{"key": k, "same": s} for k, s in entries.items()]},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("ER verdict cache store failed: {e}", e=exc)
 
 
@@ -1131,7 +1129,7 @@ async def _cleanup_stored_losers(
                 """,
                 {"loser": loser_name, "canon": canon_name},
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # Safe-by-inaction: leave the loser node INTACT (with its
             # edges) rather than deleting it without repointing.  Worst
             # case is a lingering duplicate, which a later ER run can
@@ -1179,7 +1177,7 @@ async def _load_existing_canonicals(
             """,
             param_map={"limit": int(limit)},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("ER load existing canonicals failed: {err}", err=exc)
         return []
 
@@ -1233,7 +1231,7 @@ async def _load_candidates_native(
         from src.graph.index import ensure_er_vector_index
 
         await asyncio.to_thread(ensure_er_vector_index, graph_store, dim)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("ensure ER vector index failed: {e}", e=exc)
 
     seen: dict[str, _Item] = {}
@@ -1256,7 +1254,7 @@ async def _load_candidates_native(
                 """,
                 param_map={"k": int(k), "vec": list(it.embedding)},
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("ER native kNN query failed: {e}", e=exc)
             continue
         for row in rows or []:

@@ -59,7 +59,6 @@ from src.graph.store import build_neo4j_graph_store  # noqa: E402
 from src.ingestion.identifiers import IdentifierType  # noqa: E402
 from src.utils.logging import configure_logging  # noqa: E402
 
-
 # ── taxonomy ─────────────────────────────────────────────────────────
 
 
@@ -182,7 +181,7 @@ def _find_entity_by_label(
         payload = wbi_helpers.mediawiki_api_call_helper(
             data=params, allow_anonymous=True,
         )
-    except Exception as exc:  # noqa: BLE001 — surface API errors loudly
+    except Exception as exc:
         logger.error(
             "wbsearchentities failed  label={l}  type={t}  err={e}",
             l=label, t=search_type, e=exc,

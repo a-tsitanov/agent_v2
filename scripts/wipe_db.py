@@ -37,10 +37,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from loguru import logger  # noqa: E402
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
+from src.config import settings
+from src.utils.logging import configure_logging
 
 
 def _parse_args() -> argparse.Namespace:
@@ -69,13 +69,12 @@ def wipe_postgres() -> None:
                 h=pg.host, p=pg.port, d=pg.db)
     with psycopg.connect(
         pg.dsn, connect_timeout=pg.connect_timeout_s, autocommit=True,
-    ) as conn:
-        with conn.cursor() as cur:
-            try:
-                cur.execute("TRUNCATE TABLE documents")
-                logger.info("postgres  TRUNCATE documents  ok")
-            except psycopg.errors.UndefinedTable:
-                logger.info("postgres  documents table absent — nothing to wipe")
+    ) as conn, conn.cursor() as cur:
+        try:
+            cur.execute("TRUNCATE TABLE documents")
+            logger.info("postgres  TRUNCATE documents  ok")
+        except psycopg.errors.UndefinedTable:
+            logger.info("postgres  documents table absent — nothing to wipe")
 
 
 # ── Milvus ───────────────────────────────────────────────────────────
@@ -127,10 +126,10 @@ def wipe_neo4j() -> None:
                     try:
                         s.run(f"DROP INDEX `{name}`")
                         logger.info("neo4j  dropped index {n}", n=name)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning("neo4j  drop index {n} failed: {e}",
                                        n=name, e=exc)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("neo4j  list indexes failed: {e}", e=exc)
 
 
@@ -212,7 +211,7 @@ def wipe_wiki() -> None:
                                    e=resp.get("error", {}).get("code", "?"))
             logger.info("wiki wipe  deleted {n} MediaWiki page(s) (kept {k})",
                         n=deleted, k=sorted(_WIKI_KEEP))
-    except Exception as exc:  # noqa: BLE001 — best-effort; wiki stack may be down
+    except Exception as exc:
         logger.warning("wiki wipe  skipped (MediaWiki unreachable?): {e}", e=exc)
 
 
@@ -220,11 +219,9 @@ def wipe_wiki() -> None:
 
 
 async def _wipe_temporal_async() -> tuple[int, int]:
+    from temporalio.api.common.v1 import WorkflowExecution as PbWorkflowExecution
+    from temporalio.api.workflowservice.v1 import DeleteWorkflowExecutionRequest
     from temporalio.client import Client, WorkflowExecutionStatus
-    from temporalio.api.common.v1 import (
-        WorkflowExecution as PbWorkflowExecution)
-    from temporalio.api.workflowservice.v1 import (
-        DeleteWorkflowExecutionRequest)
     from temporalio.contrib.pydantic import pydantic_data_converter
 
     t = settings.temporal
@@ -239,7 +236,7 @@ async def _wipe_temporal_async() -> tuple[int, int]:
                 await client.get_workflow_handle(
                     wid, run_id=rid).terminate("wipe_db")
                 terminated += 1
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("temporal terminate {w}: {e}", w=wid, e=exc)
         try:
             await client.workflow_service.delete_workflow_execution(
@@ -248,7 +245,7 @@ async def _wipe_temporal_async() -> tuple[int, int]:
                     workflow_execution=PbWorkflowExecution(
                         workflow_id=wid, run_id=rid)))
             deleted += 1
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("temporal delete {w}: {e}", w=wid, e=exc)
     return terminated, deleted
 
@@ -263,7 +260,7 @@ def wipe_temporal() -> None:
         terminated, deleted = asyncio.run(_wipe_temporal_async())
         logger.info("temporal wipe  terminated={t}  deleted={d}",
                     t=terminated, d=deleted)
-    except Exception as exc:  # noqa: BLE001 — best-effort; server may be down
+    except Exception as exc:
         logger.warning("temporal wipe  skipped (server unreachable?): {e}",
                        e=exc)
 

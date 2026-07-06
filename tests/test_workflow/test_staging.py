@@ -26,7 +26,6 @@ def test_write_returns_s3_uri() -> None:
 
 
 def test_read_pickle_roundtrips_object() -> None:
-    import io
     import pickle
 
     payload = {"answer": 42, "nodes": [1, 2, 3]}

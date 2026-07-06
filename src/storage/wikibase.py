@@ -49,7 +49,6 @@ from loguru import logger
 from src.config import WikibaseSettings
 from src.ingestion.identifiers import IdentifierType
 
-
 _IDENTIFIER_LABELS: frozenset[str] = frozenset(typing.get_args(IdentifierType))
 """Labels whose entities are folded as external-id statements rather
 than pushed as standalone Wikibase Items.  Materialised at import
@@ -242,9 +241,11 @@ def _build_claim(pid: str, value: str, datatype: str) -> Any | None:
     try:
         from wikibaseintegrator.datatypes import (
             ExternalID,
-            Item as ItemDT,
             Quantity,
             String,
+        )
+        from wikibaseintegrator.datatypes import (
+            Item as ItemDT,
         )
     except ImportError:  # pragma: no cover — optional dep
         logger.warning("wikibaseintegrator not installed; skipping claim")
@@ -259,7 +260,7 @@ def _build_claim(pid: str, value: str, datatype: str) -> Any | None:
             return String(prop_nr=pid, value=value)
         if datatype == "quantity":
             return Quantity(prop_nr=pid, amount=str(value))
-    except Exception as exc:  # noqa: BLE001 — surface in log, skip claim
+    except Exception as exc:
         logger.warning(
             "wikibase build_claim failed  pid={p}  dt={dt}  err={e}",
             p=pid, dt=datatype, e=exc,
@@ -290,7 +291,7 @@ def _lookup_qid_for_entity(neo4j_store: Any, entity: Any) -> str | None:
             """,
             param_map={"name": entity.name},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "wikibase qid lookup failed  name={n}  err={e}",
             n=entity.name, e=exc,
@@ -315,7 +316,7 @@ def _persist_qid_for_entity(neo4j_store: Any, entity: Any, qid: str) -> None:
             """,
             param_map={"name": entity.name, "qid": qid},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "wikibase qid persist failed  name={n}  qid={q}  err={e}",
             n=entity.name, q=qid, e=exc,
@@ -334,7 +335,7 @@ def _persist_property_pid(
             """,
             param_map={"label": label, "pid": pid, "dt": datatype},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "wikibase property cache persist failed  label={l}  err={e}",
             l=label, e=exc,
@@ -479,14 +480,14 @@ async def push_entities(
                     await wb_client.set_aliases(
                         qid_by_entity_id[owner.id], extra_aliases,
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning(
                         "wikibase alias set failed  name={n}  err={e}",
                         n=owner.name, e=exc,
                     )
 
             counts["external_id_statements"] += len(ident_claims)
-        except Exception as exc:  # noqa: BLE001 — best-effort per owner
+        except Exception as exc:
             logger.warning(
                 "wikibase push owner failed  name={n}  err={e}",
                 n=getattr(owner, "name", "?"), e=exc,
@@ -518,7 +519,7 @@ async def push_entities(
                 qid=src_qid, pid=pid, value=tgt_qid, datatype="wikibase-item",
             )
             counts["relation_statements"] += 1
-        except Exception as exc:  # noqa: BLE001 — best-effort per relation
+        except Exception as exc:
             logger.warning(
                 "wikibase push relation failed  label={l}  err={e}",
                 l=getattr(rel, "label", "?"), e=exc,

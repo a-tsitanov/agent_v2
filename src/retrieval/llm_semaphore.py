@@ -31,8 +31,9 @@ and injected wherever an ``LLM`` is needed downstream, so LLM call-sites
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from llama_index.core.llms import LLM
 

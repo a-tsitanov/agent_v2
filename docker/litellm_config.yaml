@@ -20,9 +20,39 @@ model_list:
   # SMALL tier (LITELLM_MODEL_SMALL).  Local Ollama model proxied to
   # the host ollama daemon — used for every high-volume role
   # (extraction, judge, search, plan, …).
+  # num_ctx: Ollama's native default (2048) truncates extraction few-shots;
+  # research/entity_extraction_models found >=8k required, 16k comfortable.
+  # think: false — thinking mode off for high-volume ingest roles (benched:
+  # no quality win for extraction, big latency cost).
   - model_name: gemma4:e4b
     litellm_params:
       model: ollama_chat/gemma4:e4b
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
+      think: false
+
+  # QAT variant of the SMALL tier.
+  - model_name: gemma4:e4b-it-qat
+    litellm_params:
+      model: ollama_chat/gemma4:e4b-it-qat
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
+      think: false
+
+  # E2B QAT — lighter/faster tier; what the prod-stack local test points
+  # LITELLM_MODEL_SMALL/LARGE at (see .env).
+  - model_name: gemma4:e2b-it-qat
+    litellm_params:
+      model: ollama_chat/gemma4:e2b-it-qat
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
+      think: false
+
+  # Embeddings via host ollama — 768-dim; MUST match MILVUS_DIM=768 in the
+  # host `.env`.  Registered under the exact name the app requests.
+  - model_name: nomic-embed-text:latest
+    litellm_params:
+      model: ollama/nomic-embed-text:latest
       api_base: http://host.docker.internal:11434
 
   # Heavier escalation target for harder multi-hop / reflective work.

@@ -6,10 +6,11 @@
 
 | Runbook | Тема | Когда читать |
 |---|---|---|
-| [`mcp.md`](mcp.md) | Два MCP-сервера: MCP-1 (`kb_search` через Temporal `SearchOrchestratorWorkflow`) и MCP-2 (atomic retrieval tools прямо в процессе). Stdio + HTTP/SSE транспорты, auth, tuning, troubleshooting | Подключаешь OpenWebUI / Claude Desktop / Cursor / Continue; настраиваешь concurrency cap'ы для GPU-защиты |
+| [`mcp.md`](mcp.md) | Два MCP-сервера: MCP-1 (5 тулов: `kb_search`/`kb_global_search`/`kb_drift_search`/`kb_auto_search`/`kb_analyze` через Temporal workflows) и MCP-2 (atomic retrieval + GDS tools прямо в процессе). Stdio + HTTP/SSE транспорты, auth, tuning, troubleshooting | Подключаешь OpenWebUI / Claude Desktop / Cursor / Continue; настраиваешь concurrency cap'ы для GPU-защиты |
 | [`search-usage.md`](search-usage.md) | Search: `/api/v1/search/{local,global,drift,auto}` — когда какой режим, параметры/тюнинг, примеры, диагностика зависшего синтеза | Чтобы понять как отвечает API на user-query + tuning (архитектура — в [`../SEARCH.md`](../SEARCH.md)) |
 | [`multimodel.md`](multimodel.md) | Per-role LLM + GraphBuildWorkflow child + per-activity model в `ingest_metrics` | Перед первым сабмитом с разными моделями по ролям; при отладке `graph_status="vector_only"` |
 | [`analytics.md`](analytics.md) | Grafana dashboards + Prometheus + Postgres `ingest_metrics` + version-tag механика | Чтобы понять что показывает каждый дашборд + retention правила |
+| [`graph-analytics.md`](graph-analytics.md) | Аналитика по графу: `/api/v1/analyze` (plan→compute→synthesize), каталог 42 примитивов, правило provenance, материализация (`/admin/graph/materialize`), мониторинг Arc-2 (`MONITOR_*`), MCP-поверхность (`kb_analyze` + GDS-тулы) | Гоняешь аналитические вопросы к графу; проверяешь качество extraction после наполнения; включаешь мониторинг/алерты |
 | [`wikibase.md`](wikibase.md) | Самохостящийся Wikibase: bootstrap, push_wikibase activity, SPARQL/wdqs | Включение wikibase-фичи + смена `WIKIBASE_*` env |
 | [`wiki-editor.md`](wiki-editor.md) | Непрерывный редактор Wiki-статей из графа: dirty-mark + Schedule sweep, бот-секция, анти-дрейф, sitelink, gotcha'и | Включаешь wiki-фичу / меняешь `WIKI_*` |
 | [`er-native-vector-knn.md`](er-native-vector-knn.md) | Опциональный нативный векторный kNN для ER вместо окна 5000: backfill-скрипт → флаг `AGENT_ER_USE_NATIVE_VECTOR_KNN`, порядок включения, откат | Включаешь native-ER на большом графе (≫5000 сущностей) |
@@ -26,6 +27,7 @@
 | [`../MODELS.md`](../MODELS.md) | Рекомендации по выбору моделей, флаги возможностей, путь эскалации |
 | [`../DEPLOYMENT.md`](../DEPLOYMENT.md) | Сценарии деплоя |
 | [`../SEARCH.md`](../SEARCH.md) | Подсистема поиска: архитектура R7b (`/search/{local,global,drift,auto}`), workflows, очереди |
+| [`../ANALYTICS-GUIDE.md`](../ANALYTICS-GUIDE.md) | Теория сетевого анализа за каждым аналитическим инструментом (центральности, Leiden, link prediction, риск-скоринг) + живые примеры и чек-лист интерпретации |
 | [`../diagrams/system_architecture.svg`](../diagrams/system_architecture.svg) / [`../diagrams/system_architecture.d2`](../diagrams/system_architecture.d2) | Визуальная карта системы (рендер + D2-источник) |
 
 ## Планы и спеки
@@ -44,6 +46,7 @@
 
 | Спринт | Что добавилось | Runbook |
 |---|---|---|
+| `analytics-waves (2026-07-01)` | Аналитический слой Waves 0–3: каталог 42 примитивов (`src/analytics/`), `POST /api/v1/analyze` + MCP `kb_analyze`, `AnalyticsMaterializeWorkflow` + `/admin/graph/materialize`, мониторинг Arc-2 (`MONITOR_*`, E2/E3 события, webhook push — ship dark) | [`graph-analytics.md`](graph-analytics.md) |
 | `seven-tracks (2026-06-15)` | Входной классификатор + `force`; admission control (`IngestSchedulerWorkflow`); шаблоны ответа (`answer_template`); GDS-анализ `/admin/graph/*`; взвешенные связи + теги + weighted Leiden; прод `Dockerfile`+`docker-compose.prod.yml`; фикс загрузки doc по id | [`classifier.md`](classifier.md) · [`admission-control.md`](admission-control.md) · [`leiden-diagnostics.md`](leiden-diagnostics.md) |
 | `feature/wiki-editor` | MediaWiki-статьи на сущность из графа (dirty-mark + Schedule sweep, переписывание бот-секции, анти-дрейф) | [`wiki-editor.md`](wiki-editor.md) |
 | `feature/wikibase-population` | Активность push в Wikibase, базовые классы, сворачивание идентификаторов | [`wikibase.md`](wikibase.md) |

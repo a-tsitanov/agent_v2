@@ -1,4 +1,4 @@
-from tests.eval.ner_eval import score_case, NERStats
+from tests.eval.ner_eval import NERStats, score_case
 
 
 def test_score_case_counts_tp_fp_fn_per_type():

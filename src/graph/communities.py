@@ -70,36 +70,37 @@ def _new_graph_name() -> str:
     return f"{_GDS_GRAPH_PREFIX}-{uuid.uuid4().hex[:8]}"
 
 
-# 1. Cypher projection of the __Entity__ sub-graph.  Cypher projection
-#    (``gds.graph.project`` aggregation form) handles the arbitrary
-#    relationship types the KG extractor emits without enumerating each
-#    type up front.  Self-/dangling nodes are included via OPTIONAL MATCH
-#    so isolated entities still appear (they land in singleton communities
-#    that the min_size floor drops).
+# 1. NATIVE projection of the __Entity__ sub-graph — NOT the
+#    cypher-aggregation form (``MATCH … RETURN gds.graph.project(…) AS g``).
+#    The aggregation path deterministically exhausts a 4G heap on
+#    GDS 2.13.9 / Neo4j 5.26.25 even on a ~2k-entity graph and kills the
+#    JVM (repro 2026-07-03; the 2026-06-30 prod OOM blamed on "GDS at
+#    scale" was this same failure via the community backend).
 #
-#    ``undirectedRelationshipTypes: ['*']`` (5th / configuration arg) makes
-#    EVERY projected type undirected — REQUIRED by Leiden, which rejects a
+#    Semantics are preserved: every __Entity__ node is projected
+#    (isolated ones land in singleton communities that the min_size floor
+#    drops); ``type: '*'`` covers the arbitrary relationship types the KG
+#    extractor emits, collapsed into one ``ALL`` type (nothing downstream
+#    filters by type); relationships are kept only when BOTH endpoints are
+#    projected — same as the old ``(s)-[r]->(t:__Entity__)`` match.
+#
+#    ``orientation: 'UNDIRECTED'`` — REQUIRED by Leiden, which rejects a
 #    directed graph ("works only with undirected graphs").  Edge direction
 #    is meaningless for community detection on a KG anyway.
-#    ``relationshipProperties: {{ weight: coalesce(r.weight, 1.0) }}``
-#    projects the merge-layer edge weight (distinct co-occurrence count)
-#    so Leiden runs WEIGHTED — dense, repeatedly-attested ties dominate
-#    the partition.  ``coalesce`` defends against legacy edges written
-#    before weights were meaningful.  The result is aliased ``AS g`` so
-#    ``_projection_stats`` can read nodeCount/relationshipCount back.
+#    ``properties: {{ weight: {{ defaultValue: 1.0 }} }}`` projects the
+#    merge-layer edge weight (distinct co-occurrence count) so Leiden runs
+#    WEIGHTED; the default defends against legacy edges written before
+#    weights were meaningful (ex-``coalesce``).  The counts are re-aliased
+#    ``AS g`` so ``_projection_stats`` keeps reading the same row shape.
 def _project_cypher(graph_name: str) -> str:
     return f"""
-MATCH (s:__Entity__)
-OPTIONAL MATCH (s)-[r]->(t:__Entity__)
-RETURN gds.graph.project(
+CALL gds.graph.project(
     '{graph_name}',
-    s,
-    t,
-    {{ sourceNodeLabels: labels(s), targetNodeLabels: labels(t),
-       relationshipType: type(r),
-       relationshipProperties: {{ weight: coalesce(r.weight, 1.0) }} }},
-    {{ undirectedRelationshipTypes: ['*'] }}
-) AS g
+    ['__Entity__'],
+    {{ ALL: {{ type: '*', orientation: 'UNDIRECTED',
+               properties: {{ weight: {{ defaultValue: 1.0 }} }} }} }}
+) YIELD nodeCount, relationshipCount
+RETURN {{ nodeCount: nodeCount, relationshipCount: relationshipCount }} AS g
 """
 
 

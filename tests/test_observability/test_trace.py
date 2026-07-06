@@ -51,9 +51,8 @@ def test_trace_context_unbinds_after_exit() -> None:
 def test_record_timed_measures_block_duration() -> None:
     import time as _time
 
-    with trace_request("agent", "Q") as trace:
-        with record_timed("tool_call", tool_name="x"):
-            _time.sleep(0.01)  # 10ms — well above timer noise floor
+    with trace_request("agent", "Q") as trace, record_timed("tool_call", tool_name="x"):
+        _time.sleep(0.01)  # 10ms — well above timer noise floor
 
     assert len(trace.events) == 1
     e = trace.events[0]

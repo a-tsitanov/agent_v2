@@ -14,20 +14,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from loguru import logger  # noqa: E402
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.ingestion.embeddings import build_embedding_model  # noqa: E402
-from src.ingestion.pipeline import (  # noqa: E402
+from src.config import settings
+from src.ingestion.embeddings import build_embedding_model
+from src.ingestion.pipeline import (
     build_ingestion_pipeline,
     read_documents,
 )
-from src.retrieval.vector_index import (  # noqa: E402
+from src.retrieval.vector_index import (
     build_vector_index,
     build_vector_store,
     index_nodes,
 )
-from src.utils.logging import configure_logging  # noqa: E402
+from src.utils.logging import configure_logging
 
 
 def _parse_args() -> argparse.Namespace:

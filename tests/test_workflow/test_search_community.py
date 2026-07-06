@@ -439,11 +439,11 @@ def test_child_reports_cypher_shape():
 
 def test_project_cypher_is_undirected_for_leiden():
     # Leiden rejects a directed graph ("works only with undirected graphs").
-    # The projection MUST mark all relationship types undirected.
+    # The native projection MUST mark all relationships undirected.
     from src.graph.communities import _project_cypher
 
     cypher = _project_cypher("g-test")
-    assert "undirectedRelationshipTypes: ['*']" in cypher
+    assert "orientation: 'UNDIRECTED'" in cypher
     assert "gds.graph.project(" in cypher
 
 

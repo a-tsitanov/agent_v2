@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from llama_index.core.graph_stores.types import EntityNode, KG_NODES_KEY
+from llama_index.core.graph_stores.types import KG_NODES_KEY, EntityNode
 from llama_index.core.schema import BaseNode, TransformComponent
 from pydantic import ConfigDict, Field
 

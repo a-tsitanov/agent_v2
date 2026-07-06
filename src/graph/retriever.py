@@ -168,6 +168,32 @@ def build_fulltext_query(query: str) -> str:
     return " OR ".join(tokens)
 
 
+# LlamaIndex's PG retriever prepends this header when include_text=True;
+# the triplet lines sit between it and the next blank line.
+_FACTS_HEADER = "Here are some facts extracted from the provided text:"
+
+
+def _parse_triplet_chains(text: str) -> list[tuple[str, str, str]]:
+    """Extract ``(src, label, tgt)`` triplets from the PG retriever's
+    text-serialised facts (``A -> REL -> B [-> REL2 -> C …]`` lines).
+
+    With ``include_text=True`` only the facts section (header → blank
+    line) is scanned so arrows inside the source chunk body can't be
+    misparsed; without the header the whole text is treated as facts."""
+    if _FACTS_HEADER in text:
+        after = text.split(_FACTS_HEADER, 1)[1].lstrip("\n")
+        text = after.split("\n\n", 1)[0]
+    triplets: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(" -> ")]
+        # A valid chain alternates entity/relation: odd length >= 3.
+        if len(parts) < 3 or len(parts) % 2 == 0 or not all(parts):
+            continue
+        for i in range(0, len(parts) - 2, 2):
+            triplets.append((parts[i], parts[i + 1], parts[i + 2]))
+    return triplets
+
+
 class GraphRetriever:
     """Async wrapper over ``PropertyGraphIndex.as_retriever``."""
 
@@ -233,6 +259,8 @@ class GraphRetriever:
         )
         nodes = await retriever.aretrieve(query)
         out = RoundGraphData()
+        seen_rels: set[tuple[str, str, str]] = set()
+        seen_ents: set[str] = set()
         for n in nodes:
             text = n.node.get_content() or ""
             md = n.node.metadata or {}
@@ -254,6 +282,28 @@ class GraphRetriever:
                     "description": text,
                 })
             else:
+                # In practice the PG retriever returns plain TextNodes whose
+                # CONTENT serialises the matched triplets — there is no
+                # EntityNode/ChunkNode to classify (that mismatch left
+                # entities/relations always empty; found 2026-07-03).
+                # Recover them from the text, keep the node as a chunk.
+                for src, label, tgt in _parse_triplet_chains(text):
+                    if (src, label, tgt) not in seen_rels:
+                        seen_rels.add((src, label, tgt))
+                        out.relations.append({
+                            "src_id": src,
+                            "tgt_id": tgt,
+                            "label": label,
+                            "description": "",
+                        })
+                    for name in (src, tgt):
+                        if name not in seen_ents:
+                            seen_ents.add(name)
+                            out.entities.append({
+                                "entity_name": name,
+                                "entity_type": "",
+                                "description": "",
+                            })
                 # plain content chunk attached for context
                 out.chunks.append(n)
         return out
@@ -301,7 +351,7 @@ class GraphRetriever:
                 _WALK_CYPHER.format(hops=safe_hops),
                 params,
             )
-        except Exception as exc:  # noqa: BLE001 — APOC missing / store down
+        except Exception as exc:
             logger.warning(
                 "graph_walk: APOC path failed, retrying without APOC: {e}",
                 e=exc,
@@ -313,7 +363,7 @@ class GraphRetriever:
                     params,
                 )
                 return self._map_no_apoc_rows(rows)
-            except Exception as exc2:  # noqa: BLE001
+            except Exception as exc2:
                 logger.warning("graph_walk failed: {e}", e=exc2)
                 return RoundGraphData()
 

@@ -16,7 +16,6 @@ from httpx import ASGITransport, AsyncClient
 from src.config import settings
 from src.workflow.contracts import SearchOutcome, SerializedNode
 from src.workflow.search.global_wf import GlobalSearchWorkflow
-from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
 from src.workflow.search.router_wf import AutoSearchWorkflow, DriftSearchWorkflow
 
 

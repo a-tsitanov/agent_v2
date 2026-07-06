@@ -50,7 +50,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from src.workflow.search._merge import merge_subquery_sources
     from src.workflow.search._retry import (
-        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+        FAST_RETRY,
+        LLM_SCHEDULE_TO_CLOSE,
+        LLM_START_TO_CLOSE,
     )
 
 from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow

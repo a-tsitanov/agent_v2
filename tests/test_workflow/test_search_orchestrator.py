@@ -226,8 +226,7 @@ def _orch_activities_with_coverage(cov_results, retrieve_calls, synth_calls):
                               sources=[_node(cid)])
 
     @activity.defn(name="coverage_check")
-    async def _coverage(params) -> "CoverageResult":
-        from src.workflow.contracts import CoverageResult
+    async def _coverage(params) -> CoverageResult:
         return cov_results.pop(0)
 
     @activity.defn(name="synthesize_answer")

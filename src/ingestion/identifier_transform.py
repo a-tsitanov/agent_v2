@@ -39,7 +39,6 @@ from src.ingestion.identifiers import (
     extract_identifiers,
 )
 
-
 _METADATA_KEY = "canonical_identifiers"
 # Dedicated metadata key holding the rendered augment block.  Excluded
 # from the EMBED metadata view (so it never reaches the embedding model

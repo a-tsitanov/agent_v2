@@ -31,8 +31,13 @@ def test_ensure_first_seen_indexes_returns_false_on_error():
     assert ensure_first_seen_indexes(_Fail()) is False
 
 
-def test_ensure_first_seen_indexes_one_query_issued():
-    """Only the entity index is created (rel index deferred — needs per-type DDL)."""
+def test_ensure_first_seen_indexes_issues_entity_and_rel_ddl():
+    """Entity created_at index + per-type temporal indexes on RELATED
+    (rel-property indexes are per-type in Neo4j; RELATED is dominant)."""
     store = _Rec()
     ensure_first_seen_indexes(store)
-    assert len(store.queries) == 1
+    assert len(store.queries) == 3
+    joined = " ".join(store.queries)
+    assert "entity_created_at" in joined
+    assert "rel_related_created_at" in joined
+    assert "rel_related_valid_from" in joined

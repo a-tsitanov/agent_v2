@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import get_args
 
 from llama_index.core.indices.property_graph import (
-    SchemaLLMPathExtractor,
     SimpleLLMPathExtractor,
 )
 from llama_index.core.llms import MockLLM
@@ -303,7 +302,8 @@ def test_ensure_community_report_vector_index_ddl_and_failopen():
 
 def test_ensure_community_indexes_ddl_and_failopen():
     from src.graph.index import (
-        COMMUNITY_LEVEL_INDEX_CYPHER, CHUNK_DOC_ID_INDEX_CYPHER,
+        CHUNK_DOC_ID_INDEX_CYPHER,
+        COMMUNITY_LEVEL_INDEX_CYPHER,
         ensure_community_indexes,
     )
     assert "FOR (c:Community) ON (c.level)" in COMMUNITY_LEVEL_INDEX_CYPHER

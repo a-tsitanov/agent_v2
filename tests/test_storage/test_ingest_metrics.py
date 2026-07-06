@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
 
 from src.config import settings
 from src.storage.ingest_metrics import (
-    AsyncIngestMetrics, MetricRow, build_ingest_metrics_store,
+    AsyncIngestMetrics,
+    MetricRow,
+    build_ingest_metrics_store,
 )
 
 
@@ -22,7 +24,7 @@ def _pg_reachable() -> bool:
     try:
         with psycopg.connect(settings.postgres.dsn, connect_timeout=2):
             return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -33,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _row(workflow_run_id: str, name: str, attempt: int = 1) -> MetricRow:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return MetricRow(
         doc_id=str(uuid.uuid4()),
         workflow_id="ingest-test",

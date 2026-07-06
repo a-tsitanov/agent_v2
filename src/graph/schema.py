@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-
 # ── core entity types (cover reports / emails / transcripts) ────────
 
 EntityType = Literal[

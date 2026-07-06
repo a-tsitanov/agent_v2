@@ -40,10 +40,12 @@ from loguru import logger
 
 from src.config import settings
 from src.mcp._shared import (
-    assert_api_key_env_set, build_sse_auth, log_banner, parse_args,
+    assert_api_key_env_set,
+    build_sse_auth,
+    log_banner,
+    parse_args,
 )
 from src.retrieval import atomic_tools
-
 
 mcp = FastMCP(
     name="kb-llamaindex-tools",
@@ -76,7 +78,8 @@ async def _init() -> None:
             return
         from src.ingestion.embeddings import build_embedding_model
         from src.retrieval.vector_index import (
-            build_vector_index, build_vector_store,
+            build_vector_index,
+            build_vector_store,
         )
         from src.storage.chunk_repository import ChunkRepository
         from src.storage.postgres import AsyncPostgres
@@ -92,7 +95,8 @@ async def _init() -> None:
 
         try:
             from src.graph.index import (
-                build_kg_extractor, build_property_graph_index,
+                build_kg_extractor,
+                build_property_graph_index,
             )
             from src.graph.retriever import GraphRetriever
             from src.graph.store import build_neo4j_graph_store
@@ -110,7 +114,7 @@ async def _init() -> None:
             )
             # Raw store for the GDS analysis tools (need structured_query).
             _deps["graph_store"] = gs
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "MCP-2: graph_retriever disabled (Neo4j down?): {e}",
                 e=exc,

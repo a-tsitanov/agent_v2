@@ -24,7 +24,7 @@ _NEIGHBORS = (
     "MATCH (e:__Entity__ {name:$name})-[r]-(n:__Entity__) "
     "WHERE (r.polarity IS NULL OR r.polarity <> 'negated') AND NONE(l IN labels(n) WHERE l IN $id_types) "
     "RETURN type(r) AS rel, n.name AS name, "
-    "[l IN labels(n) WHERE l <> '__Entity__'][0] AS ntype, r.weight AS w "
+    "[l IN labels(n) WHERE l <> '__Entity__' AND l <> '__Node__'][0] AS ntype, r.weight AS w "
     "ORDER BY r.weight DESC LIMIT $top_n"
 )
 _IDENTIFIERS = (
@@ -124,7 +124,7 @@ async def common_connections(
         "MATCH (x:__Entity__ {name:$a})-[r1]-(m:__Entity__)-[r2]-"
         "(y:__Entity__ {name:$b}) "
         "WHERE (r1.polarity IS NULL OR r1.polarity<>'negated') AND (r2.polarity IS NULL OR r2.polarity<>'negated') "
-        "RETURN m.name AS name, [l IN labels(m) WHERE l<>'__Entity__'][0] AS type, "
+        "RETURN m.name AS name, [l IN labels(m) WHERE l<>'__Entity__' AND l<>'__Node__'][0] AS type, "
         "collect(DISTINCT type(r1))+collect(DISTINCT type(r2)) AS via "
         "ORDER BY size(via) DESC LIMIT $top_n"
     )

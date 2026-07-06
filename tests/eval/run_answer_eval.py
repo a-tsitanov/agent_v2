@@ -36,9 +36,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import httpx  # noqa: E402
+import httpx
 
-from tests.eval.answer_quality import (  # noqa: E402
+from tests.eval.answer_quality import (
     GOLDEN_DIR_DEFAULT,
     THRESHOLDS,
     CaseScore,
@@ -47,11 +47,10 @@ from tests.eval.answer_quality import (  # noqa: E402
     load_golden_cases,
     score_case,
 )
-from tests.eval.medical_fixture import (  # noqa: E402
+from tests.eval.medical_fixture import (
     KNOWN_QUESTION_TYPES,
     load_medical_golden_cases,
 )
-
 
 # R7b cutover: the legacy ReAct endpoints (/search, /agent, /selfrag)
 # and the judge-based /legacy/agent baseline were removed.  The eval now
@@ -84,7 +83,7 @@ async def _hit_endpoint(
             f"  [WARN] {endpoint} returned {exc.response.status_code}: "
             f"{exc.response.text[:200]}", file=sys.stderr,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"  [WARN] {endpoint} call failed: {exc}", file=sys.stderr)
     return None
 

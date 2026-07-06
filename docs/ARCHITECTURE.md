@@ -151,6 +151,14 @@ Best-effort хвосты: `mark_entities_dirty` (помечает сущност
 | `drift` | `DriftSearchWorkflow` | локальный проход, затем глобальное расширение, засеянное локальными источниками; деградирует до локального ответа, если глобальный падает |
 | `auto` | `AutoSearchWorkflow` | `route_query` классифицирует → диспетчеризует local/global/drift (fail-safe → local) |
 
+Отдельно от поиска живёт **аналитика по графу** — `POST /api/v1/analyze`
+(`AnalyticalQueryWorkflow`, та же search-очередь): LLM-планировщик выбирает
+до `ANALYTICS_MAX_STEPS` детерминированных Cypher-примитивов из каталога 42
+(`src/analytics/`), синтез собирает ответ, а `provenance` несёт точный Cypher
+и сырые строки каждого шага. Центральность/link-prediction/risk предвычисляет
+`AnalyticsMaterializeWorkflow` (`POST /admin/graph/materialize`, очередь
+graph-build). Подробности → [`runbook/graph-analytics.md`](runbook/graph-analytics.md).
+
 Ключевые свойства:
 
 - **Детерминированное извлечение, а не цикл ReAct.** Каждый подвопрос
@@ -208,6 +216,7 @@ PageRank (глобальный и **персонализированный/seed-
 | `kb-search-large` | только `synthesize_answer` (финальный синтез на large-tier) | 2 |
 | `kb-graph-build` | `CommunityBuildWorkflow` (офлайн-сообщества GDS-Leiden) | 2 |
 | `kb-wiki` | `WikiSweepWorkflow` (непрерывный редактор MediaWiki по сущностям) | 4 |
+| `kb-monitor` | монитор-свип Arc-2 (opt-in `MONITOR_ENABLED`; новые связи / рост risk / burst событий / доставка алертов) | 2 |
 
 Лимиты Temporal по каждой очереди ограничивают, сколько активностей
 *планируется*; per-process **LLMPool** затем ограничивает, сколько

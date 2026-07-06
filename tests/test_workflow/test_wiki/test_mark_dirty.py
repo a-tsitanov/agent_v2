@@ -1,7 +1,5 @@
-import pytest
-from unittest.mock import MagicMock, patch
-from src.workflow.contracts import MarkDirtyIn
 from src.workflow.activities.mark_dirty import _dirty_names
+from src.workflow.contracts import MarkDirtyIn
 
 
 def test_dirty_names_includes_entities_and_relation_endpoints():

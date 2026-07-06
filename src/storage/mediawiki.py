@@ -15,7 +15,7 @@ class AsyncMediaWiki:
         self._site = site_global_id
 
     @classmethod
-    async def login(cls, api_url: str, user: str, password: str, site_global_id: str = "kbwiki") -> "AsyncMediaWiki":
+    async def login(cls, api_url: str, user: str, password: str, site_global_id: str = "kbwiki") -> AsyncMediaWiki:
         client = httpx.AsyncClient(timeout=30.0)
         # 1) login token
         r = await client.get(api_url, params={

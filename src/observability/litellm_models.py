@@ -58,7 +58,7 @@ def _list_available_models(base_url: str, api_key: str, timeout_s: float) -> lis
             resp.raise_for_status()
         data = resp.json().get("data", [])
         return [m.get("id") for m in data if m.get("id")]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "LiteLLM /v1/models probe failed — skipping model validation "
             "(reason: {e}).  Misconfigured per-role models will still surface "

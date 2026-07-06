@@ -32,7 +32,6 @@ from src.graph.entity_resolution import (
     resolve_entities,
 )
 
-
 # ── stubs ───────────────────────────────────────────────────────────
 
 

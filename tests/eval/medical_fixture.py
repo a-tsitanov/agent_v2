@@ -38,7 +38,6 @@ from pathlib import Path
 
 from tests.eval.answer_quality import GoldenCase
 
-
 CORPUS_DIR = Path(__file__).resolve().parent / "corpora" / "medical"
 MEDICAL_CORPUS_PATH = CORPUS_DIR / "medical.json"
 MEDICAL_QUESTIONS_PATH = CORPUS_DIR / "medical_questions.json"
@@ -255,9 +254,9 @@ def load_medical_golden_cases(
 __all__ = [
     "CORPUS_DIR",
     "KNOWN_QUESTION_TYPES",
-    "MedicalQA",
     "MEDICAL_CORPUS_PATH",
     "MEDICAL_QUESTIONS_PATH",
+    "MedicalQA",
     "load_medical_golden_cases",
     "load_medical_qas",
     "load_medical_source",

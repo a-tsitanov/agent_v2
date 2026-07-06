@@ -32,7 +32,6 @@ from llama_index.core.schema import NodeWithScore, TextNode
 from loguru import logger
 from pydantic import BaseModel
 
-
 # ── protocols ────────────────────────────────────────────────────────
 
 
@@ -95,10 +94,13 @@ class ToolResult:
 # so the two layers can never silently diverge.
 from src.graph.retriever import (  # noqa: E402
     GRAPH_WALK_EDGE_CAP as GRAPH_WALK_MAX_EDGES,
+)
+from src.graph.retriever import (
     GRAPH_WALK_MAX_HOPS,
+)
+from src.graph.retriever import (
     GRAPH_WALK_NODE_CAP as GRAPH_WALK_MAX_NODES,
 )
-
 
 # ── tools ────────────────────────────────────────────────────────────
 
@@ -293,7 +295,7 @@ async def get_chunks_by_doc_id(
         chunks = await chunk_repository.aget_chunks_by_doc_id(
             doc_id, limit=limit, offset=offset,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "get_chunks_by_doc_id failed  doc={d}  err={e}",
             d=doc_id, e=exc,
@@ -348,7 +350,7 @@ async def read_full_document(
         text = await chunk_repository.aread_document_text(
             doc_id, max_chars=max_chars,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "read_full_document failed  doc={d}  err={e}",
             d=doc_id, e=exc,

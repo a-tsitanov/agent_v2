@@ -208,6 +208,5 @@ async def test_raises_when_reader_does_not_find_file(tmp_path: Path):
         return_value=MagicMock(),
     ), patch(
         "src.workflow.activities.parse_and_chunk.activity"
-    ):
-        with pytest.raises(FileNotFoundError):
-            await parse_and_chunk(ctx)
+    ), pytest.raises(FileNotFoundError):
+        await parse_and_chunk(ctx)

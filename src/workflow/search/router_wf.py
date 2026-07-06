@@ -37,7 +37,9 @@ with workflow.unsafe.imports_passed_through():
         SearchOutcome,
     )
     from src.workflow.search._retry import (
-        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+        FAST_RETRY,
+        LLM_SCHEDULE_TO_CLOSE,
+        LLM_START_TO_CLOSE,
     )
 
 from src.workflow.search.global_wf import GlobalSearchWorkflow

@@ -6,9 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 from llama_index.core.base.llms.types import ChatMessage
-from llama_index.core.schema import TextNode
-
-from llama_index.core.schema import Document
+from llama_index.core.schema import Document, TextNode
 
 from src.ingestion.translate_transform import (
     FULL_TRANSLATED_TEXT_KEY,

@@ -1,10 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.config import settings
 from src.graph.wiki_context import EntityContext
-from src.workflow.wiki.wiki_sweep import (
-    _tally, ArticleOutcome, write_entity_article)
+from src.workflow.wiki.wiki_sweep import ArticleOutcome, _tally, write_entity_article
 
 
 def test_tally_counts_outcomes():

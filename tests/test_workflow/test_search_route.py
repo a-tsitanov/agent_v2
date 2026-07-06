@@ -24,7 +24,6 @@ from src.workflow.contracts import RouteParams
 from src.workflow.search.activities import route as route_mod
 from src.workflow.search.activities.route import classify_route, route_query
 
-
 # ── pure classifier helper ──────────────────────────────────────────
 
 

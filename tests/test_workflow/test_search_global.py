@@ -43,7 +43,6 @@ from src.workflow.search.global_wf import (
     partials_to_sources,
 )
 
-
 # ── rank_summaries (pure) ───────────────────────────────────────────
 
 
@@ -481,8 +480,8 @@ def test_build_reduce_call_pins_large_queue_and_tier():
 
 
 def test_coerce_params_accepts_dict():
-    from src.workflow.search.global_wf import _coerce_global_params
     from src.workflow.contracts import GlobalSearchParams
+    from src.workflow.search.global_wf import _coerce_global_params
 
     out = _coerce_global_params({"query": "q", "drift_mode": True})
     assert isinstance(out, GlobalSearchParams)

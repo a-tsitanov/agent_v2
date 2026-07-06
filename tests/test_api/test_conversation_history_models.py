@@ -1,5 +1,5 @@
 def test_search_request_accepts_history():
-    from src.models.search import SearchRequest, ConversationTurn
+    from src.models.search import ConversationTurn, SearchRequest
     req = SearchRequest(query="q", history=[ConversationTurn(role="user", content="prev")])
     assert req.history[0].content == "prev"
     assert SearchRequest(query="q").history == []   # default empty
@@ -7,8 +7,11 @@ def test_search_request_accepts_history():
 
 def test_contracts_have_history_and_contextualize():
     from src.workflow.contracts import (
-        OrchestratorParams, GlobalSearchParams,
-        ContextualizeParams, ContextualizeResult, ConversationTurnDict,
+        ContextualizeParams,
+        ContextualizeResult,
+        ConversationTurnDict,
+        GlobalSearchParams,
+        OrchestratorParams,
     )
     assert OrchestratorParams(query="q").history == []
     assert GlobalSearchParams(query="q").history == []

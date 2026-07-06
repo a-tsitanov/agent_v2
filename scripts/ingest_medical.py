@@ -22,9 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import httpx  # noqa: E402
+import httpx
 
-from tests.eval.medical_fixture import MEDICAL_CORPUS_PATH  # noqa: E402
+from tests.eval.medical_fixture import MEDICAL_CORPUS_PATH
 
 
 def _parse_args() -> argparse.Namespace:

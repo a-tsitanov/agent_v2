@@ -41,7 +41,6 @@ from loguru import logger
 
 from src.graph.lightrag_parse import (
     _cypher_safe_label,
-    _first_keyword,
     _normalize_entity_name,
 )
 from src.graph.lightrag_prompts import (
@@ -51,7 +50,6 @@ from src.graph.lightrag_prompts import (
     SUMMARIZE_ENTITY_DESCRIPTIONS,
 )
 from src.retrieval._common import strip_thinking
-
 
 # ── intermediate aggregation shapes ─────────────────────────────────
 
@@ -147,7 +145,7 @@ async def _maybe_summarize_descriptions(
         summary = strip_thinking(resp.message.content or "").strip()
         if summary:
             return summary
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "summary LLM call failed for {kind} {name}: {err}",
             kind=description_type, name=description_name, err=exc,

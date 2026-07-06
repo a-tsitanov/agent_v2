@@ -1,4 +1,3 @@
-import pytest
 from src.workflow.search.activities.retrieve import _walk_seeds
 
 

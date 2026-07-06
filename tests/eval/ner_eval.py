@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-
 GOLDEN_DIR_DEFAULT = Path(__file__).resolve().parent / "golden_entities"
 
 
@@ -141,11 +140,13 @@ def format_report(
 
 def _llm_only_extractor_factory() -> Extractor:  # pragma: no cover - integration
     """Wrap the existing LightRAG extractor as a NER-only callable."""
+    import asyncio
+
+    from llama_index.core.graph_stores.types import KG_NODES_KEY
+    from llama_index.core.schema import TextNode
+
     from src.graph.lightrag_extract import LightRAGExtractor
     from src.retrieval.llm import build_extraction_llm
-    from llama_index.core.schema import TextNode
-    from llama_index.core.graph_stores.types import KG_NODES_KEY
-    import asyncio
 
     extractor = LightRAGExtractor(llm=build_extraction_llm())
 

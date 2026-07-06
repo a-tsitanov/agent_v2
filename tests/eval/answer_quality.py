@@ -34,7 +34,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 GOLDEN_DIR_DEFAULT = Path(__file__).resolve().parent / "golden_qa"
 
 # Hallucination heuristic: a sentence "is supported" if at least
@@ -165,9 +164,7 @@ def score_case(
         entity_recall = 1.0
 
     # citation_precision: only meaningful when citations provided
-    if citations is None:
-        citation_precision = 1.0
-    elif not citations:
+    if citations is None or not citations:
         citation_precision = 1.0
     else:
         valid_ids = {s.get("chunk_id") for s in sources}
@@ -301,9 +298,9 @@ def check_thresholds(by_endpoint_and_doc: dict[str, dict[str, dict[str, float]]]
 
 
 __all__ = [
+    "THRESHOLDS",
     "CaseScore",
     "GoldenCase",
-    "THRESHOLDS",
     "aggregate_by",
     "check_thresholds",
     "load_golden_cases",

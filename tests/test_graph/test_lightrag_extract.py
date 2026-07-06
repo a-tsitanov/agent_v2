@@ -17,7 +17,6 @@ from src.graph.lightrag_extract import LightRAGExtractor, _extraction_text
 from src.graph.lightrag_prompts import COMPLETE_DELIM, TUPLE_DELIM
 from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
 
-
 # ── stub LLM ────────────────────────────────────────────────────────
 
 

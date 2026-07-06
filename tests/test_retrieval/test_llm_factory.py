@@ -35,9 +35,10 @@ def _capture(monkeypatch, *, role_kwarg, extra_env=None):
 
     # Import inside the function so monkey-patched env is seen by
     # `LiteLLMSettings()` constructed lazily inside build_llm.
-    import src.retrieval.llm as llm_mod
     from importlib import reload
+
     import src.config as cfg
+    import src.retrieval.llm as llm_mod
     reload(cfg)
     reload(llm_mod)
     with patch("src.retrieval.llm.OpenAILike", side_effect=_spy):
@@ -94,9 +95,10 @@ def _capture_kwargs(monkeypatch, *, role_kwarg, extra_env=None):
         captured.update(kw)
         return MagicMock()
 
-    import src.retrieval.llm as llm_mod
     from importlib import reload
+
     import src.config as cfg
+    import src.retrieval.llm as llm_mod
     reload(cfg)
     reload(llm_mod)
     with patch("src.retrieval.llm.OpenAILike", side_effect=_spy):

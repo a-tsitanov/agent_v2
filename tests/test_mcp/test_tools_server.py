@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-
 _EXPECTED_TOOLS = {
     "vector_search",
     "graph_search",

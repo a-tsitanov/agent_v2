@@ -55,7 +55,7 @@ async def classify_document(inp: ClassifyIn) -> ClassifyResult:
         return ClassifyResult(
             ingest=bool(v.ingest), reason=v.reason or "llm", doc_type=v.doc_type or "",
         )
-    except Exception as exc:  # noqa: BLE001 — never lose a doc to a classifier bug
+    except Exception as exc:
         activity.logger.warning(
             "classify_document failed, defaulting to ingest: %s", exc,
         )

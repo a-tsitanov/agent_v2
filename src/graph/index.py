@@ -204,28 +204,39 @@ def ensure_chunk_date_indexes(store) -> bool:
 
 # Range index on ``__Entity__.created_at`` — E1 (Wave 0 first-seen feature).
 # Backs the "what's new" query path that filters entities by epoch-day.
-# NOTE: relationship created_at index needs per-type DDL in Neo4j; deferred
-# (edge first_seen queries scan until added).
 ENTITY_CREATED_AT_INDEX_CYPHER = (
     "CREATE INDEX entity_created_at IF NOT EXISTS FOR (e:__Entity__) ON (e.created_at)"
 )
 
+# Relationship temporal indexes. Neo4j rel-property indexes are PER-TYPE
+# (``FOR ()-[r:TYPE]-()``), so we cover the dominant extractor type only:
+# RELATED carries the majority of edges. They serve TYPED query paths
+# (relationship_timeline with rel_type, future typed dynamics); the untyped
+# ``-[r]-`` scan in whats_changed can NOT use them — acceptable while the
+# graph is ~10^4 edges, revisit (enumerate top types) beyond that.
+REL_TEMPORAL_INDEX_CYPHERS = (
+    "CREATE INDEX rel_related_created_at IF NOT EXISTS "
+    "FOR ()-[r:RELATED]-() ON (r.created_at)",
+    "CREATE INDEX rel_related_valid_from IF NOT EXISTS "
+    "FOR ()-[r:RELATED]-() ON (r.valid_from)",
+)
+
 
 def ensure_first_seen_indexes(store) -> bool:
-    """Idempotently create the ``created_at`` index on entities (E1 Wave 0).
-
-    Relationship-level ``created_at`` indexing is deferred — Neo4j requires
-    per-type DDL (``FOR ()-[r:TYPE]-()``) which is not yet wired.
+    """Idempotently create the E1 temporal indexes: ``created_at`` on
+    entities + per-type temporal indexes on RELATED relationships.
 
     Fail-open like the other ensure-index helpers: any error is logged
-    and swallowed.  Returns True only if the DDL succeeded.
+    and swallowed.  Returns True only if all DDL succeeded.
     """
-    try:
-        store.structured_query(ENTITY_CREATED_AT_INDEX_CYPHER)
-        return True
-    except Exception as exc:  # broad by design — fail-open
-        logger.warning("ensure_first_seen_indexes failed: {e}", e=exc)
-        return False
+    ok = True
+    for cypher in (ENTITY_CREATED_AT_INDEX_CYPHER, *REL_TEMPORAL_INDEX_CYPHERS):
+        try:
+            store.structured_query(cypher)
+        except Exception as exc:  # broad by design — fail-open
+            logger.warning("ensure_first_seen_indexes failed: {e}", e=exc)
+            ok = False
+    return ok
 
 
 def _parse_triplets_strip_thinking(response: str, **kwargs):

@@ -69,7 +69,7 @@ async def distribution_by_type(
     cypher = (
         "MATCH (e:__Entity__) "
         "WHERE ($exclude_ids = false OR NONE(l IN labels(e) WHERE l IN $id_types)) "
-        "WITH [l IN labels(e) WHERE l <> '__Entity__'][0] AS type "
+        "WITH [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__Node__'][0] AS type "
         "RETURN type, count(*) AS n ORDER BY n DESC"
     )
     params = {"exclude_ids": exclude_identifiers, "id_types": ID_TYPES}

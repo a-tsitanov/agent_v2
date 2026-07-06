@@ -34,8 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.ingestion.identifiers import extract_identifiers  # noqa: E402
-
+from src.ingestion.identifiers import extract_identifiers
 
 GOLDEN_DIR_DEFAULT = (
     Path(__file__).resolve().parent / "golden_identifiers"

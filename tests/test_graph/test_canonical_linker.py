@@ -1,5 +1,6 @@
 import asyncio
-from src.graph.canonical_linker import CanonicalLinker, CanonicalCandidate
+
+from src.graph.canonical_linker import CanonicalCandidate, CanonicalLinker
 
 
 class _FakeIndex:

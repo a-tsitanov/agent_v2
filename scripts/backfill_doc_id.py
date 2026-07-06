@@ -33,19 +33,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from loguru import logger  # noqa: E402
-from pymilvus import MilvusClient  # noqa: E402
+from loguru import logger
+from pymilvus import MilvusClient
 
-from src.config import settings  # noqa: E402
-from src.retrieval.vector_index import build_vector_store  # noqa: E402
-from src.storage.backfill import (  # noqa: E402
+from src.config import settings
+from src.retrieval.vector_index import build_vector_store
+from src.storage.backfill import (
     BackfillStats,
     build_path_index,
     plan_doc_id_backfill,
     row_to_node,
 )
-from src.storage.postgres import AsyncPostgres  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
+from src.storage.postgres import AsyncPostgres
+from src.utils.logging import configure_logging
 
 # Milvus output fields: everything (metadata/_node_content/dynamic) plus
 # the vector + text fields so reconstruction loses nothing on re-insert.

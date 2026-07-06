@@ -141,7 +141,7 @@ async def _persist_ingest_metrics(payload: FinalizeIn) -> None:
                 models_per_role=models_per_role,
             )
             rows.extend(child_rows)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             activity.logger.info(
                 "ingest_metrics: child history fetch skipped (%s)", exc,
             )
@@ -158,7 +158,7 @@ async def _persist_ingest_metrics(payload: FinalizeIn) -> None:
             payload.extraction_model or payload.model,
             payload.judge_model or payload.model,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning(
             "ingest_metrics persist failed (best-effort): %s", exc,
         )

@@ -17,7 +17,7 @@ correctness-related.
 """
 
 try:
-    import beartype  # noqa: F401  — pre-initialise the claw machinery
+    import beartype
     import beartype.claw  # noqa: F401
 except ImportError:
     pass

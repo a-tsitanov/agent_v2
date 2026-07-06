@@ -45,3 +45,5 @@ worktrees/
 # Telethon session for the tg_ingest harness
 *.session
 *.session-journal
+# tg_ingest sync-mode state (per-dialog last_id cursors)
+.tg_ingest.state.json

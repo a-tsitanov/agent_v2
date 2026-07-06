@@ -131,24 +131,30 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
         from src.config import settings
 
         if settings.events.first_seen_enabled:
-            from src.graph.first_seen import stamp_first_seen
-            from src.retrieval.date_filters import today_epoch_days
+            # Best-effort enrichment: a stamping failure must NEVER fail the
+            # graph build itself (stamp_first_seen is fail-soft inside, but
+            # the triple-building above it can also throw on odd shapes).
+            try:
+                from src.graph.first_seen import stamp_first_seen
+                from src.retrieval.date_filters import today_epoch_days
 
-            _id_to_name = {e.id: e.name for e in entities}
-            _ent_names = [e.name for e in entities]
-            _rel_triples = [
-                (_id_to_name[r.source_id], r.label, _id_to_name[r.target_id])
-                for r in relations
-                if r.source_id in _id_to_name and r.target_id in _id_to_name
-            ]
-            await asyncio.to_thread(
-                stamp_first_seen,
-                graph_store,
-                entity_names=_ent_names,
-                relations=_rel_triples,
-                ingest_epoch=today_epoch_days(),
-                doc_id=merged.kg.parsed.ctx.doc_id,
-            )
+                _id_to_name = {e.id: e.name for e in entities}
+                _ent_names = [e.name for e in entities]
+                _rel_triples = [
+                    (_id_to_name[r.source_id], r.label, _id_to_name[r.target_id])
+                    for r in relations
+                    if r.source_id in _id_to_name and r.target_id in _id_to_name
+                ]
+                await asyncio.to_thread(
+                    stamp_first_seen,
+                    graph_store,
+                    entity_names=_ent_names,
+                    relations=_rel_triples,
+                    ingest_epoch=today_epoch_days(),
+                    doc_id=merged.kg.parsed.ctx.doc_id,
+                )
+            except Exception as exc:  # noqa: BLE001 — enrichment, not the build
+                logger.warning("first_seen stamping skipped (non-fatal): {e}", e=exc)
             activity.heartbeat({"stage": "first_seen_stamped"})
 
         await asyncio.to_thread(ensure_entity_fulltext_index, graph_store)

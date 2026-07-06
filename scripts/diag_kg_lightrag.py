@@ -22,14 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY  # noqa: E402
-from llama_index.core.node_parser import SentenceSplitter  # noqa: E402
-from llama_index.core.schema import Document  # noqa: E402
+from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import Document
 
-from src.graph.lightrag_extract import LightRAGExtractor  # noqa: E402
-from src.graph.merge import merge_kg_extraction  # noqa: E402
-from src.retrieval.llm import build_llm  # noqa: E402
-from tests.eval.medical_fixture import load_medical_source  # noqa: E402
+from src.graph.lightrag_extract import LightRAGExtractor
+from src.graph.merge import merge_kg_extraction
+from src.retrieval.llm import build_llm
+from tests.eval.medical_fixture import load_medical_source
 
 
 def _parse_args() -> argparse.Namespace:

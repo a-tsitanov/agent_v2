@@ -42,7 +42,11 @@ async def select_dirty_entities(limit: int) -> list[str]:
 async def write_entity_article(name: str) -> str:
     from src.graph.store import build_neo4j_graph_store
     from src.graph.wiki_context import (
-        read_entity_subgraph, read_citations, read_source_docs, subgraph_hash)
+        read_citations,
+        read_entity_subgraph,
+        read_source_docs,
+        subgraph_hash,
+    )
     from src.graph.wiki_dirty import clear_dirty
     from src.retrieval.llm_pool import get_llm_pool
     from src.workflow.wiki._deps import get_mediawiki
@@ -79,7 +83,7 @@ async def write_entity_article(name: str) -> str:
         await mw.upsert_page(title, new, summary="KB bot: updated from graph")
     try:
         await mw.ensure_sitelink(ctx.wikibase_qid, title)
-    except Exception as exc:  # noqa: BLE001 — sitelink is best-effort; page is already written
+    except Exception as exc:
         activity.logger.warning("ensure_sitelink failed name=%s: %s", name, exc)
     # persist page title + hash + clear dirty
     await asyncio.to_thread(
@@ -114,7 +118,7 @@ class WikiSweepWorkflow:
                     heartbeat_timeout=timedelta(minutes=5),
                     schedule_to_close_timeout=timedelta(hours=2),
                     retry_policy=_RETRY))
-            except Exception as exc:  # noqa: BLE001 — best-effort per entity
+            except Exception as exc:
                 log.warning("write_entity_article failed name=%s: %s", name, exc)
                 outcomes.append(ArticleOutcome.FAILED.value)
         result = _tally([ArticleOutcome(o) if o else None for o in outcomes])

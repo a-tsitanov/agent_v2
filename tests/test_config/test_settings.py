@@ -216,6 +216,6 @@ def test_wiki_settings_defaults():
 
 def test_canonical_embedding_profile_defaults():
     """Canonical profile is OpenAI text-embedding-3-small / 1536 (spec B)."""
-    from src.config import MilvusSettings, LiteLLMSettings
+    from src.config import LiteLLMSettings, MilvusSettings
     assert MilvusSettings().dim == 1536
     assert LiteLLMSettings().embedding_model == "text-embedding-3-small"

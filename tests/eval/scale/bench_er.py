@@ -21,7 +21,6 @@ from __future__ import annotations
 import time
 
 from src.graph.entity_resolution import ERConfig, _candidate_pairs
-
 from tests.eval.scale.synth import gen_items
 
 

@@ -1,11 +1,16 @@
 import inspect
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock
 
 from src.graph.wiki_context import EntityContext
 from src.workflow.wiki.article import (
-    splice_bot_section, BOT_START, BOT_END, render_bot_section, _fmt_sources)
+    BOT_END,
+    BOT_START,
+    _fmt_sources,
+    render_bot_section,
+    splice_bot_section,
+)
 
 
 def test_insert_into_pageless_creates_marked_section():

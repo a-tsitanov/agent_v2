@@ -18,13 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from llama_index.core.indices.property_graph.transformations.schema_llm import (  # noqa: E402
-    DEFAULT_SCHEMA_PATH_EXTRACT_PROMPT, KG_NODES_KEY, KG_RELATIONS_KEY,
+from llama_index.core.indices.property_graph.transformations.schema_llm import (
+    KG_NODES_KEY,
+    KG_RELATIONS_KEY,
 )
-from llama_index.core.schema import TextNode  # noqa: E402
+from llama_index.core.schema import TextNode
 
-from src.graph.index import build_kg_extractor  # noqa: E402
-from src.retrieval.llm import build_llm  # noqa: E402
+from src.graph.index import build_kg_extractor
+from src.retrieval.llm import build_llm
 
 TEXT = """\
 Договор поставки № ДП-2024/178-К от 15.03.2024 заключён между

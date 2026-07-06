@@ -99,7 +99,7 @@ class SchedulerParams(_Frozen):
     ``continue_as_new`` recycle."""
 
     max_inflight: int = 1
-    pending: list["IngestParams"] = Field(default_factory=list)
+    pending: list[IngestParams] = Field(default_factory=list)
 
 
 class ClassifyIn(_Frozen):

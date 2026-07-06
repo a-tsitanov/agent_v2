@@ -14,8 +14,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.observability.litellm_models import validate_litellm_models
-
 
 def _proxy_returns(models: list[str]):
     """Build a context manager that patches httpx.Client.get to return
@@ -42,6 +40,7 @@ def test_all_models_registered_logs_info(caplog, monkeypatch):
 
     # Re-import settings under the new env.
     from importlib import reload
+
     import src.config as cfg
     reload(cfg)
     import src.observability.litellm_models as mod
@@ -59,6 +58,7 @@ def test_missing_model_warns_in_non_strict_mode(monkeypatch):
     monkeypatch.delenv("LITELLM_VALIDATE_MODELS_STRICT", raising=False)
 
     from importlib import reload
+
     import src.config as cfg
     reload(cfg)
     import src.observability.litellm_models as mod
@@ -76,6 +76,7 @@ def test_missing_model_raises_in_strict_mode(monkeypatch):
     monkeypatch.setenv("LITELLM_VALIDATE_MODELS_STRICT", "true")
 
     from importlib import reload
+
     import src.config as cfg
     reload(cfg)
     import src.observability.litellm_models as mod
@@ -94,6 +95,7 @@ def test_proxy_unreachable_does_not_block_boot(monkeypatch):
     monkeypatch.delenv("LITELLM_VALIDATE_MODELS_STRICT", raising=False)
 
     from importlib import reload
+
     import src.config as cfg
     reload(cfg)
     import src.observability.litellm_models as mod

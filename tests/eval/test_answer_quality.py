@@ -10,17 +10,13 @@ shape — keeps the suite honest as cases evolve.
 
 from __future__ import annotations
 
-import pytest
-
 from tests.eval.answer_quality import (
-    GOLDEN_DIR_DEFAULT,
     GoldenCase,
     aggregate_by,
     check_thresholds,
     load_golden_cases,
     score_case,
 )
-
 
 # ── golden corpus shape ─────────────────────────────────────────────
 

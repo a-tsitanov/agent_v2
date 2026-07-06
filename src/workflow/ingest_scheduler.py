@@ -136,7 +136,7 @@ class IngestSchedulerWorkflow:
                     task_queue=settings.temporal.task_queue,
                     id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # A failed document must still free its slot so the queue
                 # keeps moving — the child already recorded its own failure.
                 workflow.logger.warning(

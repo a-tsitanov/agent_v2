@@ -18,7 +18,6 @@ from llama_index.core.graph_stores.types import EntityNode, Relation
 
 from src.storage.wikibase import push_entities
 
-
 # ── fixtures / factories ──────────────────────────────────────────
 
 

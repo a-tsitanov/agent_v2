@@ -30,7 +30,10 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from src.workflow.contracts import (
-        GraphBuildResult, GraphBuilt, KGExtracted, Merged,
+        GraphBuildResult,
+        GraphBuilt,
+        KGExtracted,
+        Merged,
     )
 
 

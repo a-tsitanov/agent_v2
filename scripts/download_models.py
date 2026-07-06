@@ -31,11 +31,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from huggingface_hub import snapshot_download  # noqa: E402
-from loguru import logger  # noqa: E402
+from huggingface_hub import snapshot_download
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
+from src.config import settings
+from src.utils.logging import configure_logging
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

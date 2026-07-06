@@ -42,6 +42,30 @@ class WhatsChangedParams(_Params):
     top_n: int = 50
 
 
+def _iso_to_epoch_days(iso: str, *, end: bool = False) -> int | None:
+    """ISO bound (``YYYY`` / ``YYYY-MM`` / ``YYYY-MM-DD``) → days since
+    1970-01-01. Partial dates snap to the window edge (``end=False`` →
+    start of year/month, ``end=True`` → its last day). ``None`` when
+    unparseable — callers disable the epoch branch, not the whole query."""
+    from datetime import date, timedelta
+
+    s = (iso or "").strip()
+    try:
+        if len(s) == 4:
+            d = date(int(s), 12, 31) if end else date(int(s), 1, 1)
+        elif len(s) == 7:
+            y, m = int(s[:4]), int(s[5:7])
+            d = (
+                date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
+                if end else date(y, m, 1)
+            )
+        else:
+            d = date.fromisoformat(s)
+    except ValueError:
+        return None
+    return (d - date(1970, 1, 1)).days
+
+
 async def whats_changed(
     store: Any | None,
     *,
@@ -50,18 +74,38 @@ async def whats_changed(
     entity: str | None = None,
     top_n: int = 50,
 ) -> PrimitiveResult:
+    """Two change axes, one query:
+
+    * ``valid_from``/``valid_to`` — extraction-claimed validity window
+      (sparse and only as reliable as extraction) → ``appeared``/``ended``;
+    * ``created_at`` (E1 first-seen epoch-days) fallback for relations
+      carrying NO validity dates → ``first_seen`` («связь появилась в
+      базе»).  Backfill-sentinel rels (created_at=0) never match a real
+      window; ``LIKELY_LINK`` predictions are not world changes and are
+      excluded outright."""
     top_n = clamp_top_n(top_n, default=50)
     cypher = (
         "MATCH (e:__Entity__)-[r]-(n:__Entity__) "
-        "WHERE ($entity IS NULL OR e.name=$entity) AND "
+        "WHERE type(r) <> 'LIKELY_LINK' AND ($entity IS NULL OR e.name=$entity) AND "
         "((r.valid_from >= $from AND r.valid_from <= $to) OR "
-        "(r.valid_to >= $from AND r.valid_to <= $to)) "
+        "(r.valid_to >= $from AND r.valid_to <= $to) OR "
+        "(r.valid_from IS NULL AND r.valid_to IS NULL AND $from_epoch IS NOT NULL "
+        "AND r.created_at >= $from_epoch AND r.created_at <= $to_epoch)) "
         "RETURN e.name AS name, type(r) AS rel, n.name AS other, r.polarity AS polarity, "
-        "r.valid_from AS valid_from, r.valid_to AS valid_to, "
-        "CASE WHEN r.valid_from>=$from THEN 'appeared' ELSE 'ended' END AS change "
+        "r.valid_from AS valid_from, r.valid_to AS valid_to, r.created_at AS created_at, "
+        "CASE WHEN r.valid_from >= $from AND r.valid_from <= $to THEN 'appeared' "
+        "WHEN r.valid_to >= $from AND r.valid_to <= $to THEN 'ended' "
+        "ELSE 'first_seen' END AS change "
         "ORDER BY coalesce(r.valid_from,r.valid_to) LIMIT $top_n"
     )
-    params = {"from": date_from, "to": date_to, "entity": entity, "top_n": top_n}
+    params = {
+        "from": date_from,
+        "to": date_to,
+        "from_epoch": _iso_to_epoch_days(date_from),
+        "to_epoch": _iso_to_epoch_days(date_to, end=True),
+        "entity": entity,
+        "top_n": top_n,
+    }
     return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
 
 

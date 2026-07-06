@@ -29,10 +29,9 @@ from llama_index.core.async_utils import run_jobs
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.schema import BaseNode, MetadataMode, TransformComponent
 from loguru import logger
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict
 
 from src.retrieval._common import strip_thinking
-
 
 TRANSLATED_TEXT_KEY = "translated_text"
 
@@ -186,7 +185,7 @@ class TranslateToRussianTransform(TransformComponent):
                     ),
                 ])
                 translated = strip_thinking(resp.message.content or "").strip()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "translate chunk={c} failed: {err}",
                     c=node.node_id, err=exc,
@@ -376,7 +375,7 @@ class DocumentTranslateTransform(TransformComponent):
                     ),
                 ])
                 translated = strip_thinking(resp.message.content or "").strip()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "doc-translate window len={l} failed: {err}",
                     l=len(win), err=exc,

@@ -14,13 +14,11 @@ from pathlib import Path
 import pytest
 
 from src.storage.chunk_repository import (
-    DEFAULT_CHUNK_PAGE_LIMIT,
     ChunkRepository,
     _normalise_chunk_row,
     _read_file_capped,
 )
 from src.storage.postgres import DocumentRow
-
 
 # ── stubs ────────────────────────────────────────────────────────────
 

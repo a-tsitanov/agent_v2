@@ -61,7 +61,7 @@ def consolidate_phone_entities(
         for region in ("RU", "GB", None):
             try:
                 matches = list(phonenumbers.PhoneNumberMatcher(ent.name, region))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             if matches:
                 canon = phonenumbers.format_number(

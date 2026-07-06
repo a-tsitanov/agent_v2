@@ -26,7 +26,6 @@ from src.ingestion.identifiers import (
     extract_identifiers,
 )
 
-
 # Real-world reference values used across tests.
 SBER_INN = "7707083893"           # ИНН Сбербанка (10 digits, valid checksum)
 GAZPROM_INN = "7736050003"        # ИНН Газпрома (10 digits, valid checksum)

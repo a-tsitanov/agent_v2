@@ -1,6 +1,12 @@
 from unittest.mock import MagicMock
 
-from src.graph.wiki_context import EntityContext, read_citations, read_entity_subgraph, read_source_docs, subgraph_hash
+from src.graph.wiki_context import (
+    EntityContext,
+    read_citations,
+    read_entity_subgraph,
+    read_source_docs,
+    subgraph_hash,
+)
 
 
 def _ctx(**kw):

@@ -55,7 +55,7 @@ async def orphans(
         "OPTIONAL MATCH (e)-[r]-(:__Entity__) "
         "WITH e, count(r) AS degree WHERE degree < $min_degree "
         "RETURN e.name AS name, degree, "
-        "[l IN labels(e) WHERE l<>'__Entity__'][0] AS type "
+        "[l IN labels(e) WHERE l<>'__Entity__' AND l<>'__Node__'][0] AS type "
         "ORDER BY degree ASC LIMIT $top_n"
     )
     params = {"min_degree": floor, "top_n": top_n, "id_types": ID_TYPES}

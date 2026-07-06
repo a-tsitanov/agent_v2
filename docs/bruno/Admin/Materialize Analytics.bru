@@ -1,0 +1,41 @@
+meta {
+  name: Materialize Analytics
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/admin/graph/materialize
+  body: none
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+}
+
+docs {
+  # POST /admin/graph/materialize
+
+  Starts the **offline** `AnalyticsMaterializeWorkflow` on the
+  `kb-graph-build` queue: GDS centrality (weighted pagerank /
+  betweenness / eigenvector) + link-prediction + risk scores,
+  written back onto `__Entity__` nodes in Neo4j.
+
+  **Prerequisite for the `/api/v1/analyze` primitives**
+  `top_central_entities`, `link_prediction`, `risk_score` — without a
+  run they read stale (or missing) values. Run after every bulk
+  ingest and after `reresolve_graph`.
+
+  ## Behaviour
+  Fire-and-forget: returns 202 with the workflow id immediately;
+  progress is visible in Temporal UI (`analytics-materialize-*`).
+  Concurrency knob: `TEMPORAL_ANALYTICS_MATERIALIZE_CONCURRENCY`.
+
+  ## Response 202
+  ```json
+  { "workflow_id": "analytics-materialize-<hex>", "status": "started" }
+  ```
+
+  See `docs/runbook/graph-analytics.md`.
+}

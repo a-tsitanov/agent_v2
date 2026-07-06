@@ -135,7 +135,7 @@ def _parse_report(text: str) -> dict:
 
     try:
         obj = json.loads(candidate)
-    except Exception:  # noqa: BLE001 — tolerant by design
+    except Exception:
         return fallback
     if not isinstance(obj, dict):
         return fallback
@@ -175,7 +175,7 @@ def _get_store() -> Any | None:
         from src.graph.store import build_neo4j_graph_store
 
         return build_neo4j_graph_store()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning("community: graph store unavailable: %s", exc)
         return None
 
@@ -293,7 +293,7 @@ async def detect_communities_activity(
                     "ensured — report-vector search will be DEGRADED to lexical "
                     "until the index is created on a later build",
                 )
-        except Exception as exc:  # noqa: BLE001 — fail-open
+        except Exception as exc:
             activity.logger.error(
                 "detect_communities_activity  report index ensure raised "
                 "(search degraded) err=%s", exc,
@@ -333,7 +333,7 @@ async def _gather_context(store, params: SummarizeCommunityParams) -> str:
                 {"community_id": params.community_id, "level": params.level},
             )
             child_rows = list(child_rows or [])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             activity.logger.warning(
                 "summarize_community_activity  cid=%s  child fetch err=%s",
                 params.community_id, exc,
@@ -350,7 +350,7 @@ async def _gather_context(store, params: SummarizeCommunityParams) -> str:
             {"community_id": params.community_id, "level": params.level},
         )
         rows = list(rows or [])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning(
             "summarize_community_activity  cid=%s  context fetch err=%s",
             params.community_id, exc,
@@ -369,7 +369,7 @@ async def _embed_report(title: str, summary: str) -> list[float] | None:
         embed_model = _get_embed_model()
         vec = await embed_model.aget_text_embedding(text)
         return list(vec) if vec else None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning(
             "summarize_community_activity  embed err=%s", exc,
         )
@@ -410,7 +410,7 @@ async def summarize_community_activity(
         prompt = _REPORT_PROMPT.format(context=context)
         resp = await llm.acomplete(prompt)
         text = (getattr(resp, "text", None) or str(resp)).strip()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning(
             "summarize_community_activity  cid=%s  llm err=%s",
             params.community_id, exc,
@@ -449,7 +449,7 @@ async def summarize_community_activity(
             },
         )
         persisted = True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning(
             "summarize_community_activity  cid=%s  persist err=%s",
             params.community_id, exc,

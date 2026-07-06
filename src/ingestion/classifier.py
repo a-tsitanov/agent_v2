@@ -84,7 +84,7 @@ async def classify_with_llm(preview: str, *, llm) -> LLMVerdict:
         return await llm.astructured_predict(
             LLMVerdict, _CLASSIFY_PROMPT, preview=preview,
         )
-    except Exception as exc:  # noqa: BLE001 — fail-soft to ingest
+    except Exception as exc:
         logger.warning("classifier LLM failed, defaulting to ingest: {e}", e=exc)
         return LLMVerdict(ingest=True, reason="classifier-error-default-ingest")
 
@@ -95,14 +95,14 @@ def read_preview(path: Path, max_chars: int) -> str:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             return fh.read(max_chars)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("classifier preview read failed: {e}", e=exc)
         return ""
 
 
 __all__ = [
-    "RuleVerdict",
     "LLMVerdict",
+    "RuleVerdict",
     "apply_rules",
     "classify_with_llm",
     "read_preview",

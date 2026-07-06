@@ -4,11 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
 from src.workflow.activities.build_property_graph import (
     _strip_neo4j_unsafe_metadata,
     build_property_graph,
 )
-from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
 from src.workflow.contracts import Ctx, KGExtracted, Merged, Parsed
 
 

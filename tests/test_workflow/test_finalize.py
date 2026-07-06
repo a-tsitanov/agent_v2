@@ -9,8 +9,8 @@ from src.workflow.activities.finalize import finalize, mark_failed
 from src.workflow.contracts import (
     Ctx,
     FinalizeIn,
-    IngestParams,
     Indexed,
+    IngestParams,
     MarkFailedIn,
 )
 

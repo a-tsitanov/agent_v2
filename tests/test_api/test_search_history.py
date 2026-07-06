@@ -41,8 +41,8 @@ def test_local_params_resolves_contextualize_flag_at_submit_time():
     # The replay-safety convention: the gate is resolved from settings at
     # submit time into params, not read live inside the workflow.
     from src.api.routes.search_v2 import _local_params
-    from src.models.search import SearchRequest
     from src.config import settings
+    from src.models.search import SearchRequest
     p = _local_params(SearchRequest(query="q"))
     assert p.contextualize_enabled == settings.agent.conversation_history_enabled
 

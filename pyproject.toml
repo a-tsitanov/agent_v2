@@ -63,6 +63,13 @@ dependencies = [
     # src/mcp/: search_server (kb_search via Temporal SearchWorkflow)
     # and tools_server (7 atomic retrieval primitives in-process).
     "fastmcp>=3.0,<4",
+
+    # Transitive via authlib (fastmcp auth), pinned explicitly: the
+    # cryptography >=47 aarch64 wheels use CPU instructions the Docker
+    # Desktop VM doesn't expose — Rust binding dies with SIGILL at import
+    # (mcp-search/mcp-tools crash-loop, exit 132).  47.0.0/48.0.0 verified
+    # broken, 44.0.3/45.0.7/46.0.5 verified OK on this host.
+    "cryptography>=44,<47",
 ]
 
 [project.optional-dependencies]

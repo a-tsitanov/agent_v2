@@ -1,4 +1,4 @@
-from src.graph.entity_resolution import _verdict_key, _partition_cached
+from src.graph.entity_resolution import _partition_cached, _verdict_key
 
 
 class _Item:

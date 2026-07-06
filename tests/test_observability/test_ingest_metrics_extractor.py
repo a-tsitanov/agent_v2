@@ -9,9 +9,10 @@ integration suites.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-import pytest
+from google.protobuf.timestamp_pb2 import Timestamp
+from temporalio.api.common.v1 import ActivityType
 from temporalio.api.enums.v1 import EventType
 from temporalio.api.history.v1 import (
     ActivityTaskCompletedEventAttributes,
@@ -20,9 +21,7 @@ from temporalio.api.history.v1 import (
     ActivityTaskStartedEventAttributes,
     HistoryEvent,
 )
-from temporalio.api.common.v1 import ActivityType
 from temporalio.client import WorkflowHistory
-from google.protobuf.timestamp_pb2 import Timestamp
 
 from src.observability.ingest_metrics_extractor import parse_activity_timings
 
@@ -33,7 +32,7 @@ def _ts(dt: datetime) -> Timestamp:
     return t
 
 
-_BASE = datetime(2026, 5, 19, 10, 0, 0, tzinfo=timezone.utc)
+_BASE = datetime(2026, 5, 19, 10, 0, 0, tzinfo=UTC)
 
 
 def _scheduled(eid: int, name: str, when: datetime) -> HistoryEvent:

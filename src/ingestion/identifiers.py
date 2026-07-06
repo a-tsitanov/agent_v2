@@ -509,7 +509,7 @@ def _extract_dates(text: str) -> list[NormalizedIdentifier]:
                     languages=["ru"],
                     settings={"DATE_ORDER": "DMY"} if dmy else None,
                 )
-            except Exception:  # noqa: BLE001 — dateparser quirks
+            except Exception:
                 continue
             if not parsed_dt:
                 continue
@@ -637,7 +637,7 @@ def _normalize_address(raw: str) -> str:
         if not parts:
             return _normalize_address_rule(raw)
         return ", ".join(parts)
-    except Exception:  # noqa: BLE001 — libpostal C errors are opaque
+    except Exception:
         return _normalize_address_rule(raw)
 
 
@@ -713,7 +713,7 @@ _DOMAIN_TLD_ALLOW: frozenset[str] = frozenset({
     "app", "tech", "cloud", "online", "site", "store", "shop", "blog",
     "team", "ws", "tg", "us", "ca", "cn", "jp", "kr", "in", "br",
     "tr", "id", "th", "vn", "mx", "ar", "cl", "ng", "za", "il", "ae",
-    "sa", "eu", "su", "xyz",
+    "sa", "eu", "xyz",
 })
 
 

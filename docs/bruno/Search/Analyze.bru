@@ -1,0 +1,81 @@
+meta {
+  name: Analyze
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/analyze
+  body: json
+  auth: none
+}
+
+headers {
+  X-API-Key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "Сколько сущностей каждого типа в графе?",
+    "top_n": 20
+  }
+}
+
+docs {
+  # POST /api/v1/analyze
+
+  **Plan → compute → synthesize** analytical Q&A over the knowledge
+  graph (`AnalyticalQueryWorkflow`). An LLM planner picks up to
+  `ANALYTICS_MAX_STEPS` primitives from a 42-primitive catalog
+  (counts, centrality, communities, dossiers, temporal dynamics,
+  graph quality, risk), each primitive runs deterministic Cypher
+  against Neo4j, then an LLM synthesizes the answer.
+
+  ## When to use
+  Quantitative / structural questions: «сколько», «кто самый
+  центральный», «как связаны X и Y», «что изменилось за неделю»,
+  «кандидаты на слияние». For «что говорят документы» use
+  `/search/*` instead.
+
+  ## Request body
+  - **query** *(required)* — the analytical question.
+  - **top_n** *(default 20)* — max rows returned by ranking primitives.
+
+  ## Response 200 — `AnalyzeResponse`
+  ```json
+  {
+    "query": "...",
+    "answer": "...",
+    "provenance": {
+      "route": "catalog",
+      "plan_reason": "...",
+      "steps": [
+        {
+          "primitive": "distribution_by_type",
+          "params": {},
+          "cypher": "MATCH ...",
+          "rows": [{"type": "Organization", "n": 54}],
+          "row_count": 8,
+          "source_chunks": [],
+          "truncated": false
+        }
+      ],
+      "elapsed_ms": 6669
+    },
+    "latency_ms": 6669
+  }
+  ```
+
+  ⚠️ **Numbers live in `provenance.steps[].rows`** (exact Cypher +
+  raw rows); `answer` is an LLM gloss and small models can garble
+  figures. See `docs/runbook/graph-analytics.md`.
+
+  ## Related
+  Centrality / link-prediction / risk primitives read values
+  precomputed by `POST /admin/graph/materialize` — run it after each
+  bulk ingest (see Admin → Materialize Analytics).
+
+  ## Errors
+  - `401` — auth. `500` — workflow raised (body carries the message).
+}

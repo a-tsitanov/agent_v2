@@ -62,18 +62,17 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from loguru import logger  # noqa: E402
+from loguru import logger
 
-from src.config import settings  # noqa: E402
-from src.graph.entity_resolution import (  # noqa: E402
+from src.config import settings
+from src.graph.entity_resolution import (
     _DETERMINISTIC_LABELS,
-    _cleanup_stored_losers,
     ERConfig,
+    _cleanup_stored_losers,
     resolve_entities,
 )
-from src.graph.lightrag_parse import _normalize_entity_name  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
-
+from src.graph.lightrag_parse import _normalize_entity_name
+from src.utils.logging import configure_logging
 
 # Fallback for the per-ingest stored-canonical window: there is no
 # dedicated setting, and the spec fixes 5000 (matches ERConfig's own

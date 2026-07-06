@@ -67,7 +67,7 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.graph_build import GraphBuildWorkflow
 
 
-def _wiki_dirty_targets(merged: "Merged") -> tuple[list[str], list[str]]:
+def _wiki_dirty_targets(merged: Merged) -> tuple[list[str], list[str]]:
     """Entity names + relation endpoints to flag dirty for the wiki editor.
     Reads the names surfaced on the Merged contract by merge_and_resolve
     (Task 8b) — no staging access needed."""
@@ -288,7 +288,7 @@ class DocumentIngestWorkflow:
                             schedule_to_close_timeout=timedelta(minutes=5),
                             retry_policy=_WIKI_BESTEFFORT,
                         )
-                    except Exception as exc:  # noqa: BLE001 — best-effort
+                    except Exception as exc:
                         log.warning("wiki dirty-mark failed: %s", exc)
 
             except (ActivityError, ChildWorkflowError) as exc:

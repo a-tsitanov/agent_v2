@@ -54,7 +54,7 @@ def test_auth_gate_blocks_when_keys_missing(monkeypatch):
     break sibling tests in this session."""
     monkeypatch.setenv("KB_MCP_REQUIRE_AUTH", "true")
     monkeypatch.setenv("API_KEYS", "")
-    from src.config import ApiSettings, settings
+    from src.config import settings
     # Patch the keys_list on the live settings.api so _shared.py's
     # `settings.api.keys_list` sees an empty list during the test only.
     monkeypatch.setattr(

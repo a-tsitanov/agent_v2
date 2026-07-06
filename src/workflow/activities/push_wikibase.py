@@ -101,7 +101,7 @@ async def push_wikibase(merged: Merged) -> WikibasePushed:
             )
             return WikibasePushed(status="failed", **counts)
         return WikibasePushed(status="ok", **counts)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         activity.logger.warning(
             "push_wikibase failed (best-effort): %s", exc,
         )

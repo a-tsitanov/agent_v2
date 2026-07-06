@@ -12,8 +12,9 @@ wrapper and let callers handle async via ``asyncio.to_thread``.
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterator
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 from loguru import logger
 from minio import Minio

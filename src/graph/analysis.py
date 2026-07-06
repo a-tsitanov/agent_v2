@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from loguru import logger
 
@@ -25,7 +26,6 @@ from src.graph.communities import (
     _project_cypher,
     _run_query,
 )
-
 
 # ── Cypher builders ──────────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ async def _with_projection(
         await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
         await asyncio.to_thread(_run_query, store, _project_cypher(graph_name))
         return await fn(graph_name)
-    except Exception as exc:  # noqa: BLE001 — fail-soft
+    except Exception as exc:
         logger.warning("graph analysis projection/algo failed: {e}", e=exc)
         return None
     finally:
@@ -207,7 +207,7 @@ async def shortest_path(
             _run_query, store, _shortest_path_cypher(max_hops),
             {"source": source, "target": target},
         )
-    except Exception as exc:  # noqa: BLE001 — fail-soft
+    except Exception as exc:
         logger.warning("graph analysis shortest_path failed: {e}", e=exc)
         return empty
     if not rows or not isinstance(rows[0], dict):
@@ -238,7 +238,7 @@ async def graph_stats(store: Any | None) -> dict:
     async def _one(cypher: str) -> dict:
         try:
             rows = await asyncio.to_thread(_run_query, store, cypher)
-        except Exception as exc:  # noqa: BLE001 — fail-soft per sub-query
+        except Exception as exc:
             logger.warning("graph_stats sub-query failed: {e}", e=exc)
             return {}
         return rows[0] if rows and isinstance(rows[0], dict) else {}
@@ -264,9 +264,9 @@ async def graph_stats(store: Any | None) -> dict:
 
 
 __all__ = [
+    "components",
+    "graph_stats",
     "pagerank",
     "personalized_pagerank",
-    "components",
     "shortest_path",
-    "graph_stats",
 ]

@@ -23,7 +23,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from src.workflow.search._merge import dedup_by_chunk_id
     from src.workflow.search._retry import (
-        FAST_RETRY, LLM_SCHEDULE_TO_CLOSE, LLM_START_TO_CLOSE,
+        FAST_RETRY,
+        LLM_SCHEDULE_TO_CLOSE,
+        LLM_START_TO_CLOSE,
     )
 
 

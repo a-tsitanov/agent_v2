@@ -83,8 +83,8 @@ def test_scheduler_set_max_inflight_signal_updates_state():
 
 def test_should_recycle_fires_at_threshold_despite_active_work():
     from src.workflow.ingest_scheduler import (
-        IngestSchedulerWorkflow,
         _HISTORY_RECYCLE_THRESHOLD,
+        IngestSchedulerWorkflow,
     )
     wf = IngestSchedulerWorkflow()
     # Simulate a busy scheduler: one doc in flight, one queued.

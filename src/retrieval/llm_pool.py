@@ -17,8 +17,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from loguru import logger
 from llama_index.core.llms import LLM
+from loguru import logger
 
 from src.config import LLMRole
 from src.retrieval.llm import build_llm
@@ -44,7 +44,7 @@ class Lane:
     def available(self) -> int:
         return self.cap - self.in_use
 
-    async def __aenter__(self) -> "Lane":
+    async def __aenter__(self) -> Lane:
         if self._sem.locked():
             logger.warning(
                 "LLMPool saturated (N={cap}, in_use={in_use}) - caller waiting",

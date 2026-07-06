@@ -9,8 +9,6 @@ hits the live API for opt-in benchmarking.
 
 from __future__ import annotations
 
-import pytest
-
 from tests.eval.answer_quality import score_case
 from tests.eval.medical_fixture import (
     KNOWN_QUESTION_TYPES,
@@ -22,7 +20,6 @@ from tests.eval.medical_fixture import (
     load_medical_source,
     to_golden_case,
 )
-
 
 # ── fixtures are present and shape stable ──────────────────────────
 

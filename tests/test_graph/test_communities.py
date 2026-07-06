@@ -43,7 +43,7 @@ class _FakeStore:
             raise RuntimeError("boom")
         # The leiden read is the one that returns communityId rows.
         if "communityId" in cypher and cypher.strip().upper().startswith(("CALL", "MATCH")):
-            if "gds.leiden.stream" in cypher or "RETURN" in cypher and "communityId" in cypher:
+            if "gds.leiden.stream" in cypher or ("RETURN" in cypher and "communityId" in cypher):
                 return self._stream_rows
         return []
 
@@ -256,7 +256,7 @@ class _FakeStoreWithOldReports(_FakeStore):
         if _OLD_REPORTS_MARKER in cypher:
             return self._old_report_rows
         if "communityId" in cypher and cypher.strip().upper().startswith(("CALL", "MATCH")):
-            if "gds.leiden.stream" in cypher or "RETURN" in cypher and "communityId" in cypher:
+            if "gds.leiden.stream" in cypher or ("RETURN" in cypher and "communityId" in cypher):
                 return self._stream_rows
         return []
 
@@ -370,8 +370,22 @@ def test_projection_carries_weight_property():
     from src.graph.communities import _project_cypher
 
     cy = _project_cypher("g")
-    assert "relationshipProperties" in cy
-    assert "coalesce(r.weight" in cy
+    assert "weight" in cy
+    assert "defaultValue: 1.0" in cy  # missing r.weight → 1.0 (ex-coalesce)
+
+
+def test_projection_is_native_not_cypher_aggregation():
+    """Regression (2026-07-03): the cypher-AGGREGATION projection form
+    (MATCH … RETURN gds.graph.project(…) AS g) deterministically exhausts
+    a 4G heap on GDS 2.13.9 / Neo4j 5.26.25 even on a ~2k-entity graph,
+    killing the JVM (same failure took prod down on 2026-06-30 via the
+    GDS community backend). The projection MUST use the native CALL form."""
+    from src.graph.communities import _project_cypher
+
+    cy = _project_cypher("g")
+    assert cy.strip().startswith("CALL gds.graph.project(")
+    assert "OPTIONAL MATCH" not in cy
+    assert "AS g" in cy  # row shape still {"g": {...}} for _projection_stats
 
 
 # ── #4 follow-up: gamma (resolution) + concurrency knobs ─────────────

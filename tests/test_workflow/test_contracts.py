@@ -8,13 +8,10 @@ import uuid
 from src.workflow.contracts import (
     Ctx,
     FinalizeIn,
+    Indexed,
     IngestParams,
     IngestResult,
-    Injected,
-    Indexed,
-    KGExtracted,
     MarkFailedIn,
-    Merged,
     Parsed,
 )
 

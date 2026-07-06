@@ -26,9 +26,9 @@ from llama_index.core.llms import LLM
 from loguru import logger
 
 from src.retrieval.atomic_tools import (
-    GraphRetrieverProtocol, RetrieverProtocol,
+    GraphRetrieverProtocol,
+    RetrieverProtocol,
 )
-
 
 _lock = asyncio.Lock()
 _state: dict[str, Any] = {
@@ -56,8 +56,10 @@ async def _build_graph_retriever_once(embed_model, llm):
     try:
         from src.config import settings
         from src.graph.index import (
-            build_kg_extractor, build_property_graph_index,
-            ensure_entity_fulltext_index, ensure_entity_lookup_indexes,
+            build_kg_extractor,
+            build_property_graph_index,
+            ensure_entity_fulltext_index,
+            ensure_entity_lookup_indexes,
         )
         from src.graph.retriever import GraphRetriever
         from src.graph.store import build_neo4j_graph_store
@@ -78,7 +80,7 @@ async def _build_graph_retriever_once(embed_model, llm):
                 settings.agent.graph_walk_filter_polarity_temporal
             ),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "search_deps: graph_retriever disabled (Neo4j unreachable?): {e}",
             e=exc,

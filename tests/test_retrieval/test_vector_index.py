@@ -13,6 +13,7 @@ from llama_index.core import Document, MockEmbedding
 from llama_index.core.vector_stores import SimpleVectorStore
 
 from src.config import MilvusSettings, settings
+from src.ingestion.pipeline import build_ingestion_pipeline
 from src.retrieval.vector_index import (
     _index_config,
     _search_config,
@@ -20,7 +21,6 @@ from src.retrieval.vector_index import (
     build_vector_store,
     index_nodes,
 )
-from src.ingestion.pipeline import build_ingestion_pipeline
 
 
 def _three_docs() -> list[Document]:

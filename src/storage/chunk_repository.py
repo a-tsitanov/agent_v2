@@ -60,7 +60,7 @@ class ChunkRepository:
         milvus_client: MilvusClient | None = None,
         collection: str | None = None,
         pg: AsyncPostgres | None = None,
-        minio: "MinioStorage | None" = None,
+        minio: MinioStorage | None = None,
     ) -> None:
         self._collection = collection or settings.milvus.collection
         self._client = milvus_client or MilvusClient(
@@ -130,7 +130,7 @@ class ChunkRepository:
                 limit=limit,
                 offset=offset,
             )
-        except Exception as exc:  # noqa: BLE001 — try fallback
+        except Exception as exc:
             logger.debug(
                 "milvus top-level filter failed, falling back to JSON: {err}",
                 err=exc,
@@ -207,7 +207,7 @@ class ChunkRepository:
             _, key = storage.parse_s3_uri(s3_uri)
             local = Path(storage.download_dir) / key
             storage.get_object_to_path(s3_uri, local)
-        except Exception as exc:  # noqa: BLE001 — soft-fail to not-found
+        except Exception as exc:
             logger.warning(
                 "read_document s3 fetch failed uri={u}: {e}", u=s3_uri, e=exc,
             )

@@ -11,7 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.workflow.contracts import (
-    Ctx, KGExtracted, Merged, Parsed,
+    Ctx,
+    KGExtracted,
+    Merged,
+    Parsed,
 )
 
 
@@ -211,9 +214,9 @@ async def test_heartbeats_pulse_during_push_entities(monkeypatch):
     Regression for the heartbeat-gap retry storm that made push_wikibase
     succeed only after ~26 attempts.
     """
-    from temporalio.testing import ActivityEnvironment
-
     import sys
+
+    from temporalio.testing import ActivityEnvironment
 
     import src.workflow.activities.push_wikibase  # noqa: F401  (ensure import)
     from src.config import settings
