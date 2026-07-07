@@ -1,0 +1,86 @@
+# Telegram → ingest harness as ONE extra container, layered on top of the
+# production stack.  This is an *extension* of docker-compose.prod.yml — it
+# adds only the `tg-ingest` service and reuses the prod `api` (compose-internal
+# DNS `api:8000`).  Always pass BOTH files:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.tg-ingest.yml up -d tg-ingest
+#
+# The container runs scripts/tg_ingest.py in its default CONTINUOUS sync mode:
+# it discovers the account's channels + groups (личные чаты исключены), catches
+# up every TG_INGEST_POLL_INTERVAL seconds, and POSTs each message to
+# /api/v1/ingest.  Per-dialog dedup cursors + the Telethon session live in the
+# bind-mounted ./data/tg-ingest dir, so restarts never re-ingest and never
+# re-login.
+#
+# ── First-run login ────────────────────────────────────────────────────
+# Telethon needs an interactive phone+code login ONCE to create the session
+# file — that can't happen in a detached container.  Do it on the host first:
+#
+#   TG_API_ID=… TG_API_HASH=… uv run python -m scripts.tg_ingest --once \
+#     --session data/tg-ingest/tg_ingest.session --state data/tg-ingest/tg_ingest.state.json
+#
+# (or drop an already-authenticated *.session into data/tg-ingest/ — see the
+# setup that seeded it from the repo-root .tg_ingest.session).
+#
+# ── Required env (compose fails fast if unset) ──────────────────────────
+#   TG_API_ID, TG_API_HASH   — from https://my.telegram.org
+# ── Optional env (defaults shown) ───────────────────────────────────────
+#   TG_INGEST_API_KEY        — X-API-Key to send; default = first of API_KEYS
+#   TG_INGEST_API_BASE       — target API base; default http://api:8000
+#   TG_INGEST_POLL_INTERVAL  — seconds between catch-up rounds; default 60
+#   TG_INGEST_BOOTSTRAP_LIMIT — newest N msgs for a never-seen dialog; default 100
+#   TG_INGEST_FOLDERS        — comma-separated TG folder names to scope the sync
+#   TG_INGEST_QUEUE          — target ingest queue (only for INGEST_QUEUE_BACKEND=rabbitmq)
+
+services:
+  tg-ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Fold telethon (the `tg` extra) into THIS image only — api/worker stay slim.
+      args:
+        APP_EXTRAS: tg
+    environment:
+      # MTProto app credentials (my.telegram.org) — read by the script directly.
+      TG_API_ID: ${TG_API_ID:?set TG_API_ID from https://my.telegram.org}
+      TG_API_HASH: ${TG_API_HASH:?set TG_API_HASH from https://my.telegram.org}
+      # API auth: the route checks a single X-API-Key against API_KEYS (a comma
+      # list), so we send the FIRST key by default; override with TG_INGEST_API_KEY.
+      API_KEYS: ${API_KEYS:-changeme-key}
+      TG_INGEST_API_KEY: ${TG_INGEST_API_KEY:-}
+      API_BASE: ${TG_INGEST_API_BASE:-http://api:8000}
+      POLL_INTERVAL: ${TG_INGEST_POLL_INTERVAL:-60}
+      BOOTSTRAP_LIMIT: ${TG_INGEST_BOOTSTRAP_LIMIT:-100}
+      FOLDERS: ${TG_INGEST_FOLDERS:-}
+      QUEUE: ${TG_INGEST_QUEUE:-}
+    # NB: every $ is doubled ($$) so Compose does NOT interpolate it at
+    # config time — the expansion must happen in the CONTAINER shell against
+    # the `environment:` above.  An empty --folders/--queue is a safe no-op
+    # for the script (all chats / queue omitted), so no conditional args.
+    command:
+      - sh
+      - -euc
+      - |
+        exec python -m scripts.tg_ingest \
+          --api-base "$$API_BASE" \
+          --api-key "$${TG_INGEST_API_KEY:-$$(printf '%s' "$$API_KEYS" | cut -d, -f1)}" \
+          --session /data/tg_ingest.session \
+          --state /data/tg_ingest.state.json \
+          --poll-interval "$$POLL_INTERVAL" \
+          --bootstrap-limit "$$BOOTSTRAP_LIMIT" \
+          --folders "$$FOLDERS" \
+          --queue "$$QUEUE"
+    volumes:
+      # Persist the Telethon session + per-dialog dedup state across restarts.
+      # A DIRECTORY (not single files): save_state() does an atomic tmp+rename,
+      # which fails if the target path is itself a bind-mount point.
+      - ./data/tg-ingest:/data
+    # api has no healthcheck in the prod stack → wait only for start, not health.
+    # The script is fail-soft (a failed POST is retried next round), so an
+    # api not-yet-ready just logs + retries.
+    depends_on:
+      - api
+    # Deliver SIGINT on `docker stop` → the script's KeyboardInterrupt path
+    # logs a clean "stopped by user" (state is saved per-message regardless).
+    stop_signal: SIGINT
+    restart: unless-stopped

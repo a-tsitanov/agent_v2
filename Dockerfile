@@ -19,18 +19,26 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Optional extras to fold into the image (space/comma-separated group names
+# from [project.optional-dependencies], e.g. `tg` for the Telegram harness).
+# Empty by default → the api/worker/mcp images stay slim.  Only the
+# tg-ingest compose service builds with APP_EXTRAS=tg (own image), so
+# telethon never bloats the core services.  ${APP_EXTRAS:+…} expands to
+# nothing when unset, keeping the sync command byte-identical (cache-safe).
+ARG APP_EXTRAS=
+
 # Dependency layer — cached unless pyproject/uv.lock change.  README is
 # referenced by [project].readme so it must be present for the project
 # install below.  (`postal`/libpostal is an OPTIONAL extra — not synced
 # here, so no system libpostal is needed.)
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev ${APP_EXTRAS:+--extra $APP_EXTRAS}
 
 # Application source + the project install.
 COPY src ./src
 COPY prompts ./prompts
 COPY scripts ./scripts
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev ${APP_EXTRAS:+--extra $APP_EXTRAS}
 
 # ── runtime: slim, no toolchain ────────────────────────────────────
 FROM python:3.12-slim AS runtime
