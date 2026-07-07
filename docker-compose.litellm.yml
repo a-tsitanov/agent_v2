@@ -1,0 +1,50 @@
+# LiteLLM proxy as an opt-in EXTENSION of the prod stack — the OpenAI-
+# compatible front-door every LLM + embedding call goes through.
+# docker-compose.prod.yml deliberately treats litellm as EXTERNAL; this
+# overlay pulls it INTO the stack so `up -d` manages it.  Always pass BOTH
+# files:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.litellm.yml up -d
+#
+# Wire the app to it: set LITELLM_BASE_URL=http://litellm:4000 in .env
+# (compose-internal DNS).  The proxy fronts a PHYSICALLY-deployed ollama on
+# the host — model_list + api_base live in docker/litellm_config.prod.yaml
+# (gemma4:e2b-it-qat + nomic-embed-text:latest, both at
+# host.docker.internal:11434).
+#
+# ── Linux prerequisite ──────────────────────────────────────────────────
+# host.docker.internal is NOT auto-defined in containers on Linux → the
+# extra_hosts mapping below points it at the host gateway.  For the container
+# to actually reach the host ollama, that ollama must listen on the bridge,
+# not just loopback — start it with `OLLAMA_HOST=0.0.0.0 ollama serve`
+# (127.0.0.1:11434 is unreachable from inside the container).
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      # Minimal prod config — only the two host-ollama models this deployment
+      # uses (gemma4:e2b-it-qat + nomic-embed-text:latest).  Override
+      # LITELLM_CONFIG to mount a different one.
+      - ${LITELLM_CONFIG:-./docker/litellm_config.prod.yaml}:/app/config.yaml:ro
+    ports:
+      # Published so the host can still curl localhost:4000; the app reaches it
+      # in-cluster via `litellm:4000`.  Set LITELLM_PORT if 4000 is taken
+      # (e.g. an old host litellm still running — stop that first).
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-litellm-stub}
+      # config.yaml's os.environ/OPENAI_API_KEY refs resolve from here; empty
+      # is fine when only the ollama models are used.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    # Reach the PHYSICAL host ollama from inside the container (see header).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request,sys; urllib.request.urlopen(\"http://localhost:4000/health/liveliness\", timeout=2).read()' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped

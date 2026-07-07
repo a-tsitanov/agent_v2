@@ -1,0 +1,33 @@
+# LiteLLM proxy config for the prod extension (docker-compose.litellm.yml).
+# Minimal: ONLY the two models this deployment actually uses, both proxied to
+# the PHYSICALLY-deployed host ollama at host.docker.internal:11434.
+#
+# The app requests these exact model_name values (see .env):
+#   LITELLM_MODEL_SMALL / LITELLM_MODEL_LARGE = gemma4:e2b-it-qat
+#   LITELLM_EMBEDDING_MODEL                    = nomic-embed-text:latest
+# MILVUS_DIM MUST be 768 (nomic-embed-text native dim) or Milvus rejects inserts.
+
+model_list:
+  # Chat / completion tier (SMALL + LARGE).  ollama_chat/ transport.
+  # num_ctx 16384: the 2048 default truncates extraction few-shots.
+  # think:false: thinking mode off for high-volume ingest roles (benched — no
+  # quality win for extraction, big latency cost).
+  - model_name: gemma4:e2b-it-qat
+    litellm_params:
+      model: ollama_chat/gemma4:e2b-it-qat
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
+      think: false
+
+  # Embeddings — 768-dim; MUST match MILVUS_DIM=768.
+  - model_name: nomic-embed-text:latest
+    litellm_params:
+      model: ollama/nomic-embed-text:latest
+      api_base: http://host.docker.internal:11434
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  # Pin to 0 — avoids an upstream litellm TypeError when num_retries is None at
+  # root level (full explanation in docker/litellm_config.yaml).
+  num_retries: 0
