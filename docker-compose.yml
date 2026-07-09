@@ -133,6 +133,53 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ── Graph DB: NebulaGraph dev cluster (migration Phase 1) ───────────
+  # Single-replica dev topology: metad + storaged + graphd. After first
+  # boot, the storage host must be registered once via
+  # `python scripts/nebula_bootstrap.py` (ADD HOSTS) before data can be
+  # written — NebulaGraph does not auto-register storage hosts.
+  nebula-metad:
+    image: vesoft/nebula-metad:v3.8.0
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-metad", "--ws_ip=nebula-metad", "--port=9559", "--data_path=/data/meta"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nebula-metad:19559/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - nebula_meta:/data/meta
+    restart: unless-stopped
+
+  nebula-storaged:
+    image: vesoft/nebula-storaged:v3.8.0
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-storaged", "--ws_ip=nebula-storaged", "--port=9779", "--data_path=/data/storage"]
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nebula-storaged:19779/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - nebula_storage:/data/storage
+    restart: unless-stopped
+
+  nebula-graphd:
+    image: vesoft/nebula-graphd:v3.8.0
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-graphd", "--ws_ip=nebula-graphd", "--port=9669"]
+    depends_on:
+      nebula-storaged:
+        condition: service_healthy
+    ports:
+      - "9669:9669"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nebula-graphd:19669/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
   # ── Wikibase: structured-data store (Wikidata-software stack) ───
   # MySQL backs Wikibase's MediaWiki schema.
   wikibase-mysql:
@@ -390,6 +437,8 @@ volumes:
   milvus_data:
   neo4j_data:
   neo4j_logs:
+  nebula_meta:
+  nebula_storage:
   pg_data:
   wikibase_mysql_data:
   wikibase_images:
