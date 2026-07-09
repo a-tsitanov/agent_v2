@@ -138,6 +138,20 @@ class Neo4jSettings(BaseSettings):
     query_log: bool = False
 
 
+class GraphSettings(BaseSettings):
+    """Which graph backend the store factory builds.
+
+    Strangler seam for the Neo4j -> NebulaGraph migration: every graph
+    caller goes through ``src.graph.store.build_graph_store()`` which
+    dispatches on this.  Default stays "neo4j" until per-workload parity
+    benchmarks pass (project policy: benchmark before adopting — mirrors
+    ``community_backend``)."""
+
+    model_config = SettingsConfigDict(env_prefix="GRAPH_", env_file=".env", extra="ignore")
+
+    backend: Literal["neo4j", "nebula"] = "neo4j"
+
+
 class PostgresSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POSTGRES_", env_file=".env", extra="ignore")
 
@@ -1049,6 +1063,10 @@ class Settings(BaseSettings):
     @cached_property
     def neo4j(self) -> Neo4jSettings:
         return Neo4jSettings()
+
+    @cached_property
+    def graph(self) -> GraphSettings:
+        return GraphSettings()
 
     @cached_property
     def postgres(self) -> PostgresSettings:
