@@ -152,6 +152,21 @@ class GraphSettings(BaseSettings):
     backend: Literal["neo4j", "nebula"] = "neo4j"
 
 
+class NebulaSettings(BaseSettings):
+    """Connection to the NebulaGraph cluster (Phase 1+ write path).
+
+    Mirrors ``Neo4jSettings``'s shape — same fields, NebulaGraph's own
+    defaults (graphd port 9669, root/nebula, single space "kb")."""
+
+    model_config = SettingsConfigDict(env_prefix="NEBULA_", env_file=".env", extra="ignore")
+
+    host: str = "localhost"
+    port: int = 9669
+    user: str = "root"
+    password: SecretStr = SecretStr("nebula")
+    space: str = "kb"
+
+
 class PostgresSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POSTGRES_", env_file=".env", extra="ignore")
 
@@ -1067,6 +1082,10 @@ class Settings(BaseSettings):
     @cached_property
     def graph(self) -> GraphSettings:
         return GraphSettings()
+
+    @cached_property
+    def nebula(self) -> NebulaSettings:
+        return NebulaSettings()
 
     @cached_property
     def postgres(self) -> PostgresSettings:

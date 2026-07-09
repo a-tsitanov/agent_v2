@@ -16,3 +16,10 @@ def test_graph_backend_env_override(monkeypatch):
     from src.config import GraphSettings
 
     assert GraphSettings().backend == "nebula"
+
+
+def test_nebula_settings_default_port(monkeypatch):
+    monkeypatch.delenv("NEBULA_PORT", raising=False)
+    from src.config import NebulaSettings
+
+    assert NebulaSettings().port == 9669

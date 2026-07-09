@@ -324,6 +324,12 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "MONITOR_TASK_QUEUE": "Имя очереди Temporal для воркера монитор-свипа.",
     "MONITOR_WEBHOOK_TIMEOUT_S": "Таймаут POST на webhook доставки алертов, сек (> 0).",
     "MONITOR_WEBHOOK_URL": "URL генеричного webhook для доставки алертов (пусто — доставка выключена).",
+    # ── NebulaSettings (NEBULA_*) — граф (Phase-1 write-path бэкенд) ──
+    "NEBULA_HOST": "Хост NebulaGraph graphd.",
+    "NEBULA_PASSWORD": "Пароль NebulaGraph. Секрет; в проде сменить дефолт 'nebula'.",
+    "NEBULA_PORT": "Порт NebulaGraph graphd (по умолчанию 9669).",
+    "NEBULA_SPACE": "Имя графового space в NebulaGraph.",
+    "NEBULA_USER": "Пользователь NebulaGraph.",
     # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
     "NEO4J_DATABASE": "Имя базы Neo4j.",
     "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",
