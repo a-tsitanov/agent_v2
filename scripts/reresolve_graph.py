@@ -379,10 +379,10 @@ async def _amain(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     configure_logging(level=settings.api.log_level)
 
-    from src.graph.store import build_neo4j_graph_store
+    from src.graph.store import build_graph_store
 
     types = frozenset(args.types) if args.types else None
-    graph_store = build_neo4j_graph_store()
+    graph_store = build_graph_store()
 
     logger.info(
         "reresolve_graph: candidate_source={s} batch_size={b} types={t} "

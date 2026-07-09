@@ -23,7 +23,7 @@ class _Store:
 
 @pytest.mark.asyncio
 async def test_execute_step_runs_primitive(monkeypatch):
-    monkeypatch.setattr(act, "build_neo4j_graph_store", lambda: _Store())
+    monkeypatch.setattr(act, "build_graph_store", lambda: _Store())
     p = ExecInput(
         call=PrimitiveCall(primitive="count_entities", params={"type": "Organization"}),
         top_n=20,
@@ -37,7 +37,7 @@ async def test_execute_step_runs_primitive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_step_unknown_primitive_returns_empty(monkeypatch):
-    monkeypatch.setattr(act, "build_neo4j_graph_store", lambda: _Store())
+    monkeypatch.setattr(act, "build_graph_store", lambda: _Store())
     p = ExecInput(
         call=PrimitiveCall(primitive="nope", params={}),
         top_n=20,
@@ -51,7 +51,7 @@ async def test_execute_step_unknown_primitive_returns_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_execute_step_injects_top_n_when_omitted(monkeypatch):
     """When the primitive param_model has top_n and caller omits it, default is injected."""
-    monkeypatch.setattr(act, "build_neo4j_graph_store", lambda: _Store())
+    monkeypatch.setattr(act, "build_graph_store", lambda: _Store())
     # top_entities_by_mentions has a top_n field; we omit it from params
     p = ExecInput(
         call=PrimitiveCall(

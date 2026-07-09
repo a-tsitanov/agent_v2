@@ -62,8 +62,8 @@ async def _build_graph_retriever_once(embed_model, llm):
             ensure_entity_lookup_indexes,
         )
         from src.graph.retriever import GraphRetriever
-        from src.graph.store import build_neo4j_graph_store
-        gs = build_neo4j_graph_store()
+        from src.graph.store import build_graph_store
+        gs = build_graph_store()
         pg = build_property_graph_index(
             graph_store=gs, embed_model=embed_model,
             extractor=build_kg_extractor(llm), nodes=None,

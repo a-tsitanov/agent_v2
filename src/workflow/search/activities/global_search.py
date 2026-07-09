@@ -93,9 +93,9 @@ def _get_store() -> Any | None:
 
     Indirected for monkeypatching (mirrors ``community._get_store``)."""
     try:
-        from src.graph.store import build_neo4j_graph_store
+        from src.graph.store import build_graph_store
 
-        return build_neo4j_graph_store()
+        return build_graph_store()
     except Exception as exc:
         activity.logger.warning("global_search: graph store unavailable: %s", exc)
         return None

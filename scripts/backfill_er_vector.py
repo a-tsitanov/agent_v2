@@ -31,7 +31,7 @@ from loguru import logger
 
 from src.config import settings
 from src.graph.index import ensure_er_vector_index
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.utils.logging import configure_logging
 
 _COUNT_CYPHER = (
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     configure_logging()
-    store = build_neo4j_graph_store()
+    store = build_graph_store()
 
     total = (store.structured_query(_TOTAL_CYPHER) or [{}])[0].get("total", 0)
     pending = (store.structured_query(_COUNT_CYPHER) or [{}])[0].get("pending", 0)

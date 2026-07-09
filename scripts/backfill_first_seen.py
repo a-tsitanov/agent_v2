@@ -33,7 +33,7 @@ from loguru import logger
 
 from src.config import settings
 from src.graph.index import ensure_first_seen_indexes
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.utils.logging import configure_logging
 
 _COUNT_ENT_CYPHER = "MATCH (e:__Entity__) WHERE e.created_at IS NULL RETURN count(e) AS pending"
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     configure_logging()
-    store = build_neo4j_graph_store()
+    store = build_graph_store()
     sentinel = settings.events.backfill_sentinel
 
     ent_pending = _pending(store, _COUNT_ENT_CYPHER)

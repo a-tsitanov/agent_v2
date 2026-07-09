@@ -9,7 +9,7 @@ from loguru import logger
 from temporalio import activity
 
 from src.graph.index import NoOpKGExtractor, build_property_graph_index
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.graph.write_retry import write_with_retry
 from src.ingestion.embeddings import build_embedding_model
 from src.workflow.contracts import GraphBuilt, Merged
@@ -95,7 +95,7 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
     # enough — a single step can outrun heartbeat_timeout. heartbeat_every
     # keeps a progressing-but-slow build from being mistaken for a dead one.
     async with heartbeat_every(_HEARTBEAT_INTERVAL_S, {"stage": "writing"}):
-        graph_store = await asyncio.to_thread(build_neo4j_graph_store)
+        graph_store = await asyncio.to_thread(build_graph_store)
         embed_model = await asyncio.to_thread(build_embedding_model)
 
         _strip_neo4j_unsafe_metadata(nodes)

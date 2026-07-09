@@ -27,7 +27,7 @@ from src.analytics.contracts import (
 from src.analytics.planner import plan_query
 from src.analytics.provenance import step_from_primitive
 from src.analytics.synthesis import build_synthesis_prompt
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.retrieval.llm_pool import get_llm_pool
 
 
@@ -50,7 +50,7 @@ async def execute_step(p: ExecInput) -> StepResult:
             row_count=0,
         )
 
-    store = build_neo4j_graph_store()
+    store = build_graph_store()
     params = dict(p.call.params)
 
     # Inject default top_n when the primitive accepts it and the planner omitted it.

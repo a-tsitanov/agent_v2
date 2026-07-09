@@ -36,14 +36,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 load_dotenv()
 
 from src.config import WikibaseSettings, settings  # noqa: E402
-from src.graph.store import build_neo4j_graph_store  # noqa: E402
+from src.graph.store import build_graph_store  # noqa: E402
 from src.storage.wikibase import AsyncWikibase, push_entities  # noqa: E402
 from src.utils.logging import configure_logging  # noqa: E402
 
 
 def _load_cache_from_neo4j() -> tuple[dict[str, str], dict[str, str]]:
     """Pull cached base-class QIDs + property PIDs from Neo4j."""
-    gs = build_neo4j_graph_store()
+    gs = build_graph_store()
     base = gs.structured_query(
         "MATCH (b:WikibaseBaseClass) RETURN b.label AS label, b.qid AS qid",
     )
@@ -91,7 +91,7 @@ async def main() -> int:
         label="has_phone", source_id=person.id, target_id=phone.id,
     )
 
-    gs = build_neo4j_graph_store()
+    gs = build_graph_store()
     counts = await push_entities(
         entities=[person, phone],
         relations=[rel],

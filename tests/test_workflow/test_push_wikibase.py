@@ -39,7 +39,7 @@ async def test_disabled_returns_skipped(monkeypatch):
     with patch(
         "src.workflow.activities.push_wikibase.build_staging_store"
     ) as ms, patch(
-        "src.workflow.activities.push_wikibase.build_neo4j_graph_store"
+        "src.workflow.activities.push_wikibase.build_graph_store"
     ) as mg, patch(
         "src.workflow.activities.push_wikibase.activity"
     ):
@@ -80,7 +80,7 @@ async def test_happy_path_runs_push_entities(monkeypatch):
         "src.workflow.activities.push_wikibase.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.push_wikibase.build_neo4j_graph_store",
+        "src.workflow.activities.push_wikibase.build_graph_store",
         return_value=gs,
     ), patch(
         "src.workflow.activities.push_wikibase.AsyncWikibase",
@@ -139,7 +139,7 @@ async def test_zero_counters_marked_failed_not_ok(monkeypatch):
         "src.workflow.activities.push_wikibase.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.push_wikibase.build_neo4j_graph_store",
+        "src.workflow.activities.push_wikibase.build_graph_store",
         return_value=gs,
     ), patch(
         "src.workflow.activities.push_wikibase.AsyncWikibase",
@@ -187,7 +187,7 @@ async def test_empty_input_returns_ok(monkeypatch):
         "src.workflow.activities.push_wikibase.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.push_wikibase.build_neo4j_graph_store",
+        "src.workflow.activities.push_wikibase.build_graph_store",
         return_value=gs,
     ), patch(
         "src.workflow.activities.push_wikibase.AsyncWikibase",
@@ -250,7 +250,7 @@ async def test_heartbeats_pulse_during_push_entities(monkeypatch):
     wb_client = MagicMock()
     beats: list[tuple] = []
     with patch.object(mod, "build_staging_store", return_value=staging), \
-         patch.object(mod, "build_neo4j_graph_store", return_value=gs), \
+         patch.object(mod, "build_graph_store", return_value=gs), \
          patch.object(mod, "AsyncWikibase") as wb_factory, \
          patch.object(mod, "push_entities", new=slow_push):
         wb_factory.from_settings = AsyncMock(return_value=wb_client)

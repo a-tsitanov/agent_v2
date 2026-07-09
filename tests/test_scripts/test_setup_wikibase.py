@@ -53,7 +53,7 @@ def test_persist_cache_writes_two_node_types() -> None:
     }
 
     with patch(
-        "scripts.setup_wikibase.build_neo4j_graph_store", return_value=gs
+        "scripts.setup_wikibase.build_graph_store", return_value=gs
     ):
         _persist_cache(base_qids, property_pids)
 

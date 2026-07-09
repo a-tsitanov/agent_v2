@@ -32,15 +32,15 @@ def _tally(outcomes) -> dict[str, int]:
 
 @activity.defn
 async def select_dirty_entities(limit: int) -> list[str]:
-    from src.graph.store import build_neo4j_graph_store
+    from src.graph.store import build_graph_store
     from src.graph.wiki_dirty import select_dirty
     # sync Neo4j — off the shared loop.
-    return await asyncio.to_thread(select_dirty, build_neo4j_graph_store(), limit)
+    return await asyncio.to_thread(select_dirty, build_graph_store(), limit)
 
 
 @activity.defn
 async def write_entity_article(name: str) -> str:
-    from src.graph.store import build_neo4j_graph_store
+    from src.graph.store import build_graph_store
     from src.graph.wiki_context import (
         read_citations,
         read_entity_subgraph,
@@ -52,7 +52,7 @@ async def write_entity_article(name: str) -> str:
     from src.workflow.wiki._deps import get_mediawiki
     from src.workflow.wiki.article import render_bot_section, splice_bot_section
 
-    store = build_neo4j_graph_store()
+    store = build_graph_store()
     # All Neo4j reads/writes here use the sync driver — off the shared loop.
     ctx = await asyncio.to_thread(
         read_entity_subgraph, store, name, settings.wiki.max_relations)

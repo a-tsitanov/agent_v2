@@ -33,7 +33,7 @@ async def test_strips_metadata_builds_pg_upserts_entities():
         "src.workflow.activities.build_property_graph.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.build_property_graph.build_neo4j_graph_store",
+        "src.workflow.activities.build_property_graph.build_graph_store",
         return_value=graph_store,
     ), patch(
         "src.workflow.activities.build_property_graph.build_embedding_model",

@@ -7,7 +7,7 @@ import asyncio
 from temporalio import activity
 
 from src.config import settings
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.graph.wiki_dirty import mark_dirty
 from src.workflow.contracts import MarkDirtyIn
 
@@ -23,7 +23,7 @@ async def mark_entities_dirty(payload: MarkDirtyIn) -> int:
     names = sorted(_dirty_names(payload))
     if not names:
         return 0
-    store = build_neo4j_graph_store()
+    store = build_graph_store()
     await asyncio.to_thread(mark_dirty, store, names)  # sync Neo4j — off loop
     activity.logger.info("mark_entities_dirty  count=%d", len(names))
     return len(names)
