@@ -102,3 +102,25 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     # briefly, hence the small per-statement retry).
     for stmt in SCHEMA_DDL:
         _execute_with_retry(session, stmt, attempts=3, delay_s=1.0)
+
+    # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
+    # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
+    # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
+    # is NOT a reliable readiness signal; the only one is a real write
+    # landing. Probe with a sentinel `Entity` vertex until it succeeds, then
+    # remove it, so the first caller write doesn't race propagation.
+    probe = "__kb_schema_probe__"
+    probe_insert = (
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label) "
+        f'VALUES "{probe}":("", "", 0, 0, "");'
+    )
+    for attempt in range(1, use_attempts + 1):
+        if session.execute(probe_insert).is_succeeded():
+            session.execute(f'DELETE VERTEX "{probe}";')
+            return
+        if attempt < use_attempts:
+            time.sleep(use_delay_s)
+    logger.warning(
+        "nebula ensure_schema: `Entity` tag not write-ready after {n} attempt(s)",
+        n=use_attempts,
+    )

@@ -140,7 +140,7 @@ services:
   # written — NebulaGraph does not auto-register storage hosts.
   nebula-metad:
     image: vesoft/nebula-metad:v3.8.0
-    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-metad", "--ws_ip=nebula-metad", "--port=9559", "--data_path=/data/meta"]
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-metad", "--ws_ip=nebula-metad", "--port=9559", "--data_path=/data/meta", "--heartbeat_interval_secs=1"]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://nebula-metad:19559/status"]
       interval: 10s
@@ -154,7 +154,7 @@ services:
 
   nebula-storaged:
     image: vesoft/nebula-storaged:v3.8.0
-    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-storaged", "--ws_ip=nebula-storaged", "--port=9779", "--data_path=/data/storage"]
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-storaged", "--ws_ip=nebula-storaged", "--port=9779", "--data_path=/data/storage", "--heartbeat_interval_secs=1"]
     depends_on:
       nebula-metad:
         condition: service_healthy
@@ -171,9 +171,14 @@ services:
 
   nebula-graphd:
     image: vesoft/nebula-graphd:v3.8.0
-    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-graphd", "--ws_ip=nebula-graphd", "--port=9669"]
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-graphd", "--ws_ip=nebula-graphd", "--port=9669", "--heartbeat_interval_secs=1"]
+    # graphd depends only on metad: storaged is not fully "healthy" until it
+    # is registered via `ADD HOSTS` (scripts/nebula_bootstrap.py), which is
+    # itself issued THROUGH graphd — so gating graphd on storaged-healthy
+    # deadlocks. Standard Nebula bring-up: metad -> graphd up, then ADD HOSTS
+    # activates storaged.
     depends_on:
-      nebula-storaged:
+      nebula-metad:
         condition: service_healthy
     ports:
       - "9669:9669"
