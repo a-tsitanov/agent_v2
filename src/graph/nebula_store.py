@@ -20,7 +20,7 @@ from loguru import logger
 from src.config import settings
 from src.graph.nebula_schema import ensure_schema
 
-_store: "NebulaGraphStore | None" = None
+_store: NebulaGraphStore | None = None
 _lock = threading.Lock()
 
 _SAFE_EDGE_LABEL = re.compile(r"[A-Za-z0-9_]+")
@@ -123,7 +123,7 @@ def _rows_to_dicts(resp: Any) -> list[dict]:
     return out
 
 
-def build_nebula_graph_store() -> "NebulaGraphStore":
+def build_nebula_graph_store() -> NebulaGraphStore:
     """Process-global NebulaGraph store (mirrors build_neo4j_graph_store)."""
     global _store
     if _store is not None:
