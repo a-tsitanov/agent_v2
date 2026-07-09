@@ -146,9 +146,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+      start_period: 20s
     volumes:
       - nebula_meta:/data/meta
     restart: unless-stopped
+    profiles: ["nebula"]
 
   nebula-storaged:
     image: vesoft/nebula-storaged:v3.8.0
@@ -161,9 +163,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+      start_period: 20s
     volumes:
       - nebula_storage:/data/storage
     restart: unless-stopped
+    profiles: ["nebula"]
 
   nebula-graphd:
     image: vesoft/nebula-graphd:v3.8.0
@@ -178,7 +182,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+      start_period: 20s
     restart: unless-stopped
+    profiles: ["nebula"]
 
   # ── Wikibase: structured-data store (Wikidata-software stack) ───
   # MySQL backs Wikibase's MediaWiki schema.

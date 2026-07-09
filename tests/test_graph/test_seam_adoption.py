@@ -12,9 +12,10 @@ ALLOW = {ROOT / "src" / "graph" / "store.py"}  # the dispatcher itself
 def test_no_direct_neo4j_store_calls_outside_store_py():
     pat = re.compile(r"\bbuild_neo4j_graph_store\s*\(")
     offenders = []
-    for py in (ROOT / "src").rglob("*.py"):
-        if py in ALLOW:
-            continue
-        if pat.search(py.read_text(encoding="utf-8")):
-            offenders.append(str(py.relative_to(ROOT)))
+    for base in (ROOT / "src", ROOT / "scripts"):
+        for py in base.rglob("*.py"):
+            if py in ALLOW:
+                continue
+            if pat.search(py.read_text(encoding="utf-8")):
+                offenders.append(str(py.relative_to(ROOT)))
     assert offenders == [], f"call build_graph_store() instead: {offenders}"

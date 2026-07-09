@@ -90,7 +90,14 @@ class NebulaGraphStore:
 
     # --- raw nGQL (Phase 2 read path builds on this) --------------------
     def structured_query(self, query: str, param_map: dict[str, Any] | None = None) -> list[dict]:
-        # param_map unused until the Phase-2 read path binds nGQL params
+        # param_map is not bound into nGQL yet (Phase 2) — fail loud rather
+        # than silently dropping caller-supplied params. `None`/`{}` (the
+        # common no-params call) still pass through and execute normally.
+        if param_map:
+            raise NotImplementedError(
+                "NebulaGraphStore.structured_query does not bind nGQL params yet "
+                f"(Phase 2); got param_map keys: {sorted(param_map)}"
+            )
         resp = self._session.execute(query)
         if not resp.is_succeeded():
             raise RuntimeError(f"nGQL failed: {resp.error_msg()}")

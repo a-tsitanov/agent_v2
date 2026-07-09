@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from src.graph.nebula_store import NebulaGraphStore, entity_vid
 
 
@@ -12,7 +14,12 @@ class _FakeSession:
 
     def execute(self, stmt, *a, **k):
         self.executed.append(stmt)
-        return SimpleNamespace(is_succeeded=lambda: True, error_msg=lambda: "")
+        return SimpleNamespace(
+            is_succeeded=lambda: True,
+            error_msg=lambda: "",
+            keys=lambda: [],
+            row_size=lambda: 0,
+        )
 
 
 def _store_with_session(sess):
@@ -74,3 +81,16 @@ def test_q_escapes_newlines():
     assert "INSERT VERTEX" in blob
     assert "line1\\nline2" in blob
     assert "line1\nline2" not in blob
+
+
+def test_structured_query_rejects_params():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+
+    with pytest.raises(NotImplementedError):
+        store.structured_query("MATCH ...", {"name": "X"})
+
+    # None and empty dict are both "no params" and must pass through.
+    store.structured_query("YIELD 1", {})
+    store.structured_query("YIELD 1")
+    assert sess.executed == ["YIELD 1", "YIELD 1"]
