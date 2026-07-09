@@ -208,6 +208,8 @@ _REFERENCE_HEADER = (
 # of truth is the inline comments / field names in src/config.py.  A coverage
 # guard test asserts EVERY iter_app_env_vars() var has an entry here.
 _ENV_DESCRIPTIONS: dict[str, str] = {
+    # ── GraphSettings (GRAPH_*) — выбор графового бэкенда ────────────
+    "GRAPH_BACKEND": "Графовый бэкенд, который строит фабрика store (strangler-шов миграции Neo4j→NebulaGraph): 'neo4j' (текущий) или 'nebula'. Дефолт 'neo4j' до прохождения бенчмарка паритета.",
     # ── AgentSettings (AGENT_*) — ручки search-эндпоинтов ────────────
     "AGENT_COMMUNITY_DYNAMIC_SELECTION": "Стратегия выбора сообществ для global/drift: lexical (по умолчанию) | semantic (kNN по report_vec) | descent (спуск по иерархии).",
     "AGENT_COMMUNITY_MAX_LEVELS": "Сколько уровней дендрограммы Leiden материализовать при build сообществ; 1 = одноуровневый, выше = иерархия (offline). Капа 1..10.",
