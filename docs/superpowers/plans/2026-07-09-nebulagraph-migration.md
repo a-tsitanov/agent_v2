@@ -886,6 +886,13 @@ git commit -m "test(graph): dual-write parity harness (Phase 2 gate)"
 
 Do **not** implement these from the summaries below — generate a dedicated `writing-plans` plan for each when its predecessor lands. Boundaries, files, and the gating benchmark are fixed here so the sub-plans stay decoupled.
 
+### Carry-forward decisions from the Phase 0/1 whole-branch review (decide before the dependent phase builds on them)
+
+- **VID width / collision ceiling (decide before Phase 5 bulk load, ideally in the Phase 2 plan).** Phase 1 uses `entity_vid = blake2b(name, digest_size=8)` → signed int64, and `CREATE SPACE ... vid_type=INT64` is fixed at space-creation. At the stated target (billions of graph elements) a 64-bit hash has non-negligible birthday-collision probability (expected colliding pairs ≈ n²/2⁶⁵), and a VID collision silently merges two distinct entities. Changing `vid_type` later requires dropping/recreating the space — cheap now, painful after bulk load. Decide: 64-bit hash vs 128-bit `FIXED_STRING` VID vs a VID registry. Revisit `entity_vid` in `src/graph/nebula_store.py` accordingly.
+- **`NebulaSettings.space` vs `nebula_schema.SPACE_NAME`.** Phase 1 left `NebulaSettings.space` (`NEBULA_SPACE`) as dead config — `SPACE_NAME` is the sole source of truth and nothing reads the setting, so `NEBULA_SPACE=…` is silently ignored. When Phase 2 needs a configurable/multi-space setup, either wire `SPACE_NAME` off the setting or drop the field.
+- **`NebulaGraphStore.structured_query` param binding.** Phase 1 makes it raise `NotImplementedError` on a non-empty `param_map` (fail-loud). Phase 2's read translation must implement real nGQL parameter binding before any nebula read caller passes params.
+- **Dynamic rel types → fixed edge schema.** Neo4j creates relationship types dynamically; Nebula requires pre-declared edge types. Phase 1 declares only `RELATED/MENTIONS/IN_COMMUNITY/PARENT_OF` and injection-guards the label (undeclared labels fail at INSERT, fail-open). Phase 2 must decide the representation (e.g. a generic `RELATED` edge carrying the original type as a property, or declaring the full type set).
+
 ### Phase 2 — Read-path nGQL translation
 
 **Goal:** every read query the app issues works on `GRAPH_BACKEND=nebula` with output parity to Neo4j.
