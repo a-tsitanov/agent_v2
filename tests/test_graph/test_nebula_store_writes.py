@@ -28,11 +28,12 @@ def _store_with_session(sess):
     return s
 
 
-def test_entity_vid_is_stable_int64():
+def test_entity_vid_is_stable_fixed_string():
     v = entity_vid("Иванов")
-    assert isinstance(v, int)
+    assert isinstance(v, str)
     assert v == entity_vid("Иванов")
-    assert -(2**63) <= v < 2**63
+    assert len(v) == 32  # 128-bit blake2b hex digest -> FIXED_STRING(32)
+    assert all(c in "0123456789abcdef" for c in v)
 
 
 def test_upsert_nodes_inserts_entity_vertex():
@@ -43,7 +44,7 @@ def test_upsert_nodes_inserts_entity_vertex():
     store.upsert_nodes([node])
     blob = "\n".join(sess.executed)
     assert "INSERT VERTEX `Entity`" in blob
-    assert str(entity_vid("Иванов")) in blob
+    assert f'"{entity_vid("Иванов")}"' in blob  # quoted FIXED_STRING VID
     assert "Иванов" in blob
 
 
@@ -55,7 +56,7 @@ def test_upsert_relations_inserts_edge():
     store.upsert_relations([rel])
     blob = "\n".join(sess.executed)
     assert "INSERT EDGE `RELATED`" in blob
-    assert f"{entity_vid('Иванов')} -> {entity_vid('Москва')}" in blob
+    assert f'"{entity_vid("Иванов")}" -> "{entity_vid("Москва")}"' in blob
 
 
 def test_upsert_relations_rejects_unsafe_label():

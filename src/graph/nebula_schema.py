@@ -20,10 +20,15 @@ from typing import Any
 
 SPACE_NAME = "kb"
 
-# int64 VID via a stable hash of the entity name (set at write time).
+# 128-bit VID: the 32-hex-char blake2b digest of the entity name
+# (`entity_vid` in nebula_store.py), set at write time. FIXED_STRING(32)
+# fits it exactly. Chosen over INT64 because a 64-bit hash has
+# non-negligible birthday-collision probability at the billions-of-entities
+# target, and a VID collision silently merges two distinct entities.
+# vid_type is fixed at space creation, so this must be right before any load.
 SPACE_DDL = (
     f"CREATE SPACE IF NOT EXISTS `{SPACE_NAME}` "
-    "(partition_num=100, replica_factor=1, vid_type=INT64);"
+    "(partition_num=100, replica_factor=1, vid_type=FIXED_STRING(32));"
 )
 
 # In-space DDL only — requires `USE `{SPACE_NAME}`;` to have already

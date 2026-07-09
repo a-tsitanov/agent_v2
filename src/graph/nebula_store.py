@@ -36,10 +36,15 @@ def _safe_edge_label(label: str) -> str:
     return label if label and _SAFE_EDGE_LABEL.fullmatch(label) else "RELATED"
 
 
-def entity_vid(name: str) -> int:
-    """Stable signed int64 VID from an entity name (read/write must agree)."""
-    h = hashlib.blake2b((name or "").encode("utf-8"), digest_size=8).digest()
-    return int.from_bytes(h, "big", signed=True)
+def entity_vid(name: str) -> str:
+    """Stable 128-bit VID as a 32-char hex string from an entity name.
+
+    read/write must agree on this. 128-bit (blake2b digest_size=16) instead
+    of 64-bit so birthday collisions stay negligible at the billions-of-
+    entities target — a VID collision silently merges two distinct entities.
+    The space is created with vid_type=FIXED_STRING(32) to match (see
+    nebula_schema.SPACE_DDL)."""
+    return hashlib.blake2b((name or "").encode("utf-8"), digest_size=16).hexdigest()
 
 
 def _q(value: Any) -> str:
@@ -65,7 +70,7 @@ class NebulaGraphStore:
             stmt = (
                 "INSERT VERTEX `Entity` "
                 "(name, description, mention_count, created_at, label) VALUES "
-                f"{vid}:({_q(getattr(n, 'name', ''))}, "
+                f"{_q(vid)}:({_q(getattr(n, 'name', ''))}, "
                 f"{_q(props.get('description', ''))}, "
                 f"{int(props.get('mention_count', 0) or 0)}, "
                 f"{int(props.get('created_at', 0) or 0)}, "
@@ -81,7 +86,7 @@ class NebulaGraphStore:
             tgt = entity_vid(getattr(r, "target_id", ""))
             stmt = (
                 f"INSERT EDGE `{label}` (polarity, valid_from, valid_to) VALUES "
-                f"{src} -> {tgt}:("
+                f"{_q(src)} -> {_q(tgt)}:("
                 f"{_q(props.get('polarity', ''))}, "
                 f"{int(props.get('valid_from', 0) or 0)}, "
                 f"{int(props.get('valid_to', 0) or 0)});"
