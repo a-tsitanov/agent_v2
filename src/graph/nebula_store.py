@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import re
 import threading
 from typing import Any
 
@@ -21,6 +22,18 @@ from src.graph.nebula_schema import ensure_schema
 
 _store: "NebulaGraphStore | None" = None
 _lock = threading.Lock()
+
+_SAFE_EDGE_LABEL = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _safe_edge_label(label: str) -> str:
+    """nGQL edge types are bare identifiers spliced into the query, so a
+    label must be a plain identifier. Fall back to RELATED for anything
+    unsafe — defense-in-depth so this module never trusts caller input.
+    (Whether a regex-safe label is a *declared* edge type is a separate
+    Phase-2 schema-mapping concern: Neo4j allows dynamic rel types, Nebula
+    requires pre-declared edge types — not handled here.)"""
+    return label if label and _SAFE_EDGE_LABEL.fullmatch(label) else "RELATED"
 
 
 def entity_vid(name: str) -> int:
@@ -36,6 +49,7 @@ def _q(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     s = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+    s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     return f'"{s}"'
 
 
@@ -61,7 +75,7 @@ class NebulaGraphStore:
 
     def upsert_relations(self, relations: list[Any]) -> None:
         for r in relations:
-            label = getattr(r, "label", "RELATED") or "RELATED"
+            label = _safe_edge_label(getattr(r, "label", "RELATED") or "RELATED")
             props = getattr(r, "properties", {}) or {}
             src = entity_vid(getattr(r, "source_id", ""))
             tgt = entity_vid(getattr(r, "target_id", ""))
@@ -76,6 +90,7 @@ class NebulaGraphStore:
 
     # --- raw nGQL (Phase 2 read path builds on this) --------------------
     def structured_query(self, query: str, param_map: dict[str, Any] | None = None) -> list[dict]:
+        # param_map unused until the Phase-2 read path binds nGQL params
         resp = self._session.execute(query)
         if not resp.is_succeeded():
             raise RuntimeError(f"nGQL failed: {resp.error_msg()}")
