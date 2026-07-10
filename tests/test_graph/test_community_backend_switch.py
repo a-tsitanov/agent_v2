@@ -74,13 +74,17 @@ def test_graphscope_backend_is_fail_safe(monkeypatch):
 def test_graphscope_adapter_fail_open_does_not_write_mega_community(monkeypatch):
     # This is the REAL fail-open path (the bug this whole test file exists
     # to guard against): the GraphScope adapter never raises — it fail-opens
-    # to {} (import/API error inside _run_graphscope_community). Leave
-    # single_level_rows_graphscope REAL; only mock the adapter it wraps.
-    # Before the fix, membership={} would map EVERY name to communityId "0"
-    # via `.get(name, "0")`, producing a non-empty `rows` that sailed past
-    # the graphscope branch's try/except untouched, so detect_communities
-    # would PRUNE the prior :Community nodes and MERGE one garbage
-    # mega-community instead of no-op'ing. Assert it now no-ops to [].
+    # to {} (import/API error inside _run_graphscope_community, or the stub
+    # pre-manual-gate). Leave single_level_rows_graphscope REAL; only mock the
+    # adapter it wraps. Before the fix, membership={} would map EVERY name to
+    # communityId "0" via `.get(name, "0")`, producing a non-empty `rows` that
+    # sailed past the graphscope branch's try/except untouched, so
+    # detect_communities would PRUNE the prior :Community nodes and MERGE one
+    # garbage mega-community. The single_level_rows_graphscope guard turns the
+    # empty membership into empty rows, and the graphscope branch's
+    # `if not rows: return []` then makes it a TRUE no-op — returning before
+    # the write-back so the existing :Community layer is never touched (no
+    # MERGE, and crucially no level PRUNE that would clear it).
     monkeypatch.setattr(comm.settings.temporal, "community_backend", "graphscope")
 
     def fake_extract(store, *, batch_size=50_000):
@@ -99,7 +103,8 @@ def test_graphscope_adapter_fail_open_does_not_write_mega_community(monkeypatch)
             return []
     refs = asyncio.run(comm.detect_communities(_Store(), min_size=2, level=0))
     assert refs == []
-    # The degenerate mega-community MERGE (one node holding every entity
-    # under communityId "0") must never be written — with rows == [],
-    # `communities` is empty so the write-back loop never iterates.
-    assert not any("MERGE (c:Community" in c for c in write_calls)
+    # True no-op: the branch returns BEFORE the write-back, so NOTHING is
+    # written to the store — not the degenerate mega-community MERGE, and
+    # crucially not the level PRUNE that would otherwise clear the existing
+    # :Community layer under a mere backend misconfiguration.
+    assert write_calls == [], f"fail-open must not touch the store, got: {write_calls}"

@@ -462,6 +462,22 @@ async def detect_communities(
         except Exception as exc:
             logger.error("communities: graphscope detection FAILED: {e}", e=exc)
             return []
+        if not rows:
+            # The graphscope adapter fail-opens to no rows on any import/API
+            # error — and is a stub returning [] until the manual cluster gate
+            # finalises it.  Unlike an empty GDS/leidenalg projection (a
+            # legitimate "no communities" that SHOULD prune the stale layer),
+            # an empty graphscope result is a FAILURE signal: return a true
+            # no-op that leaves the existing :Community layer untouched (never
+            # prune it away), mirroring the leidenalg branch's raise->[] which
+            # also short-circuits before the write-back.  Note this keys on
+            # `rows`, not `communities`: non-empty rows whose groups all fall
+            # below min_size are a real detection and still prune correctly.
+            logger.warning(
+                "communities: graphscope returned 0 rows — treating as a "
+                "fail-open no-op (existing communities left intact)"
+            )
+            return []
     else:
         # Unique per-call projection name so concurrent rebuilds don't collide.
         graph_name = _new_graph_name()
