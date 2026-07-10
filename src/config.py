@@ -646,6 +646,12 @@ class AgentSettings(BaseSettings):
     # benchmark; FORCED under GRAPH_BACKEND=nebula, which has no in-graph
     # index). Dispatched in src/graph/entity_vector_store.py.
     er_vector_backend: Literal["native", "milvus"] = "native"
+    # Where community-report vectors live for semantic community-select.
+    # "native" = Neo4j in-graph community_report_vec index (prod path,
+    # unchanged); "milvus" = community_report_vec Milvus collection (opt-in;
+    # FORCED under GRAPH_BACKEND=nebula). Dispatched in
+    # src/graph/community_vector_store.py.
+    community_vector_backend: Literal["native", "milvus"] = "native"
     # Pre-submit coverage check: when the agent picks submit_answer, an
     # LLM first judges whether the gathered evidence fully covers the
     # question; if not, the named gap is fed back and one more retrieval
