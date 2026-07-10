@@ -1,8 +1,6 @@
 """build_graph_store dispatches on settings.graph.backend."""
 from __future__ import annotations
 
-import pytest
-
 import src.graph.store as store_mod
 
 
@@ -14,11 +12,13 @@ def test_dispatch_neo4j_returns_neo4j_store(monkeypatch):
     assert store_mod.build_graph_store() is sentinel
 
 
-def test_dispatch_nebula_imports_nebula_builder(monkeypatch):
-    # Phase 0: nebula backend selected but src.graph.nebula_store not yet
-    # present -> the dispatch must attempt the import (proves the branch is
-    # wired), which raises ModuleNotFoundError until Phase 1 lands it.
+def test_dispatch_nebula_returns_nebula_store(monkeypatch):
+    # Phase 1+ : nebula backend dispatches to build_nebula_graph_store.
+    # (Phase 0 asserted ModuleNotFoundError here, before nebula_store existed.)
+    import src.graph.nebula_store as nebula_mod
+
+    sentinel = object()
+    monkeypatch.setattr(nebula_mod, "build_nebula_graph_store", lambda: sentinel)
     monkeypatch.setattr(store_mod.settings.graph, "backend", "nebula", raising=False)
 
-    with pytest.raises(ModuleNotFoundError):
-        store_mod.build_graph_store()
+    assert store_mod.build_graph_store() is sentinel
