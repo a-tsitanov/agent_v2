@@ -1,8 +1,6 @@
 """CommunityReportVectorStore: Neo4j impl query/mapping + factory dispatch."""
 from __future__ import annotations
 
-import pytest
-
 import src.graph.community_vector_store as cvs
 
 
@@ -35,10 +33,18 @@ def test_factory_dispatches(monkeypatch):
     monkeypatch.setattr(cvs.settings.agent, "community_vector_backend", "native", raising=False)
     assert isinstance(cvs.build_community_report_vector_store(_FakeGraphStore([])),
                       cvs.Neo4jCommunityReportVectorStore)
-    # nebula -> milvus impl (Task 2 not landed yet in this task: the module
-    # doesn't exist, so dispatch raises ModuleNotFoundError from the lazy
-    # import). Task 2 reconciles this to the sentinel-patch form once
-    # src/graph/community_vector_store_milvus.py exists.
+
+    # nebula -> Milvus impl. Patch the class (which the factory lazily
+    # imports) to a sentinel so dispatch is verified DB-free — the real
+    # MilvusCommunityReportVectorStore constructor connects a MilvusClient
+    # eagerly.
+    import src.graph.community_vector_store_milvus as cvsm
+    sentinel = object()
+    monkeypatch.setattr(cvsm, "MilvusCommunityReportVectorStore", lambda *a, **k: sentinel)
     monkeypatch.setattr(cvs.settings.graph, "backend", "nebula", raising=False)
-    with pytest.raises(ModuleNotFoundError):
-        cvs.build_community_report_vector_store(_FakeGraphStore([]))
+    assert cvs.build_community_report_vector_store(_FakeGraphStore([])) is sentinel
+
+    # opt-in flag on the neo4j backend also routes to Milvus.
+    monkeypatch.setattr(cvs.settings.graph, "backend", "neo4j", raising=False)
+    monkeypatch.setattr(cvs.settings.agent, "community_vector_backend", "milvus", raising=False)
+    assert cvs.build_community_report_vector_store(_FakeGraphStore([])) is sentinel
