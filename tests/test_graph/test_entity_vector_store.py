@@ -47,8 +47,16 @@ def test_factory_dispatches_on_backend(monkeypatch):
     monkeypatch.setattr(evs.settings.agent, "er_vector_backend", "native", raising=False)
     assert isinstance(evs.build_entity_vector_store(_FakeGraphStore([])), evs.Neo4jEntityVectorStore)
 
+    # nebula -> Milvus impl. Patch the class (which the factory lazily
+    # imports) to a sentinel so dispatch is verified DB-free — the real
+    # MilvusEntityVectorStore constructor connects a MilvusClient eagerly.
+    import src.graph.entity_vector_store_milvus as evsm
+    sentinel = object()
+    monkeypatch.setattr(evsm, "MilvusEntityVectorStore", lambda *a, **k: sentinel)
     monkeypatch.setattr(evs.settings.graph, "backend", "nebula", raising=False)
-    import pytest
-    with pytest.raises(ModuleNotFoundError):
-        # Milvus impl arrives in Task 2; dispatch must ATTEMPT it under nebula.
-        evs.build_entity_vector_store(_FakeGraphStore([]))
+    assert evs.build_entity_vector_store(_FakeGraphStore([])) is sentinel
+
+    # opt-in flag on the neo4j backend also routes to Milvus.
+    monkeypatch.setattr(evs.settings.graph, "backend", "neo4j", raising=False)
+    monkeypatch.setattr(evs.settings.agent, "er_vector_backend", "milvus", raising=False)
+    assert evs.build_entity_vector_store(_FakeGraphStore([])) is sentinel
