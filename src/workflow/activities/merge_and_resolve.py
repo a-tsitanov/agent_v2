@@ -198,6 +198,16 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         activity.logger.info("merge_and_resolve resolving entities (ER)")
         embed_model = build_embedding_model()
         graph_store = build_graph_store()
+        from src.graph.entity_vector_store import (
+            Neo4jEntityVectorStore,
+            build_entity_vector_store,
+        )
+        # neo4j-native keeps the exact `_load_candidates_native` path (prod ER
+        # byte-for-byte unchanged, no upsert). Only a Milvus-backed store
+        # (GRAPH_BACKEND=nebula or opt-in AGENT_ER_VECTOR_BACKEND=milvus) routes
+        # ER candidate-kNN + canonical upsert through the EntityVectorStore seam.
+        _evs = build_entity_vector_store(graph_store)
+        vector_store = None if isinstance(_evs, Neo4jEntityVectorStore) else _evs
         pre_er_count = len(merged_entities)
         merged_entities, merged_relations, er_map = await resolve_entities(
             merged_entities,
@@ -218,6 +228,7 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
             # store (it exposes `structured_query`).  Cache stays
             # inactive when `er_verdict_cache_enabled` is off.
             er_store=graph_store,
+            vector_store=vector_store,
         )
         activity.heartbeat(
             {
