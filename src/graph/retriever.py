@@ -232,6 +232,29 @@ class GraphRetriever:
             pg_index, "property_graph_store", None,
         )
 
+    @classmethod
+    def for_store(
+        cls,
+        store,
+        *,
+        similarity_top_k: int = 10,
+        filter_polarity_temporal: bool = True,
+    ) -> GraphRetriever:
+        """Build a retriever backed only by a KbGraphStore (structured_query),
+        without a LlamaIndex PropertyGraphIndex. Used for the nebula backend:
+        awalk/afind_entities_by_name work over nGQL; the vector/synonym
+        `aretrieve` path is unavailable (Phase 3) and returns empty."""
+        r = cls.__new__(cls)
+        r._pg_index = None
+        r._retriever = None
+        r._retrievers = {}
+        r._similarity_top_k = similarity_top_k
+        r._include_text = True
+        r._default_path_depth = 1
+        r._filter_polarity_temporal = filter_polarity_temporal
+        r._graph_store = store
+        return r
+
     def _retriever_for(self, path_depth: int):
         """Return a retriever configured for ``path_depth`` (clamped to
         ``[1, GRAPH_PATH_DEPTH_MAX]``), building + caching on first use."""
@@ -253,6 +276,8 @@ class GraphRetriever:
         many triplet-hops of neighbours are pulled around each matched
         entity (None ⇒ the retriever's default, clamped ≤
         ``GRAPH_PATH_DEPTH_MAX``)."""
+        if self._retriever is None:
+            return RoundGraphData()
         retriever = (
             self._retriever if path_depth is None
             else self._retriever_for(path_depth)

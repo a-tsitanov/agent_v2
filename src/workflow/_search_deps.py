@@ -64,6 +64,16 @@ async def _build_graph_retriever_once(embed_model, llm):
         from src.graph.retriever import GraphRetriever
         from src.graph.store import build_graph_store
         gs = build_graph_store()
+        if settings.graph.backend == "nebula":
+            # Nebula: no LlamaIndex PropertyGraphStore; the retriever works
+            # over nGQL (awalk/afind). Vector/synonym aretrieve is Phase 3.
+            return GraphRetriever.for_store(
+                gs,
+                similarity_top_k=settings.agent.graph_similarity_top_k,
+                filter_polarity_temporal=(
+                    settings.agent.graph_walk_filter_polarity_temporal
+                ),
+            )
         pg = build_property_graph_index(
             graph_store=gs, embed_model=embed_model,
             extractor=build_kg_extractor(llm), nodes=None,
