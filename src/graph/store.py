@@ -115,6 +115,19 @@ def build_neo4j_graph_store() -> PropertyGraphStore:
     return _store
 
 
+def build_graph_store() -> PropertyGraphStore:
+    """Return the process-global graph store for the configured backend.
+
+    The single seam every graph caller goes through.  ``GRAPH_BACKEND``
+    (``settings.graph.backend``) selects the implementation; default
+    "neo4j" is unchanged behaviour.  "nebula" is wired in Phase 1."""
+    if settings.graph.backend == "nebula":
+        from src.graph.nebula_store import build_nebula_graph_store
+
+        return build_nebula_graph_store()
+    return build_neo4j_graph_store()
+
+
 def reset_neo4j_graph_store() -> None:
     """Drop the cached store (closing its driver) — shutdown + test hook."""
     global _store

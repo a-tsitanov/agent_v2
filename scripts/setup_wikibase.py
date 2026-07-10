@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 load_dotenv()
 
 from src.config import settings  # noqa: E402
-from src.graph.store import build_neo4j_graph_store  # noqa: E402
+from src.graph.store import build_graph_store  # noqa: E402
 from src.ingestion.identifiers import IdentifierType  # noqa: E402
 from src.utils.logging import configure_logging  # noqa: E402
 
@@ -291,7 +291,7 @@ def _persist_cache(
     property_pids: dict[str, tuple[str, str]],
 ) -> None:
     """Upsert ``:WikibaseBaseClass`` and ``:WikibaseProperty`` nodes."""
-    gs = build_neo4j_graph_store()
+    gs = build_graph_store()
     for label, qid in base_qids.items():
         if not qid:
             continue

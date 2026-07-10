@@ -31,7 +31,7 @@ async def test_write_article_threads_sources_and_max_relations():
     llm_pool = MagicMock()
     llm_pool.get.return_value = MagicMock()
 
-    with patch("src.graph.store.build_neo4j_graph_store", return_value=store), \
+    with patch("src.graph.store.build_graph_store", return_value=store), \
          patch("src.graph.wiki_context.read_entity_subgraph",
                return_value=ctx) as m_subgraph, \
          patch("src.graph.wiki_context.read_source_docs",

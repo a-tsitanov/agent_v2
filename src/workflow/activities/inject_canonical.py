@@ -7,7 +7,7 @@ import asyncio
 from loguru import logger
 from temporalio import activity
 
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.graph.write_retry import write_with_retry
 from src.ingestion.identifier_transform import inject_canonical_entities
 from src.workflow.contracts import Injected, Parsed
@@ -32,14 +32,14 @@ async def inject_canonical(parsed: Parsed) -> Injected:
     # write slow, and without an internal heartbeat a stuck connection
     # would outrun the heartbeat_timeout and tie up the admission slot.
     # BOTH the store construction AND the upsert run off the event loop
-    # via to_thread: build_neo4j_graph_store() does blocking driver I/O
+    # via to_thread: build_graph_store() does blocking driver I/O
     # (schema refresh + index DDL) and takes a process-global lock — doing
     # that ON the loop froze the heartbeater under contention, so the
     # pulse stopped and the activity hit timeout_type_heartbeat.
     async with heartbeat_every(
         _HEARTBEAT_INTERVAL_S, {"stage": "injecting", "chunks": len(nodes)}
     ):
-        graph_store = await asyncio.to_thread(build_neo4j_graph_store)
+        graph_store = await asyncio.to_thread(build_graph_store)
         # Retry transient hub-node lock/deadlock errors (see write_retry).
         await asyncio.to_thread(
             write_with_retry, inject_canonical_entities, graph_store, nodes

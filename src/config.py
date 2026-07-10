@@ -138,6 +138,35 @@ class Neo4jSettings(BaseSettings):
     query_log: bool = False
 
 
+class GraphSettings(BaseSettings):
+    """Which graph backend the store factory builds.
+
+    Strangler seam for the Neo4j -> NebulaGraph migration: every graph
+    caller goes through ``src.graph.store.build_graph_store()`` which
+    dispatches on this.  Default stays "neo4j" until per-workload parity
+    benchmarks pass (project policy: benchmark before adopting — mirrors
+    ``community_backend``)."""
+
+    model_config = SettingsConfigDict(env_prefix="GRAPH_", env_file=".env", extra="ignore")
+
+    backend: Literal["neo4j", "nebula"] = "neo4j"
+
+
+class NebulaSettings(BaseSettings):
+    """Connection to the NebulaGraph cluster (Phase 1+ write path).
+
+    Mirrors ``Neo4jSettings``'s shape — same fields, NebulaGraph's own
+    defaults (graphd port 9669, root/nebula, single space "kb")."""
+
+    model_config = SettingsConfigDict(env_prefix="NEBULA_", env_file=".env", extra="ignore")
+
+    host: str = "localhost"
+    port: int = 9669
+    user: str = "root"
+    password: SecretStr = SecretStr("nebula")
+    space: str = "kb"
+
+
 class PostgresSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="POSTGRES_", env_file=".env", extra="ignore")
 
@@ -1049,6 +1078,14 @@ class Settings(BaseSettings):
     @cached_property
     def neo4j(self) -> Neo4jSettings:
         return Neo4jSettings()
+
+    @cached_property
+    def graph(self) -> GraphSettings:
+        return GraphSettings()
+
+    @cached_property
+    def nebula(self) -> NebulaSettings:
+        return NebulaSettings()
 
     @cached_property
     def postgres(self) -> PostgresSettings:

@@ -195,12 +195,12 @@ async def _amain() -> None:
     args = _parse_args()
     configure_logging(level=settings.api.log_level)
 
-    from src.graph.store import build_neo4j_graph_store
+    from src.graph.store import build_graph_store
 
     types = (
         frozenset(args.types) if args.types else DEFAULT_IDENTIFIER_TYPES
     )
-    graph_store = build_neo4j_graph_store()
+    graph_store = build_graph_store()
     nodes = await collect_entity_nodes(graph_store, types)
     groups = group_by_canonical(nodes, types)
     if args.limit:

@@ -23,7 +23,7 @@ async def test_calls_inject_with_loaded_nodes():
         "src.workflow.activities.inject_canonical.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.inject_canonical.build_neo4j_graph_store",
+        "src.workflow.activities.inject_canonical.build_graph_store",
         return_value=graph_store,
     ), patch(
         "src.workflow.activities.inject_canonical.inject_canonical_entities",
@@ -58,7 +58,7 @@ async def test_store_built_off_the_event_loop():
         "src.workflow.activities.inject_canonical.build_staging_store",
         return_value=staging,
     ), patch(
-        "src.workflow.activities.inject_canonical.build_neo4j_graph_store",
+        "src.workflow.activities.inject_canonical.build_graph_store",
         _build,
     ), patch(
         "src.workflow.activities.inject_canonical.inject_canonical_entities",

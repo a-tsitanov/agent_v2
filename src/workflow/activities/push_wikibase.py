@@ -18,7 +18,7 @@ import asyncio
 from temporalio import activity
 
 from src.config import settings
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.storage.wikibase import AsyncWikibase, push_entities
 from src.workflow.contracts import Merged, WikibasePushed
 from src.workflow.heartbeat import heartbeat_every
@@ -48,7 +48,7 @@ async def push_wikibase(merged: Merged) -> WikibasePushed:
         entities, relations, _nodes = await asyncio.to_thread(
             staging.read_pickle, merged.merged_entities_uri,
         )
-        graph_store = build_neo4j_graph_store()
+        graph_store = build_graph_store()
 
         # Neo4j bootstrap-cache reads are sync — off the loop.
         base_class_qids = await asyncio.to_thread(_load_base_classes, graph_store)

@@ -26,6 +26,10 @@ from llama_index.core import PropertyGraphIndex
 from llama_index.core.schema import NodeWithScore
 from loguru import logger
 
+from src.config import settings
+from src.graph.nebula_store import _q as _nebula_q
+from src.graph.nebula_store import entity_vid
+
 # ── bounded multi-hop walk caps (R3) ─────────────────────────────────
 # Hard ceilings so a deep/dense traversal can never blow up the agent's
 # context. Enforced both in the Cypher LIMIT (server side) and again
@@ -151,6 +155,13 @@ LIMIT $limit
 """
 
 
+def _find_by_name_ngql(name: str) -> str:
+    return (
+        "LOOKUP ON `Entity` WHERE `Entity`.name == "
+        f"{_nebula_q(name)} YIELD id(vertex) AS vid, properties(vertex) AS p;"
+    )
+
+
 # Lucene special chars that must be backslash-escaped inside a query term.
 _LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/&|])')
 
@@ -232,6 +243,29 @@ class GraphRetriever:
             pg_index, "property_graph_store", None,
         )
 
+    @classmethod
+    def for_store(
+        cls,
+        store,
+        *,
+        similarity_top_k: int = 10,
+        filter_polarity_temporal: bool = True,
+    ) -> GraphRetriever:
+        """Build a retriever backed only by a KbGraphStore (structured_query),
+        without a LlamaIndex PropertyGraphIndex. Used for the nebula backend:
+        awalk/afind_entities_by_name work over nGQL; the vector/synonym
+        `aretrieve` path is unavailable (Phase 3) and returns empty."""
+        r = cls.__new__(cls)
+        r._pg_index = None
+        r._retriever = None
+        r._retrievers = {}
+        r._similarity_top_k = similarity_top_k
+        r._include_text = True
+        r._default_path_depth = 1
+        r._filter_polarity_temporal = filter_polarity_temporal
+        r._graph_store = store
+        return r
+
     def _retriever_for(self, path_depth: int):
         """Return a retriever configured for ``path_depth`` (clamped to
         ``[1, GRAPH_PATH_DEPTH_MAX]``), building + caching on first use."""
@@ -253,6 +287,8 @@ class GraphRetriever:
         many triplet-hops of neighbours are pulled around each matched
         entity (None ⇒ the retriever's default, clamped ≤
         ``GRAPH_PATH_DEPTH_MAX``)."""
+        if self._retriever is None:
+            return RoundGraphData()
         retriever = (
             self._retriever if path_depth is None
             else self._retriever_for(path_depth)
@@ -337,6 +373,21 @@ class GraphRetriever:
         if self._graph_store is None:
             return RoundGraphData()
 
+        if settings.graph.backend == "nebula":
+            safe_hops = max(1, min(int(hops), GRAPH_WALK_MAX_HOPS))
+            try:
+                rows = await asyncio.to_thread(
+                    self._graph_store.subgraph, entity_vid(start_entity), safe_hops,
+                )
+            except Exception as exc:
+                logger.warning("graph_walk (nebula) failed: {e}", e=exc)
+                return RoundGraphData()
+            out = self._map_walk_rows(rows)
+            if rel_filter:
+                allow = set(rel_filter)
+                out.relations = [r for r in out.relations if r.get("label") in allow]
+            return out
+
         safe_hops = max(1, min(int(hops), GRAPH_WALK_MAX_HOPS))
         params = {
             "name": start_entity,
@@ -380,6 +431,28 @@ class GraphRetriever:
         store / missing index / any error / blank query (never raises)."""
         if self._graph_store is None:
             return RoundGraphData()
+        if settings.graph.backend == "nebula":
+            cap = limit if limit is not None else self._similarity_top_k
+            try:
+                rows = await asyncio.to_thread(
+                    self._graph_store.structured_query, _find_by_name_ngql(query),
+                )
+            except Exception as exc:
+                logger.warning("find_entities_by_name (nebula) failed: {e}", e=exc)
+                return RoundGraphData()
+            out = RoundGraphData()
+            for row in (rows or [])[: int(cap)]:
+                p = (row or {}).get("p") or {}
+                name = p.get("name")
+                if not name:
+                    continue
+                out.entities.append({
+                    "entity_name": name,
+                    "entity_type": p.get("label") or "",
+                    "description": p.get("description") or "",
+                })
+            out.entities = _dedupe_entities(out.entities)
+            return out
         lucene = build_fulltext_query(query)
         if not lucene:
             return RoundGraphData()

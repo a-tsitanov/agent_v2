@@ -38,7 +38,7 @@ async def test_monitor_watch_calls_mark_watched():
     transport = ASGITransport(app=app)
     with (
         patch("src.api.routes.admin.mark_watched", _fake_mark_watched),
-        patch("src.api.routes.admin.build_neo4j_graph_store", return_value=MagicMock()),
+        patch("src.api.routes.admin.build_graph_store", return_value=MagicMock()),
     ):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             r = await ac.post(

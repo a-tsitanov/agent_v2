@@ -18,13 +18,13 @@ from src.analytics.ids import ID_TYPES
 from src.analytics.risk import compute_risk
 from src.config import settings
 from src.graph.analysis import _with_projection
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.retrieval.date_filters import today_epoch_days
 from src.workflow.heartbeat import heartbeat_every
 
 
 def _get_store() -> Any:
-    return build_neo4j_graph_store()
+    return build_graph_store()
 
 
 @activity.defn

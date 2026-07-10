@@ -35,9 +35,9 @@ RETURN DISTINCT c.doc_id AS doc_id
 def _get_store() -> Any | None:
     """Neo4j store or None when unreachable (indirected for monkeypatch)."""
     try:
-        from src.graph.store import build_neo4j_graph_store
+        from src.graph.store import build_graph_store
 
-        return build_neo4j_graph_store()
+        return build_graph_store()
     except Exception as exc:
         activity.logger.warning("documents_for_communities: store unavailable: %s", exc)
         return None

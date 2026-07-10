@@ -96,6 +96,7 @@ more-itertools==11.1.0
 multidict==6.7.1
 mwoauth==0.4.0
 mypy-extensions==1.1.0
+nebula3-python==3.8.2
 neo4j==5.28.4
 nest-asyncio==1.6.0
 networkx==3.6.1

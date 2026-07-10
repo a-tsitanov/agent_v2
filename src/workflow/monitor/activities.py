@@ -21,7 +21,7 @@ from src.analytics.contracts import DeliverIn, DeliverResult, MonitorIn, Monitor
 from src.analytics.events_burst import build_burst_cypher
 from src.config import settings
 from src.graph.alerts import upsert_alert
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.retrieval.date_filters import today_epoch_days
 from src.workflow.heartbeat import heartbeat_every
 from src.workflow.monitor.delivery import post_alert
@@ -46,7 +46,7 @@ _RISK_RISE_CYPHER = (
 
 
 def _get_store() -> Any:
-    return build_neo4j_graph_store()
+    return build_graph_store()
 
 
 @activity.defn

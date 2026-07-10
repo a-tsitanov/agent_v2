@@ -33,7 +33,7 @@ async def test_pulses_during_neo4j_upsert(monkeypatch):
         ic, "build_staging_store",
         lambda: types.SimpleNamespace(read_pickle=lambda _uri: [1, 2, 3]),
     )
-    monkeypatch.setattr(ic, "build_neo4j_graph_store", lambda: object())
+    monkeypatch.setattr(ic, "build_graph_store", lambda: object())
 
     def slow_upsert(_store, _nodes):
         time.sleep(0.3)  # blocking, runs in a thread — must be heartbeat-covered

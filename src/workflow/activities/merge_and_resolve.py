@@ -30,7 +30,7 @@ from src.graph.entity_resolution import ERConfig, resolve_entities
 from src.graph.event_merge import merge_events
 from src.graph.merge import merge_kg_extraction
 from src.graph.phone_consolidation import consolidate_phone_entities
-from src.graph.store import build_neo4j_graph_store
+from src.graph.store import build_graph_store
 from src.ingestion.embeddings import build_embedding_model
 from src.retrieval.llm_pool import get_llm_pool
 from src.workflow.contracts import DuplicateGroup, KGExtracted, Merged
@@ -197,7 +197,7 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
     if settings.agent.er_enabled:
         activity.logger.info("merge_and_resolve resolving entities (ER)")
         embed_model = build_embedding_model()
-        graph_store = build_neo4j_graph_store()
+        graph_store = build_graph_store()
         pre_er_count = len(merged_entities)
         merged_entities, merged_relations, er_map = await resolve_entities(
             merged_entities,

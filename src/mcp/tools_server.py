@@ -99,19 +99,32 @@ async def _init() -> None:
                 build_property_graph_index,
             )
             from src.graph.retriever import GraphRetriever
-            from src.graph.store import build_neo4j_graph_store
-            gs = build_neo4j_graph_store()
-            pg = build_property_graph_index(
-                graph_store=gs, embed_model=embed,
-                extractor=build_kg_extractor(llm), nodes=None,
-                llm=llm,  # local LiteLLM model for the retriever's synonym step
-            )
-            _deps["graph"] = GraphRetriever(
-                pg,
-                filter_polarity_temporal=(
-                    settings.agent.graph_walk_filter_polarity_temporal
-                ),
-            )
+            from src.graph.store import build_graph_store
+            gs = build_graph_store()
+            if settings.graph.backend == "nebula":
+                # Nebula has no LlamaIndex PropertyGraphStore; use the
+                # store-only retriever (nGQL awalk/find). Mirrors
+                # _search_deps._get_graph_retriever. Vector/synonym aretrieve
+                # is Phase 3.
+                _deps["graph"] = GraphRetriever.for_store(
+                    gs,
+                    similarity_top_k=settings.agent.graph_similarity_top_k,
+                    filter_polarity_temporal=(
+                        settings.agent.graph_walk_filter_polarity_temporal
+                    ),
+                )
+            else:
+                pg = build_property_graph_index(
+                    graph_store=gs, embed_model=embed,
+                    extractor=build_kg_extractor(llm), nodes=None,
+                    llm=llm,  # local LiteLLM model for the retriever's synonym step
+                )
+                _deps["graph"] = GraphRetriever(
+                    pg,
+                    filter_polarity_temporal=(
+                        settings.agent.graph_walk_filter_polarity_temporal
+                    ),
+                )
             # Raw store for the GDS analysis tools (need structured_query).
             _deps["graph_store"] = gs
         except Exception as exc:

@@ -26,9 +26,9 @@ router = APIRouter(prefix="/admin/graph", tags=["admin"])
 
 @functools.cache
 def _store() -> Any:
-    from src.graph.store import build_neo4j_graph_store
+    from src.graph.store import build_graph_store
 
-    return build_neo4j_graph_store()
+    return build_graph_store()
 
 
 @router.post("/stats", dependencies=[Depends(require_api_key)])

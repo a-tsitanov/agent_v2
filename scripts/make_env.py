@@ -208,6 +208,8 @@ _REFERENCE_HEADER = (
 # of truth is the inline comments / field names in src/config.py.  A coverage
 # guard test asserts EVERY iter_app_env_vars() var has an entry here.
 _ENV_DESCRIPTIONS: dict[str, str] = {
+    # ── GraphSettings (GRAPH_*) — выбор графового бэкенда ────────────
+    "GRAPH_BACKEND": "Графовый бэкенд, который строит фабрика store (strangler-шов миграции Neo4j→NebulaGraph): 'neo4j' (текущий) или 'nebula'. Дефолт 'neo4j' до прохождения бенчмарка паритета.",
     # ── AgentSettings (AGENT_*) — ручки search-эндпоинтов ────────────
     "AGENT_COMMUNITY_DYNAMIC_SELECTION": "Стратегия выбора сообществ для global/drift: lexical (по умолчанию) | semantic (kNN по report_vec) | descent (спуск по иерархии).",
     "AGENT_COMMUNITY_MAX_LEVELS": "Сколько уровней дендрограммы Leiden материализовать при build сообществ; 1 = одноуровневый, выше = иерархия (offline). Капа 1..10.",
@@ -322,6 +324,12 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "MONITOR_TASK_QUEUE": "Имя очереди Temporal для воркера монитор-свипа.",
     "MONITOR_WEBHOOK_TIMEOUT_S": "Таймаут POST на webhook доставки алертов, сек (> 0).",
     "MONITOR_WEBHOOK_URL": "URL генеричного webhook для доставки алертов (пусто — доставка выключена).",
+    # ── NebulaSettings (NEBULA_*) — граф (Phase-1 write-path бэкенд) ──
+    "NEBULA_HOST": "Хост NebulaGraph graphd.",
+    "NEBULA_PASSWORD": "Пароль NebulaGraph. Секрет; в проде сменить дефолт 'nebula'.",
+    "NEBULA_PORT": "Порт NebulaGraph graphd (по умолчанию 9669).",
+    "NEBULA_SPACE": "Имя графового space в NebulaGraph.",
+    "NEBULA_USER": "Пользователь NebulaGraph.",
     # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
     "NEO4J_DATABASE": "Имя базы Neo4j.",
     "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",

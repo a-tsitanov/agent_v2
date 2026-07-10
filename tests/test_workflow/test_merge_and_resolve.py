@@ -95,7 +95,7 @@ async def test_runs_er_when_enabled():
         "src.workflow.activities.merge_and_resolve.build_embedding_model",
         return_value=MagicMock(),
     ), patch(
-        "src.workflow.activities.merge_and_resolve.build_neo4j_graph_store",
+        "src.workflow.activities.merge_and_resolve.build_graph_store",
         return_value=MagicMock(),
     ), patch(
         "src.workflow.activities.merge_and_resolve.merge_kg_extraction",
