@@ -370,7 +370,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
     "TEMPORAL_ACTIVITY_CONCURRENCY": "Слотов активити на основной очереди kb-ingest.",
     "TEMPORAL_ANALYTICS_MATERIALIZE_CONCURRENCY": "GDS-воркеры для офлайн-материализации аналитики (centrality/link-prediction) на очереди kb-graph-build. >= 1.",
-    "TEMPORAL_COMMUNITY_BACKEND": "Движок детекции сообществ: 'gds' (Leiden в Neo4j, легаси) или 'leidenalg' (leidenalg/igraph в воркере, память вне Neo4j). Дефолт 'gds' до прохождения бенчмарка паритета.",
+    "TEMPORAL_COMMUNITY_BACKEND": "Движок детекции сообществ: 'gds' (Leiden в Neo4j, легаси), 'leidenalg' (leidenalg/igraph в воркере, память вне Neo4j) или 'graphscope' (распределённый Leiden через GraphScope, вне Neo4j/igraph). Дефолт 'gds' до прохождения бенчмарка паритета.",
     "TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY": "Число GDS-потоков для прогона Leiden; держать умеренным, чтобы rebuild не голодил Neo4j. >= 1.",
     "TEMPORAL_COMMUNITY_LEIDEN_GAMMA": "Resolution Leiden: >1 → больше мелких сообществ, <1 → меньше крупных. Только детекция, не query-путь. > 0.",
     "TEMPORAL_COMMUNITY_MIN_SIZE": "Сообщества мельче этого порога игнорируются (слишком мелкие для осмысленного summary — шум).",

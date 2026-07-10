@@ -412,7 +412,7 @@ class TemporalSettings(BaseSettings):
     # "leidenalg" = in-worker leidenalg/igraph (memory off Neo4j).  Default
     # stays "gds" until the strict-parity benchmark passes (project policy:
     # benchmark before adopting).
-    community_backend: Literal["gds", "leidenalg"] = "gds"
+    community_backend: Literal["gds", "leidenalg", "graphscope"] = "gds"
 
     @property
     def target(self) -> str:
