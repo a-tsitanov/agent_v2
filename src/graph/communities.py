@@ -47,6 +47,7 @@ from typing import Any
 from loguru import logger
 
 from src.config import settings
+from src.graph.community_graphscope import single_level_rows_graphscope
 from src.graph.community_leiden import (
     extract_entity_edges,
     hierarchy_rows,
@@ -407,6 +408,21 @@ async def _leiden_rows(
     )
 
 
+async def _graphscope_rows(
+    store: Any, *, gamma: float, seed: int = 19,
+) -> list[dict]:
+    """graphscope backend: stream edges + distributed single-level Leiden.
+
+    Same rows shape as ``_leiden_rows``/GDS (``[{name, communityId, ids}]``).
+    CPU/network-bound clustering runs in a thread so the activity event loop
+    (and its heartbeat) stays live, mirroring ``_leiden_rows``.
+    """
+    edges, names = await asyncio.to_thread(extract_entity_edges, store)
+    return await asyncio.to_thread(
+        single_level_rows_graphscope, edges, names, gamma=gamma, seed=seed,
+    )
+
+
 async def detect_communities(
     store: Any | None,
     *,
@@ -438,6 +454,13 @@ async def detect_communities(
             stats = {"nodes": len({r["name"] for r in rows}), "rels": -1}
         except Exception as exc:
             logger.error("communities: leidenalg detection FAILED: {e}", e=exc)
+            return []
+    elif settings.temporal.community_backend == "graphscope":
+        try:
+            rows = await _graphscope_rows(store, gamma=gamma)
+            stats = {"nodes": len({r["name"] for r in rows}), "rels": -1}
+        except Exception as exc:
+            logger.error("communities: graphscope detection FAILED: {e}", e=exc)
             return []
     else:
         # Unique per-call projection name so concurrent rebuilds don't collide.
@@ -510,7 +533,9 @@ async def detect_communities(
         # Detection still succeeded; surface what we grouped so the
         # workflow can at least attempt summaries.
     finally:
-        if settings.temporal.community_backend != "leidenalg":
+        # Only the GDS path allocates an in-memory projection (`graph_name`)
+        # that needs dropping; leidenalg/graphscope never define it.
+        if settings.temporal.community_backend not in ("leidenalg", "graphscope"):
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
 
