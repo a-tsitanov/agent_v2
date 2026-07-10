@@ -49,6 +49,14 @@ This is a **vertical slice**, not the full read-surface translation. It proves "
 - Community / global-search reads (`workflow/search/activities/*`), analytics primitives (`analytics/primitives/*`), `graph/analysis.py`, admin reads → later Phase-2 expansion.
 - The remaining ~60 read call-sites.
 
+## Known gaps to close before enabling `GRAPH_BACKEND=nebula` under load
+
+Surfaced by the whole-branch review; none blocks a neo4j-default merge, but each must be closed or accepted before nebula reads are turned on in any workload:
+
+- **`GET SUBGRAPH` has no server-side cap.** The neo4j walk enforces `LIMIT $node_cap` in-query; the nebula path fetches the whole N-hop subgraph into Python and caps only in `_map_walk_rows`. On a hub node at hops=3 this is an unbounded fetch/memory risk. Bound it (or accept it) as part of the parity/p95 benchmark gate.
+- **`rel_filter` is applied *after* the cap under nebula** (`retriever.py` awalk nebula branch). Neo4j filters relation types before `$edge_cap`; the nebula branch caps all types first, then filters — so on a dense >cap neighborhood a rare filtered type can be truncated away, diverging from neo4j. Push the filter into `subgraph()` / before the cap when productionizing the walk.
+- **Schema-evolution hazard:** `CREATE EDGE IF NOT EXISTS \`RELATED\`` does NOT add the `rel_type` column to a *pre-existing* nebula space's `RELATED` edge, so `upsert_relations` (which now writes `rel_type`) would fail there. Fine for a fresh space (the live gate drops it); for a real data migration, `ALTER EDGE RELATED ADD (rel_type string)` first. Also note: `LOOKUP` needs `REBUILD TAG INDEX entity_name_idx` to cover data written before the index existed.
+
 ## Interfaces produced
 
 - `nebula_schema.py`: `RELATED` DDL gains `rel_type string DEFAULT ''`.

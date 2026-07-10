@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from src.graph.nebula_store import entity_vid
-from src.graph.retriever import GraphRetriever, RoundGraphData
+from src.graph.retriever import GRAPH_WALK_MAX_HOPS, GraphRetriever, RoundGraphData
 
 
 class _FakeStore:
@@ -60,7 +60,7 @@ async def test_find_by_name_nebula_lookup(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_awalk_nebula_uses_subgraph(monkeypatch):
+async def test_awalk_nebula_uses_subgraph_and_clamps_hops(monkeypatch):
     monkeypatch.setattr(
         "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
     )
@@ -76,8 +76,9 @@ async def test_awalk_nebula_uses_subgraph(monkeypatch):
     }]
     store = _FakeStore(subgraph_rows=subgraph_rows)
     r = GraphRetriever.for_store(store)
-    out = await r.awalk("Иванов", hops=2)
-    assert store.last_subgraph_call == (entity_vid("Иванов"), 2, "RELATED")
+    # hops=999 must be clamped to GRAPH_WALK_MAX_HOPS before hitting subgraph.
+    out = await r.awalk("Иванов", hops=999)
+    assert store.last_subgraph_call == (entity_vid("Иванов"), GRAPH_WALK_MAX_HOPS, "RELATED")
     assert {e["entity_name"] for e in out.entities} == {"Иванов", "Москва"}
     assert out.relations == [{"src_id": "Иванов", "tgt_id": "Москва",
                               "label": "WORKS_AT", "polarity": "pos",
@@ -108,7 +109,7 @@ async def test_awalk_nebula_applies_rel_filter(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_awalk_nebula_clamps_hops_and_fails_open(monkeypatch):
+async def test_awalk_nebula_fails_open(monkeypatch):
     monkeypatch.setattr(
         "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
     )
