@@ -65,6 +65,8 @@ Build `report_store = build_community_report_vector_store(store)` and route the 
 
 `scripts/backfill_report_vec_milvus.py`: read `:Community` `report_vec`/`summary`/`id`/`level` (non-blank summary) from Neo4j → upsert to `community_report_vec` (dry-run default). Parity: a small optional native-vs-milvus check (report_vec set is far smaller than entities — a lightweight recall spot-check, or reuse the eval pattern). DB-free unit tests with a fake store.
 
+**Level-filter recall divergence (record for the parity benchmark / adoption gate):** the Neo4j `knn` does `queryNodes($limit)` THEN post-filters `WHERE node.level = $level`, so it can return FEWER than `limit` for the requested level; the Milvus `knn` applies `filter="level == N"` DURING search, so it returns up to `limit` for that level. Equivalent today (builds are mostly single-level, level 0), but they diverge once multi-level community hierarchies are live — the parity comparison must treat a per-level count difference as expected, not a regression (the Milvus during-search filter is arguably the more correct behavior).
+
 ### 7. Out of scope (deferred)
 
 - `descent` selection mode (Python cosine over `PARENT_OF`).
