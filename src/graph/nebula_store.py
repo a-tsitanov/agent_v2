@@ -100,6 +100,59 @@ class NebulaGraphStore:
             raise RuntimeError(f"nGQL failed: {resp.error_msg()}")
         return _rows_to_dicts(resp)
 
+    def subgraph(self, vid: str, hops: int, *, edge: str = "RELATED") -> list[dict]:
+        """Bounded GET SUBGRAPH from `vid`, mapped to the shape
+        GraphRetriever._map_walk_rows consumes: a single-element list
+        [{entities:[{name,label,description}], relations:[{src,tgt,label,
+        polarity,valid_from,valid_to}]}] with src/tgt as entity NAMES and
+        `label` taken from the edge's rel_type property."""
+        q = (
+            f"GET SUBGRAPH WITH PROP {int(hops)} STEPS FROM {_q(vid)} "
+            f"BOTH `{edge}` YIELD VERTICES AS nodes, EDGES AS rels;"
+        )
+        rs = self._session.execute(q)
+        if not rs.is_succeeded():
+            logger.warning("nebula subgraph failed: {e}", e=rs.error_msg())
+            return [{"entities": [], "relations": []}]
+        vid_name: dict[str, str] = {}
+        entities: list[dict] = []
+        edges: list[dict] = []
+        keys = rs.keys()
+        ni, ei = keys.index("nodes"), keys.index("rels")
+        for i in range(rs.row_size()):
+            row = rs.row_values(i)
+            for nv in row[ni].as_list():
+                node = nv.as_node()
+                nid = node.get_id().cast()
+                props = {k: v.cast() for k, v in node.properties(node.tags()[0]).items()}
+                name = props.get("name") or ""
+                vid_name[nid] = name
+                entities.append({
+                    "name": name,
+                    "label": props.get("label") or "",
+                    "description": props.get("description") or "",
+                })
+            for ev in row[ei].as_list():
+                e = ev.as_relationship()
+                ep = {k: v.cast() for k, v in e.properties().items()}
+                edges.append({
+                    "_src_id": e.start_vertex_id().cast(),
+                    "_tgt_id": e.end_vertex_id().cast(),
+                    "rel_type": ep.get("rel_type") or "",
+                    "polarity": ep.get("polarity"),
+                    "valid_from": ep.get("valid_from"),
+                    "valid_to": ep.get("valid_to"),
+                })
+        relations = [{
+            "src": vid_name.get(e["_src_id"], ""),
+            "tgt": vid_name.get(e["_tgt_id"], ""),
+            "label": e["rel_type"],
+            "polarity": e["polarity"],
+            "valid_from": e["valid_from"],
+            "valid_to": e["valid_to"],
+        } for e in edges]
+        return [{"entities": entities, "relations": relations}]
+
     def _exec(self, stmt: str) -> None:
         resp = self._session.execute(stmt)
         if not resp.is_succeeded():

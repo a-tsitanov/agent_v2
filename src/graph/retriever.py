@@ -28,6 +28,7 @@ from loguru import logger
 
 from src.config import settings
 from src.graph.nebula_store import _q as _nebula_q
+from src.graph.nebula_store import entity_vid
 
 # ── bounded multi-hop walk caps (R3) ─────────────────────────────────
 # Hard ceilings so a deep/dense traversal can never blow up the agent's
@@ -371,6 +372,21 @@ class GraphRetriever:
         """
         if self._graph_store is None:
             return RoundGraphData()
+
+        if settings.graph.backend == "nebula":
+            safe_hops = max(1, min(int(hops), GRAPH_WALK_MAX_HOPS))
+            try:
+                rows = await asyncio.to_thread(
+                    self._graph_store.subgraph, entity_vid(start_entity), safe_hops,
+                )
+            except Exception as exc:
+                logger.warning("graph_walk (nebula) failed: {e}", e=exc)
+                return RoundGraphData()
+            out = self._map_walk_rows(rows)
+            if rel_filter:
+                allow = set(rel_filter)
+                out.relations = [r for r in out.relations if r.get("label") in allow]
+            return out
 
         safe_hops = max(1, min(int(hops), GRAPH_WALK_MAX_HOPS))
         params = {
