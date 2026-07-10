@@ -26,6 +26,9 @@ from llama_index.core import PropertyGraphIndex
 from llama_index.core.schema import NodeWithScore
 from loguru import logger
 
+from src.config import settings
+from src.graph.nebula_store import _q as _nebula_q
+
 # ── bounded multi-hop walk caps (R3) ─────────────────────────────────
 # Hard ceilings so a deep/dense traversal can never blow up the agent's
 # context. Enforced both in the Cypher LIMIT (server side) and again
@@ -149,6 +152,13 @@ RETURN node.name AS name,
 ORDER BY score DESC
 LIMIT $limit
 """
+
+
+def _find_by_name_ngql(name: str) -> str:
+    return (
+        "LOOKUP ON `Entity` WHERE `Entity`.name == "
+        f"{_nebula_q(name)} YIELD id(vertex) AS vid, properties(vertex) AS p;"
+    )
 
 
 # Lucene special chars that must be backslash-escaped inside a query term.
@@ -405,6 +415,28 @@ class GraphRetriever:
         store / missing index / any error / blank query (never raises)."""
         if self._graph_store is None:
             return RoundGraphData()
+        if settings.graph.backend == "nebula":
+            cap = limit if limit is not None else self._similarity_top_k
+            try:
+                rows = await asyncio.to_thread(
+                    self._graph_store.structured_query, _find_by_name_ngql(query),
+                )
+            except Exception as exc:
+                logger.warning("find_entities_by_name (nebula) failed: {e}", e=exc)
+                return RoundGraphData()
+            out = RoundGraphData()
+            for row in (rows or [])[: int(cap)]:
+                p = (row or {}).get("p") or {}
+                name = p.get("name")
+                if not name:
+                    continue
+                out.entities.append({
+                    "entity_name": name,
+                    "entity_type": p.get("label") or "",
+                    "description": p.get("description") or "",
+                })
+            out.entities = _dedupe_entities(out.entities)
+            return out
         lucene = build_fulltext_query(query)
         if not lucene:
             return RoundGraphData()
