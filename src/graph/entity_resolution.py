@@ -1284,6 +1284,36 @@ async def _load_candidates_native(
     return list(seen.values())
 
 
+async def _load_candidates_via_store(
+    vector_store: Any, new_items: list[_Item], *, k: int,
+) -> list[_Item]:
+    """Per new entity, fetch k nearest canonicals from an EntityVectorStore,
+    dedup by name into stored _Items (mirrors _load_candidates_native but
+    backend-agnostic)."""
+    seen: dict[str, _Item] = {}
+    for it in new_items:
+        if not it.embedding:
+            continue
+        try:
+            cands = await asyncio.to_thread(vector_store.knn, list(it.embedding), int(k))
+        except Exception as exc:
+            logger.warning("ER vector-store kNN failed: {e}", e=exc)
+            continue
+        for c in cands or []:
+            name = c.get("name") or ""
+            emb = c.get("embedding") or []
+            if not name or name in seen or not emb:
+                continue
+            seen[name] = _Item(
+                name=name, norm=_normalize_entity_name(name),
+                label=c.get("label") or "Other",
+                description=c.get("description") or "",
+                mention_count=int(c.get("mention_count") or 1),
+                source="stored", embedding=list(emb),
+            )
+    return list(seen.values())
+
+
 # ── public entry point ─────────────────────────────────────────────
 
 
@@ -1297,6 +1327,7 @@ async def resolve_entities(
     graph_store: Any | None = None,
     config: ERConfig | None = None,
     er_store: Any | None = None,
+    vector_store: Any | None = None,
 ) -> tuple[list[EntityNode], list[Relation], dict[str, str]]:
     """Run ER over already-merged entities.
 
@@ -1319,6 +1350,14 @@ async def resolve_entities(
       * Any embed-model or LLM failure falls back to a no-op pass:
         return `(entities, relations, {})` so the ingest path
         keeps working.
+      * `vector_store`: optional `EntityVectorStore` (see
+        `src.graph.entity_vector_store`).  When `cfg.use_native_vector_knn`
+        is on AND a `vector_store` is given, candidate kNN is routed
+        through it (`_load_candidates_via_store`) instead of the native
+        Neo4j index, and resolved canonicals are upserted back into it.
+        `vector_store=None` (the default) preserves today's behaviour
+        exactly — native-index kNN via `_load_candidates_native`, or the
+        bounded-window `_load_existing_canonicals` when native kNN is off.
     """
     cfg = config or ERConfig()
     eligible = cfg.eligible_labels or None  # empty → all (minus deterministic)
@@ -1372,11 +1411,16 @@ async def resolve_entities(
     #    WHOLE graph (no window ceiling); otherwise the bounded
     #    mention_count window.
     if cfg.use_native_vector_knn:
-        from src.config import settings as _settings
+        if vector_store is not None:
+            stored_items = await _load_candidates_via_store(
+                vector_store, new_items, k=cfg.vector_knn_k,
+            )
+        else:
+            from src.config import settings as _settings
 
-        stored_items = await _load_candidates_native(
-            graph_store, new_items, k=cfg.vector_knn_k, dim=_settings.milvus.dim,
-        )
+            stored_items = await _load_candidates_native(
+                graph_store, new_items, k=cfg.vector_knn_k, dim=_settings.milvus.dim,
+            )
     else:
         stored_items = await _load_existing_canonicals(
             graph_store, limit=cfg.incremental_window,
@@ -1553,6 +1597,47 @@ async def resolve_entities(
         ent.properties["er_embedding"] = json.dumps(it.embedding)
         if cfg.use_native_vector_knn and it.embedding:
             ent.properties["er_vec"] = list(it.embedding)
+
+    # Persist newly-resolved canonicals to the (opt-in) vector store —
+    # mirrors what's just been written into er_vec/er_embedding above,
+    # so the NEXT ingest's candidate kNN sees them.  Upsert the ACTUAL
+    # post-merge canonical EntityNodes only: `new_canonical_entities`
+    # (one consolidated EntityNode per cluster that contains a new
+    # member — built by `_consolidate_cluster` above) plus the
+    # just-tagged singleton EntityNodes.  Deliberately NOT `all_items`:
+    # that list is the pre-merge candidate pool (new_items + stored
+    # candidates) and still contains non-canonical cluster members
+    # (merge losers) that must not re-enter the vector store as if
+    # they were canonicals.
+    if vector_store is not None and cfg.use_native_vector_knn:
+        canonical_entities_for_upsert: list[EntityNode] = list(new_canonical_entities)
+        canonical_entities_for_upsert.extend(
+            it.entity for it in new_items
+            if it.norm in singleton_norms and it.entity is not None
+        )
+        canon_cands: list[dict[str, Any]] = []
+        for cent in canonical_entities_for_upsert:
+            cprops = cent.properties or {}
+            emb = cprops.get("er_vec")
+            if not emb:
+                raw = cprops.get("er_embedding") or "[]"
+                try:
+                    emb = json.loads(raw) if isinstance(raw, str) else list(raw)
+                except json.JSONDecodeError:
+                    emb = []
+            if not emb:
+                continue
+            canon_cands.append({
+                "name": cent.name, "label": cent.label or "Other",
+                "embedding": list(emb),
+                "mention_count": int(cprops.get("mention_count") or 1),
+                "description": cprops.get("description") or "",
+            })
+        if canon_cands:
+            try:
+                await asyncio.to_thread(vector_store.upsert, canon_cands)
+            except Exception as exc:
+                logger.warning("ER vector-store upsert failed: {e}", e=exc)
 
     # Build output entity list.
     by_canonical_norm = {

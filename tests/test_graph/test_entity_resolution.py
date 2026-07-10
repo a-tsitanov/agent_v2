@@ -579,3 +579,33 @@ async def test_load_candidates_native_builds_deduped_items_from_knn() -> None:
     assert by_name["Stored A"].source == "stored"
     assert by_name["Stored B"].embedding == [0.0, 1.0]  # parsed from JSON
     assert by_name["Stored B"].label == "Organization"
+
+
+@pytest.mark.asyncio
+async def test_resolve_entities_uses_vector_store_knn_and_upsert(monkeypatch):
+    """When a vector_store is passed with native kNN on, ER pulls candidates
+    from store.knn and upserts canonicals to store.upsert."""
+    from src.graph.entity_resolution import ERConfig, resolve_entities
+
+    class _VS:
+        def __init__(self): self.knn_calls = 0; self.upserted = []
+        def knn(self, vec, k):
+            self.knn_calls += 1
+            return []          # no stored candidates -> within-batch ER only
+        def upsert(self, ents): self.upserted.extend(ents)
+
+    vs = _VS()
+    # one new entity; stub embed so it gets an embedding
+    ents = [EntityNode(name="Иванов", label="PERSON", properties={})]
+    async def _fake_embed(items, _model):
+        for it in items: it.embedding = [0.1, 0.2]
+        return True
+    monkeypatch.setattr("src.graph.entity_resolution._embed_entities", _fake_embed)
+
+    out_ents, _, _ = await resolve_entities(
+        ents, [], [], llm=object(), embed_model=object(), graph_store=None,
+        config=ERConfig(use_native_vector_knn=True, vector_knn_k=5),
+        vector_store=vs,
+    )
+    assert vs.knn_calls == 1          # queried the store for the new entity
+    assert len(vs.upserted) >= 1      # canonicals upserted to the vector store
