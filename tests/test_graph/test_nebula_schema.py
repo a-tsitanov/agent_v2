@@ -11,6 +11,7 @@ def test_space_and_core_schema_present():
     assert "CREATE TAG IF NOT EXISTS `Entity`" in joined
     for edge in ("RELATED", "MENTIONS", "IN_COMMUNITY", "PARENT_OF"):
         assert f"CREATE EDGE IF NOT EXISTS `{edge}`" in joined
+    assert "rel_type string" in "\n".join(SCHEMA_DDL)  # RELATED carries original type
 
 
 def test_ddl_is_idempotent():

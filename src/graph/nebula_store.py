@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import re
 import threading
 from typing import Any
 
@@ -22,18 +21,6 @@ from src.graph.nebula_schema import ensure_schema
 
 _store: NebulaGraphStore | None = None
 _lock = threading.Lock()
-
-_SAFE_EDGE_LABEL = re.compile(r"[A-Za-z0-9_]+")
-
-
-def _safe_edge_label(label: str) -> str:
-    """nGQL edge types are bare identifiers spliced into the query, so a
-    label must be a plain identifier. Fall back to RELATED for anything
-    unsafe — defense-in-depth so this module never trusts caller input.
-    (Whether a regex-safe label is a *declared* edge type is a separate
-    Phase-2 schema-mapping concern: Neo4j allows dynamic rel types, Nebula
-    requires pre-declared edge types — not handled here.)"""
-    return label if label and _SAFE_EDGE_LABEL.fullmatch(label) else "RELATED"
 
 
 def entity_vid(name: str) -> str:
@@ -80,13 +67,18 @@ class NebulaGraphStore:
 
     def upsert_relations(self, relations: list[Any]) -> None:
         for r in relations:
-            label = _safe_edge_label(getattr(r, "label", "RELATED") or "RELATED")
+            # Neo4j allows dynamic relationship types; Nebula needs declared
+            # edge types. Entity-entity relations all become `RELATED`, with
+            # the original type stored in the `rel_type` PROPERTY (a value,
+            # so no edge-identifier injection). See ADR / Phase-2 spec.
+            rel_type = getattr(r, "label", "") or ""
             props = getattr(r, "properties", {}) or {}
             src = entity_vid(getattr(r, "source_id", ""))
             tgt = entity_vid(getattr(r, "target_id", ""))
             stmt = (
-                f"INSERT EDGE `{label}` (polarity, valid_from, valid_to) VALUES "
+                "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to) VALUES "
                 f"{_q(src)} -> {_q(tgt)}:("
+                f"{_q(rel_type)}, "
                 f"{_q(props.get('polarity', ''))}, "
                 f"{int(props.get('valid_from', 0) or 0)}, "
                 f"{int(props.get('valid_to', 0) or 0)});"

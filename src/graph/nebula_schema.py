@@ -40,7 +40,8 @@ SCHEMA_DDL: list[str] = [
     "name string, description string, mention_count int DEFAULT 0, "
     "created_at int DEFAULT 0, label string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
-    "polarity string DEFAULT '', valid_from int DEFAULT 0, valid_to int DEFAULT 0);",
+    "rel_type string DEFAULT '', polarity string DEFAULT '', "
+    "valid_from int DEFAULT 0, valid_to int DEFAULT 0);",
     "CREATE EDGE IF NOT EXISTS `MENTIONS` (doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `IN_COMMUNITY` (level int DEFAULT 0);",
     "CREATE EDGE IF NOT EXISTS `PARENT_OF` ();",

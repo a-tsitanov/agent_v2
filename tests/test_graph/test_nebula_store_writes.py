@@ -48,28 +48,28 @@ def test_upsert_nodes_inserts_entity_vertex():
     assert "Иванов" in blob
 
 
-def test_upsert_relations_inserts_edge():
+def test_upsert_relations_inserts_related_with_rel_type():
     sess = _FakeSession()
     store = _store_with_session(sess)
     rel = SimpleNamespace(source_id="Иванов", target_id="Москва",
-                          label="RELATED", properties={"polarity": "pos"})
+                          label="WORKS_AT", properties={"polarity": "pos"})
     store.upsert_relations([rel])
     blob = "\n".join(sess.executed)
     assert "INSERT EDGE `RELATED`" in blob
     assert f'"{entity_vid("Иванов")}" -> "{entity_vid("Москва")}"' in blob
+    assert '"WORKS_AT"' in blob            # original type preserved as rel_type value
 
 
-def test_upsert_relations_rejects_unsafe_label():
+def test_upsert_relations_rel_type_is_a_value_not_identifier():
     sess = _FakeSession()
     store = _store_with_session(sess)
-    unsafe_label = 'RELATED`; DROP SPACE'
-    rel = SimpleNamespace(source_id="Иванов", target_id="Москва",
-                          label=unsafe_label, properties={"polarity": "pos"})
+    rel = SimpleNamespace(source_id="a", target_id="b",
+                          label='X`; DROP SPACE', properties={})
     store.upsert_relations([rel])
     blob = "\n".join(sess.executed)
-    assert "INSERT EDGE `RELATED`" in blob
-    assert unsafe_label not in blob
-    assert "DROP SPACE" not in blob
+    assert "INSERT EDGE `RELATED`" in blob     # always RELATED edge type
+    assert "INSERT EDGE `X" not in blob        # label never spliced as an edge-type identifier
+    assert len(sess.executed) == 1             # a single statement — no injected 2nd statement
 
 
 def test_q_escapes_newlines():
