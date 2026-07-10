@@ -1,6 +1,7 @@
 import asyncio
 
 import src.graph.communities as comm
+import src.graph.community_graphscope as cg
 
 
 def test_leidenalg_backend_produces_communityrefs(monkeypatch):
@@ -52,8 +53,10 @@ def test_graphscope_backend_produces_communityrefs(monkeypatch):
 
 
 def test_graphscope_backend_is_fail_safe(monkeypatch):
-    # A graphscope-side error must yield [] (logged), never raise, exactly
-    # like the leidenalg/GDS branches.
+    # Outer try/except belt-and-suspenders: even if something inside the
+    # graphscope branch RAISES outright (not the adapter's real fail-open
+    # path — see test below for that), detect_communities must still yield
+    # [] (logged), never propagate, exactly like the leidenalg/GDS branches.
     monkeypatch.setattr(comm.settings.temporal, "community_backend", "graphscope")
     monkeypatch.setattr(comm, "extract_entity_edges", lambda store, **kw: ([], []))
 
@@ -66,3 +69,37 @@ def test_graphscope_backend_is_fail_safe(monkeypatch):
             return []
     refs = asyncio.run(comm.detect_communities(_Store(), min_size=2, level=0))
     assert refs == []
+
+
+def test_graphscope_adapter_fail_open_does_not_write_mega_community(monkeypatch):
+    # This is the REAL fail-open path (the bug this whole test file exists
+    # to guard against): the GraphScope adapter never raises — it fail-opens
+    # to {} (import/API error inside _run_graphscope_community). Leave
+    # single_level_rows_graphscope REAL; only mock the adapter it wraps.
+    # Before the fix, membership={} would map EVERY name to communityId "0"
+    # via `.get(name, "0")`, producing a non-empty `rows` that sailed past
+    # the graphscope branch's try/except untouched, so detect_communities
+    # would PRUNE the prior :Community nodes and MERGE one garbage
+    # mega-community instead of no-op'ing. Assert it now no-ops to [].
+    monkeypatch.setattr(comm.settings.temporal, "community_backend", "graphscope")
+
+    def fake_extract(store, *, batch_size=50_000):
+        edges = [("a", "b", 5.0), ("b", "c", 5.0), ("a", "c", 5.0),
+                 ("x", "y", 5.0), ("y", "z", 5.0), ("x", "z", 5.0), ("c", "x", 0.1)]
+        return edges, list("abcxyz")
+    monkeypatch.setattr(comm, "extract_entity_edges", fake_extract)
+    monkeypatch.setattr(cg, "_run_graphscope_community",
+                        lambda edges, names, *, gamma, seed: {})
+
+    write_calls: list[str] = []
+
+    class _Store:
+        def structured_query(self, cypher, param_map=None):
+            write_calls.append(cypher)
+            return []
+    refs = asyncio.run(comm.detect_communities(_Store(), min_size=2, level=0))
+    assert refs == []
+    # The degenerate mega-community MERGE (one node holding every entity
+    # under communityId "0") must never be written — with rows == [],
+    # `communities` is empty so the write-back loop never iterates.
+    assert not any("MERGE (c:Community" in c for c in write_calls)

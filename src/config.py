@@ -409,9 +409,10 @@ class TemporalSettings(BaseSettings):
     community_leiden_concurrency: int = Field(default=4, ge=1)
 
     # Community-detection backend.  "gds" = in-Neo4j GDS Leiden (legacy);
-    # "leidenalg" = in-worker leidenalg/igraph (memory off Neo4j).  Default
-    # stays "gds" until the strict-parity benchmark passes (project policy:
-    # benchmark before adopting).
+    # "leidenalg" = in-worker leidenalg/igraph (memory off Neo4j); "graphscope"
+    # = distributed single-level Leiden off GraphScope (scales past a single
+    # worker).  Default stays "gds" until the strict-parity benchmark passes
+    # (project policy: benchmark before adopting).
     community_backend: Literal["gds", "leidenalg", "graphscope"] = "gds"
 
     @property

@@ -24,3 +24,18 @@ def test_rows_cover_edge_endpoint_names_and_default(monkeypatch):
     names = {r["name"] for r in rows}
     assert names == {"A", "Z"}                 # Z recovered from the edge
     assert {r["name"]: r["communityId"] for r in rows}["Z"] == "0"  # default
+
+
+def test_empty_membership_short_circuits_to_no_rows(monkeypatch):
+    # This is the REAL fail-open path: _run_graphscope_community fail-opens
+    # to {} (import/API error, never raises). Before the fix, every name
+    # would fall through membership.get(name, "0") and produce a non-empty
+    # list of rows all mapped to the single garbage community "0" — which
+    # detect_communities' graphscope branch would then happily persist as a
+    # destructive mega-community. The guard must short-circuit to [] instead,
+    # matching the leidenalg branch's raise->[] no-op semantics.
+    monkeypatch.setattr(cg, "_run_graphscope_community",
+                        lambda edges, names, *, gamma, seed: {})
+    edges = [("A", "B", 1.0), ("B", "C", 1.0)]
+    rows = cg.single_level_rows_graphscope(edges, ["A", "B", "C"], gamma=1.0)
+    assert rows == []

@@ -1,4 +1,3 @@
-# src/graph/community_graphscope.py
 """GraphScope community-detection backend (single-level Leiden, distributed).
 
 Mirrors community_leiden.py's single-level entry, but runs on GraphScope so
@@ -31,7 +30,9 @@ def _run_graphscope_community(
     load, and the algorithm call (native `leiden` if available, else
     `louvain`) — is finalized against the INSTALLED GraphScope on the cluster.
     Import is lazy so nothing here is needed for the DB-free unit tests (which
-    mock this whole function). Fail-open: any error -> {} (caller yields []).
+    mock this whole function). Fail-open: any error -> {} — the {} sentinel
+    is what tells `single_level_rows_graphscope`'s guard to short-circuit to
+    [] (a real, non-empty membership dict is never mistaken for a failure).
     """
     try:
         import graphscope  # noqa: F401  (lazy; heavy cluster dep)
@@ -56,6 +57,11 @@ def single_level_rows_graphscope(
     """Flat GraphScope partition -> rows [{name, communityId, ids:[cid]}]
     (same shape as community_leiden.single_level_rows)."""
     membership = _run_graphscope_community(edges, node_names, gamma=gamma, seed=seed)
+    if not membership:
+        # Adapter fail-open (import/API error) returns {} -> true no-op,
+        # matching the leidenalg branch's raise->[] semantics. A non-empty
+        # membership (even a single real community) is preserved as a result.
+        return []
     rows: list[dict] = []
     for name in _all_names(edges, node_names):
         cid = str(membership.get(name, "0"))
