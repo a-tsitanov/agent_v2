@@ -31,6 +31,7 @@ from typing import Any
 
 from temporalio import activity
 
+from src.graph.community_vector_store import build_community_report_vector_store
 from src.workflow.contracts import (
     DetectCommunitiesParams,
     DetectCommunitiesResult,
@@ -432,6 +433,26 @@ async def summarize_community_activity(
     #    (detect runs before any summarize on the same queue), so there's no
     #    per-community ensure here.
     report_vec = await _embed_report(title, summary)
+
+    # 3b. Mirror the report vector through the CommunityReportVectorStore
+    #     seam (fail-open — never blocks persistence below).  On the
+    #     default neo4j/native backend this is a no-op (report_vec is
+    #     persisted on the :Community node by _WRITE_REPORT_CYPHER below);
+    #     under an opt-in Milvus backend this is the actual write.
+    if report_vec is not None:
+        try:
+            report_store = build_community_report_vector_store(store)
+            await asyncio.to_thread(report_store.upsert, [{
+                "community_id": params.community_id,
+                "level": params.level,
+                "summary": summary,
+                "embedding": report_vec,
+            }])
+        except Exception as exc:
+            activity.logger.warning(
+                "summarize_community_activity  cid=%s  report vec upsert err=%s",
+                params.community_id, exc,
+            )
 
     # 4. Persist the report (idempotent MERGE on id+level).
     persisted = False

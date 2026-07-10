@@ -206,6 +206,87 @@ async def test_summarize_persists_without_vec_on_embed_failure(monkeypatch):
     assert write["report_vec"] is None
 
 
+class _FakeReportStore:
+    """Records ``upsert`` calls; ``knn`` must never be called on the write path."""
+
+    def __init__(self, raise_=False):
+        self.upserts: list[list[dict]] = []
+        self._raise = raise_
+
+    def knn(self, query_vec, *, level, limit):
+        raise AssertionError("the WRITE path must never knn")
+
+    def upsert(self, reports):
+        self.upserts.append(reports)
+        if self._raise:
+            raise RuntimeError("milvus down")
+
+
+@pytest.mark.asyncio
+async def test_summarize_upserts_report_vec_through_store(monkeypatch):
+    store = _FakeStore(member_rows=[{"name": "A", "description": "x"}])
+    report_store = _FakeReportStore()
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(
+        community_mod, "build_community_report_vector_store", lambda s: report_store,
+    )
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="2", level=0, member_count=1,
+    ))
+
+    assert out.persisted is True
+    assert len(report_store.upserts) == 1
+    [report] = report_store.upserts[0]
+    assert report["community_id"] == "2"
+    assert report["level"] == 0
+    assert report["summary"] == out.summary
+    assert isinstance(report["embedding"], list)
+
+
+@pytest.mark.asyncio
+async def test_summarize_upsert_failopen_on_store_error(monkeypatch):
+    store = _FakeStore(member_rows=[{"name": "A", "description": "x"}])
+    report_store = _FakeReportStore(raise_=True)
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(
+        community_mod, "build_community_report_vector_store", lambda s: report_store,
+    )
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="3", level=0, member_count=1,
+    ))
+    # the seam's upsert raised, but the activity stays fail-open: the
+    # Neo4j report write still persisted and no exception escaped.
+    assert out.persisted is True
+    assert len(report_store.upserts) == 1
+
+
+@pytest.mark.asyncio
+async def test_summarize_skips_upsert_when_embed_failed(monkeypatch):
+    store = _FakeStore(member_rows=[{"name": "A", "description": "x"}])
+    report_store = _FakeReportStore()
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(
+        community_mod, "build_community_report_vector_store", lambda s: report_store,
+    )
+
+    class _BoomEmbed:
+        async def aget_text_embedding(self, _t):
+            raise RuntimeError("embed down")
+
+    monkeypatch.setattr(community_mod, "_get_embed_model", lambda: _BoomEmbed())
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="4", level=0, member_count=1,
+    ))
+    assert out.persisted is True
+    assert report_store.upserts == []
+
+
 @pytest.mark.asyncio
 async def test_summarize_failsafe_on_llm_error(monkeypatch):
     store = _FakeStore(member_rows=[{"name": "A", "description": "x"}])
