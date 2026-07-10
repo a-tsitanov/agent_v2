@@ -640,6 +640,12 @@ class AgentSettings(BaseSettings):
     # Neighbours fetched per new entity from the ER vector index when
     # native kNN is on.
     er_vector_knn_k: int = Field(default=20, ge=1, le=100)
+    # Where the ER candidate-kNN vectors live. "native" = Neo4j in-graph
+    # vector index (db.index.vector, unchanged prod path). "milvus" =
+    # entity_er_vec Milvus collection (opt-in on neo4j for the parity
+    # benchmark; FORCED under GRAPH_BACKEND=nebula, which has no in-graph
+    # index). Dispatched in src/graph/entity_vector_store.py.
+    er_vector_backend: Literal["native", "milvus"] = "native"
     # Pre-submit coverage check: when the agent picks submit_answer, an
     # LLM first judges whether the gathered evidence fully covers the
     # question; if not, the named gap is fed back and one more retrieval
