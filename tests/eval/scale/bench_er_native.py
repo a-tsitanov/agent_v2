@@ -35,6 +35,7 @@ Milvus only, never prod.
 """
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 
@@ -120,7 +121,7 @@ def bench_native_vs_window(
             _load(s, corpus, mention_counts, dim)
             lat: list[float] = []
             native_hit = 0
-            for q, t in zip(queries, truth):
+            for q, t in zip(queries, truth, strict=False):
                 t0 = time.perf_counter()
                 res = s.run(
                     f"CALL db.index.vector.queryNodes('{_INDEX}', $k, $q) "
@@ -217,7 +218,7 @@ def bench_milvus_vs_native(
 
         lat: list[float] = []
         milvus_hit = 0
-        for q, t in zip(queries, truth):
+        for q, t in zip(queries, truth, strict=False):
             t0 = time.perf_counter()
             hits = store.knn(q.tolist(), knn_k)
             lat.append((time.perf_counter() - t0) * 1000.0)
@@ -225,10 +226,8 @@ def bench_milvus_vs_native(
             if t in hit_ids:
                 milvus_hit += 1
     finally:
-        try:
+        with contextlib.suppress(Exception):
             client.drop_collection(collection_name=collection)
-        except Exception:
-            pass
         client.close()
 
     return {
