@@ -178,6 +178,57 @@ async def test_select_communities_semantic_failsafe_on_error():
     assert refs == []
 
 
+# ── select_communities_semantic routes through the report-vec store seam ──
+
+
+class _FakeReportStore:
+    """Records ``knn`` calls; returns canned ``CommunityRef``-shaped rows."""
+
+    def __init__(self, refs=None, raise_=False):
+        self._refs = refs if refs is not None else []
+        self._raise = raise_
+        self.calls: list[tuple[list[float], int, int]] = []
+
+    def knn(self, query_vec, *, level, limit):
+        self.calls.append((query_vec, level, limit))
+        if self._raise:
+            raise RuntimeError("vector store down")
+        return self._refs
+
+    def upsert(self, reports):
+        raise AssertionError("the READ path must never upsert")
+
+
+@pytest.mark.asyncio
+async def test_select_communities_semantic_routes_through_report_store(monkeypatch):
+    refs = [
+        {"community_id": "7", "level": 0, "summary": "строители"},
+        {"community_id": "8", "level": 0, "summary": "поставщики"},
+    ]
+    report_store = _FakeReportStore(refs=refs)
+    monkeypatch.setattr(
+        gs_mod, "build_community_report_vector_store", lambda store: report_store,
+    )
+    out = await select_communities_semantic(
+        object(), [0.1, 0.2], level=0, limit=5,
+    )
+    assert [r.community_id for r in out] == ["7", "8"]
+    assert all(isinstance(r, CommunitySummaryRef) for r in out)
+    assert out[0].summary == "строители"
+    # the query vec + level/limit kwargs were passed through to the seam.
+    assert report_store.calls == [([0.1, 0.2], 0, 5)]
+
+
+@pytest.mark.asyncio
+async def test_select_communities_semantic_failopen_when_seam_knn_raises(monkeypatch):
+    report_store = _FakeReportStore(raise_=True)
+    monkeypatch.setattr(
+        gs_mod, "build_community_report_vector_store", lambda store: report_store,
+    )
+    out = await select_communities_semantic(object(), [0.1], level=0, limit=5)
+    assert out == []
+
+
 # ── _cosine (pure) ──────────────────────────────────────────────────
 
 

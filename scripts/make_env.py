@@ -213,6 +213,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     # ── AgentSettings (AGENT_*) — ручки search-эндпоинтов ────────────
     "AGENT_COMMUNITY_DYNAMIC_SELECTION": "Стратегия выбора сообществ для global/drift: lexical (по умолчанию) | semantic (kNN по report_vec) | descent (спуск по иерархии).",
     "AGENT_COMMUNITY_MAX_LEVELS": "Сколько уровней дендрограммы Leiden материализовать при build сообществ; 1 = одноуровневый, выше = иерархия (offline). Капа 1..10.",
+    "AGENT_COMMUNITY_VECTOR_BACKEND": "Где живут community-report вектора для semantic community-select: 'native' (Neo4j in-graph индекс) или 'milvus' (коллекция community_report_vec). Под GRAPH_BACKEND=nebula форсится 'milvus'. Дефолт 'native'.",
     "AGENT_CONVERSATION_HISTORY_ENABLED": "Учитывать историю диалога (мультитёрн): прежние реплики переписывают запрос в standalone-форму перед поиском. Пустая история = single-shot.",
     "AGENT_COVERAGE_CHECK_ENABLED": "Pre-submit coverage-check: перед ответом LLM судит, покрывают ли собранные данные вопрос; при пробеле делается ещё один раунд поиска.",
     "AGENT_ER_ENABLED": "Entity Resolution: дополнительный шаг между merge_kg_extraction и PropertyGraphIndex, схлопывающий семантические дубликаты в один canonical-сущность.",

@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 from temporalio import activity
 
+from src.graph.community_vector_store import build_community_report_vector_store
 from src.workflow.contracts import (
     CommunitySummaryRef,
     MapCommunitiesParams,
@@ -49,16 +50,11 @@ ORDER BY member_count DESC, community_id ASC
 """
 
 # Semantic selection (v1): kNN over the structured community report
-# vectors (``c.report_vec``, indexed as ``community_report_vec``).
-# ``queryNodes`` already returns nearest-first; ``ORDER BY score DESC`` is
-# belt-and-suspenders.  Skip empty/unsummarised communities so the MAP
-# step never fans out over a blank summary.
-_SELECT_SEMANTIC_CYPHER = """
-CALL db.index.vector.queryNodes('community_report_vec', $limit, $vec) YIELD node, score
-WHERE node.level = $level AND node.summary IS NOT NULL AND trim(node.summary) <> ''
-RETURN node.id AS community_id, node.level AS level, node.summary AS summary
-ORDER BY score DESC
-"""
+# vectors, routed through ``CommunityReportVectorStore.knn`` (the
+# ``_SELECT_SEMANTIC_CYPHER`` this used to issue directly now lives
+# canonically in ``src/graph/community_vector_store.py`` — the Neo4j impl
+# wraps it verbatim, so the behaviour is unchanged; see
+# ``select_communities_semantic`` below).
 
 # Hierarchy-descent selection (v2): start at the coarsest level (0) and
 # greedily descend the ``PARENT_OF`` tree (coarse→fine) toward the most
@@ -127,13 +123,17 @@ async def select_communities_semantic(
     """kNN over the community report vectors → ``CommunitySummaryRef``s for
     ``level``, nearest-first, capped at ``limit`` (the queryNodes ``k``).
 
-    Same output shape as ``rank_summaries``.  Fail-open: returns ``[]`` on
-    ANY error so the caller can fall back to the lexical path."""
+    Routes through the ``CommunityReportVectorStore`` seam: the Neo4j impl
+    wraps ``_SELECT_SEMANTIC_CYPHER`` verbatim (identical behaviour to the
+    pre-seam direct-cypher path); a Milvus-backed store (nebula backend, or
+    opt-in ``community_vector_backend="milvus"``) searches its own
+    collection instead.  Same output shape as ``rank_summaries``.
+    Fail-open: returns ``[]`` on ANY error (store-build, knn, or mapping)
+    so the caller can fall back to the lexical path."""
     try:
+        report_store = build_community_report_vector_store(store)
         rows = await asyncio.to_thread(
-            store.structured_query,
-            _SELECT_SEMANTIC_CYPHER,
-            {"vec": query_vec, "level": level, "limit": max(0, limit)},
+            report_store.knn, query_vec, level=level, limit=max(0, limit),
         )
         rows = list(rows or [])
     except Exception as exc:
