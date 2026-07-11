@@ -10,7 +10,9 @@ hash-check/title-write, and ``admin.py``'s mark-all-dirty). Those call
 sites still hold their own (transitionally duplicated) copies of the
 constants — Task 4 rewires them through this seam.
 
-``NebulaWikiGraphOps`` is a stub for Task 3.
+``NebulaWikiGraphOps`` translates the same ops to nGQL; chunk-dependent
+reads (`read_citations`/`read_source_docs`) return `[]` under nebula
+(chunks are not nebula graph nodes — deferred, like doc↔community).
 """
 from __future__ import annotations
 
@@ -173,15 +175,25 @@ class NebulaWikiGraphOps:
         self._store = store
 
     def mark_dirty(self, names: list[str]) -> None:
+        from loguru import logger
+
         from src.graph.nebula_store import _q, entity_vid
 
         now = int(time.time() * 1000)
         for name in names:
             vid = entity_vid(name)
-            self._store.structured_query(
-                f"UPDATE VERTEX ON `Entity` {_q(vid)} SET "
-                f"wiki_dirty = true, wiki_dirty_at = {now};"
-            )
+            # Per-name resilience: nebula UPDATE VERTEX RAISES on a missing
+            # vertex (neo4j MATCH...SET no-ops), and mark_dirty is called with
+            # relation endpoints that may reference an ER-merged-away entity
+            # with no live vertex. Catch per-name so one missing name doesn't
+            # abort the rest of the batch (matches neo4j's batch no-op-on-missing).
+            try:
+                self._store.structured_query(
+                    f"UPDATE VERTEX ON `Entity` {_q(vid)} SET "
+                    f"wiki_dirty = true, wiki_dirty_at = {now};"
+                )
+            except Exception as exc:
+                logger.debug("mark_dirty: skipped {n} (no live vertex?): {e}", n=name, e=exc)
 
     def select_dirty(self, limit: int) -> list[str]:
         rows = self._store.structured_query(

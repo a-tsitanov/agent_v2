@@ -415,3 +415,28 @@ def test_nebula_write_page_title_issues_update_vertex():
     assert "UPDATE VERTEX ON `Entity`" in stmt
     assert entity_vid("A") in stmt
     assert 'SET wiki_page_title = "T"' in stmt
+
+
+def test_nebula_mark_dirty_resilient_to_missing_vertex():
+    """nebula UPDATE VERTEX raises on a missing vertex; mark_dirty must catch
+    per-name so one missing/merged-away name doesn't abort the whole batch
+    (matches neo4j's batch no-op-on-missing)."""
+    import src.graph.wiki_graph_ops as wg
+    from src.graph.nebula_store import entity_vid
+
+    class _RaiseOnFirst:
+        def __init__(self):
+            self.updated = []
+        def structured_query(self, query, param_map=None):
+            assert not param_map
+            if entity_vid("Gone") in query:
+                raise RuntimeError("Storage Error: Vertex or edge not found.")
+            self.updated.append(query)
+            return []
+
+    store = _RaiseOnFirst()
+    wg.NebulaWikiGraphOps(store).mark_dirty(["Gone", "Alive"])
+    # the missing one raised internally but was swallowed; Alive still updated
+    joined = "\n".join(store.updated)
+    assert entity_vid("Alive") in joined, "surviving name must still be marked"
+    assert entity_vid("Gone") not in joined
