@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+import src.graph.community_leiden as community_leiden
 from src.graph.community_leiden import extract_entity_edges
 
 
@@ -107,3 +108,43 @@ def test_high_degree_source_no_edges_dropped():
     assert targets == {"B", "C", "D", "E"}, (
         f"Expected all 4 targets of 'A', got: {targets}"
     )
+
+
+# --- Seam routing: extract_entity_edges dispatches through
+# build_graph_edge_export rather than owning any pagination logic itself. ---
+
+
+class _FakeExport:
+    """Records stream_names/stream_edges calls; canned return values."""
+
+    def __init__(self, names, edges):
+        self._names = names
+        self._edges = edges
+        self.stream_names_calls: list[dict] = []
+        self.stream_edges_calls: list[dict] = []
+
+    def stream_names(self, *, batch_size):
+        self.stream_names_calls.append({"batch_size": batch_size})
+        return self._names
+
+    def stream_edges(self, *, batch_size, names=None):
+        self.stream_edges_calls.append({"batch_size": batch_size, "names": names})
+        return self._edges
+
+
+def test_extract_entity_edges_routes_through_graph_edge_export_seam(monkeypatch):
+    fake_names = ["A", "B", "C"]
+    fake_edges = [("A", "B", 2.0), ("B", "C", 1.0)]
+    fake_export = _FakeExport(fake_names, fake_edges)
+
+    monkeypatch.setattr(
+        community_leiden, "build_graph_edge_export", lambda store: fake_export,
+    )
+
+    result = extract_entity_edges(object(), batch_size=123)
+
+    assert fake_export.stream_names_calls == [{"batch_size": 123}]
+    assert fake_export.stream_edges_calls == [
+        {"batch_size": 123, "names": fake_names},
+    ]
+    assert result == (fake_edges, fake_names)

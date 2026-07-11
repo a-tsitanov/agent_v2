@@ -35,7 +35,9 @@ LIMIT $limit
 class GraphEdgeExport(Protocol):
     def stream_names(self, *, batch_size: int) -> list[str]: ...
 
-    def stream_edges(self, *, batch_size: int) -> list[tuple[str, str, float]]: ...
+    def stream_edges(
+        self, *, batch_size: int, names: list[str] | None = None,
+    ) -> list[tuple[str, str, float]]: ...
 
 
 class Neo4jGraphEdgeExport:
@@ -66,7 +68,14 @@ class Neo4jGraphEdgeExport:
                 break
         return names
 
-    def stream_edges(self, *, batch_size: int) -> list[tuple[str, str, float]]:
+    def stream_edges(
+        self, *, batch_size: int, names: list[str] | None = None,
+    ) -> list[tuple[str, str, float]]:
+        # `names` is accepted for Protocol parity with NebulaGraphEdgeExport
+        # but IGNORED here — neo4j runs its own self-contained _EDGES_CYPHER
+        # query and never needs the node-name set up front. Behaviour
+        # unchanged from the pre-seam implementation.
+        #
         # Edge pagination uses elementId(r) as cursor — elementId is unique
         # per relationship, so the cursor strictly advances every page
         # regardless of how many edges share the same source node.  A
@@ -129,10 +138,17 @@ class NebulaGraphEdgeExport:
                 break
         return names
 
-    def stream_edges(self, *, batch_size: int) -> list[tuple[str, str, float]]:
+    def stream_edges(
+        self, *, batch_size: int, names: list[str] | None = None,
+    ) -> list[tuple[str, str, float]]:
         from src.graph.nebula_store import _chunks, _q, entity_vid
 
-        names = self.stream_names(batch_size=batch_size)
+        # If the caller already streamed the node names (the common case —
+        # extract_entity_edges always calls stream_names first), reuse them
+        # and SKIP the internal re-scan. Only fall back to our own LOOKUP
+        # scan when called standalone with names=None.
+        if names is None:
+            names = self.stream_names(batch_size=batch_size)
         vid2name = {entity_vid(n): n for n in names}
 
         edges: list[tuple[str, str, float]] = []

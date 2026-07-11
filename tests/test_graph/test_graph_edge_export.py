@@ -94,6 +94,19 @@ def test_neo4j_stream_edges_stops_when_cursor_does_not_advance():
     assert edges == [("X", "X", 1.0)]
 
 
+def test_neo4j_stream_edges_ignores_names_still_issues_edges_cypher():
+    # neo4j runs its own self-contained _EDGES_CYPHER query; a `names` list
+    # passed in must be ignored — behaviour identical to names=None.
+    pages = [[{"src": "A", "tgt": "B", "weight": 2.0, "cursor": "r1"}]]
+    store = _RecStore(edge_pages=pages)
+    exp = gee.Neo4jGraphEdgeExport(store)
+
+    edges = exp.stream_edges(batch_size=10, names=["A", "B", "unused"])
+
+    assert edges == [("A", "B", 2.0)]
+    assert store.calls == [(gee._EDGES_CYPHER, {"after": "", "limit": 10})]
+
+
 # --- Nebula: nGQL keyset LOOKUP + batched GO ----------------------------
 
 
@@ -123,15 +136,43 @@ def test_nebula_stream_names_no_param_map():
     # got here without AssertionError, the seam is inline-only as required.
 
 
-def test_nebula_stream_edges_go_over_related_maps_vids_drops_dangling_defaults_weight():
+def test_nebula_stream_edges_with_names_skips_internal_name_scan():
+    # Single-scan path: caller already streamed `names` (the real usage via
+    # extract_entity_edges) -> stream_edges must NOT re-issue the LOOKUP
+    # name-scan, only the GO edge queries.
     vid_a, vid_b = entity_vid("A"), entity_vid("B")
     dangling_vid = entity_vid("ghost")  # not a member of the exported name set
 
-    lookup_pages = [[{"name": "A"}, {"name": "B"}]]  # single page, short -> stop
     go_pages = [[
         {"s": vid_a, "d": vid_b, "w": 3.0},        # known edge, explicit weight
         {"s": vid_a, "d": dangling_vid, "w": 2.0},  # dangling endpoint -> dropped
         {"s": vid_b, "d": vid_a, "w": None},        # known edge, weight defaults to 1.0
+    ]]
+    store = _RecNebula(go_pages=go_pages)  # no lookup_pages: LOOKUP must never fire
+    exp = gee.NebulaGraphEdgeExport(store)
+
+    edges = exp.stream_edges(batch_size=10, names=["A", "B"])
+
+    assert edges == [("A", "B", 3.0), ("B", "A", 1.0)]
+    lookup_stmts = [s for s in store.stmts if s.startswith("LOOKUP ON")]
+    go_stmts = [s for s in store.stmts if s.startswith("GO FROM")]
+    assert lookup_stmts == [], "names was supplied — must not re-scan via LOOKUP"
+    assert len(go_stmts) == 1
+    assert "OVER `RELATED` YIELD" in go_stmts[0]
+    assert "src(edge) AS s, dst(edge) AS d, `RELATED`.weight AS w" in go_stmts[0]
+
+
+def test_nebula_stream_edges_names_none_falls_back_to_internal_stream_names():
+    # Fallback path: names=None -> stream_edges internally calls
+    # stream_names(...) (today's behaviour), issuing the LOOKUP scan.
+    vid_a, vid_b = entity_vid("A"), entity_vid("B")
+    dangling_vid = entity_vid("ghost")
+
+    lookup_pages = [[{"name": "A"}, {"name": "B"}]]  # single page, short -> stop
+    go_pages = [[
+        {"s": vid_a, "d": vid_b, "w": 3.0},
+        {"s": vid_a, "d": dangling_vid, "w": 2.0},  # dangling endpoint -> dropped
+        {"s": vid_b, "d": vid_a, "w": None},
     ]]
     store = _RecNebula(lookup_pages=lookup_pages, go_pages=go_pages)
     exp = gee.NebulaGraphEdgeExport(store)
@@ -139,23 +180,22 @@ def test_nebula_stream_edges_go_over_related_maps_vids_drops_dangling_defaults_w
     edges = exp.stream_edges(batch_size=10)
 
     assert edges == [("A", "B", 3.0), ("B", "A", 1.0)]
+    lookup_stmts = [s for s in store.stmts if s.startswith("LOOKUP ON")]
     go_stmts = [s for s in store.stmts if s.startswith("GO FROM")]
+    assert len(lookup_stmts) == 1, "names=None must fall back to the internal LOOKUP scan"
     assert len(go_stmts) == 1
-    assert "OVER `RELATED` YIELD" in go_stmts[0]
-    assert "src(edge) AS s, dst(edge) AS d, `RELATED`.weight AS w" in go_stmts[0]
 
 
 def test_nebula_stream_edges_chunks_go_calls_by_batch_size():
     vid_a, vid_b, vid_c = entity_vid("A"), entity_vid("B"), entity_vid("C")
-    lookup_pages = [[{"name": "A"}, {"name": "B"}, {"name": "C"}]]
     go_pages = [
         [{"s": vid_a, "d": vid_b, "w": 1.0}],  # first chunk of 2 vids
         [{"s": vid_c, "d": vid_a, "w": 5.0}],  # second chunk of 1 vid
     ]
-    store = _RecNebula(lookup_pages=lookup_pages, go_pages=go_pages)
+    store = _RecNebula(go_pages=go_pages)
     exp = gee.NebulaGraphEdgeExport(store)
 
-    edges = exp.stream_edges(batch_size=2)
+    edges = exp.stream_edges(batch_size=2, names=["A", "B", "C"])
 
     assert edges == [("A", "B", 1.0), ("C", "A", 5.0)]
     go_stmts = [s for s in store.stmts if s.startswith("GO FROM")]
