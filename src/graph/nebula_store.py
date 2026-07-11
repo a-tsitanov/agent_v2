@@ -58,22 +58,52 @@ class NebulaGraphStore:
 
     # --- writes ---------------------------------------------------------
     def upsert_nodes(self, nodes: list[Any]) -> None:
-        def row(n: Any) -> str:
-            props = getattr(n, "properties", {}) or {}
-            vid = entity_vid(getattr(n, "name", ""))
-            return (
-                f"{_q(vid)}:({_q(getattr(n, 'name', ''))}, "
-                f"{_q(props.get('description', ''))}, "
-                f"{int(props.get('mention_count', 0) or 0)}, "
-                f"{int(props.get('created_at', 0) or 0)}, "
-                f"{_q(getattr(n, 'label', '') or '')}, "
-                f"{_q(props.get('er_canonical_name', '') or '')})"
-            )
-
         for chunk in _chunks(nodes, settings.nebula.write_batch_size):
+            by_vid = {entity_vid(getattr(n, "name", "")): n for n in chunk}
+
+            # Read-back (best-effort): preserve created_at/first_doc_id for
+            # entities that already exist. INSERT VERTEX resets omitted
+            # columns on nebula, so without this every re-upsert would wipe
+            # first-seen provenance. Fail-open — a FETCH failure just means
+            # no preservation this round (all nodes treated as new); the
+            # INSERT below still runs so ingest is never blocked.
+            preserved: dict[str, tuple[Any, Any]] = {}
+            if by_vid:
+                try:
+                    vids = ", ".join(_q(v) for v in by_vid)
+                    fetch_stmt = (
+                        f"FETCH PROP ON `Entity` {vids} "
+                        "YIELD id(vertex) AS vid, `Entity`.created_at AS ca, "
+                        "`Entity`.first_doc_id AS fdi;"
+                    )
+                    rows = self.structured_query(fetch_stmt)
+                    preserved = {r["vid"]: (r.get("ca"), r.get("fdi")) for r in rows}
+                except Exception:
+                    preserved = {}
+
+            def row(n: Any, _preserved: dict[str, tuple[Any, Any]] = preserved) -> str:
+                props = getattr(n, "properties", {}) or {}
+                vid = entity_vid(getattr(n, "name", ""))
+                if vid in _preserved:
+                    ca_raw, fdi_raw = _preserved[vid]
+                    ca = int(ca_raw or 0)
+                    fdi = fdi_raw or ""
+                else:
+                    ca = int(props.get("created_at", 0) or 0)
+                    fdi = props.get("first_doc_id", "") or ""
+                return (
+                    f"{_q(vid)}:({_q(getattr(n, 'name', ''))}, "
+                    f"{_q(props.get('description', ''))}, "
+                    f"{int(props.get('mention_count', 0) or 0)}, "
+                    f"{ca}, "
+                    f"{_q(getattr(n, 'label', '') or '')}, "
+                    f"{_q(props.get('er_canonical_name', '') or '')}, "
+                    f"{_q(fdi)})"
+                )
+
             stmt = (
-                "INSERT VERTEX `Entity` "
-                "(name, description, mention_count, created_at, label, er_canonical_name) VALUES "
+                "INSERT VERTEX `Entity` (name, description, mention_count, created_at, "
+                "label, er_canonical_name, first_doc_id) VALUES "
                 + ", ".join(row(n) for n in chunk)
                 + ";"
             )

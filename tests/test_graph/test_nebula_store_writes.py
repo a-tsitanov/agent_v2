@@ -9,12 +9,47 @@ from src.config import settings
 from src.graph.nebula_store import NebulaGraphStore, entity_vid
 
 
+class _Cast:
+    """Wraps a plain python value with a nebula-ValueWrapper-like .cast()."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def cast(self):
+        return self._value
+
+
 class _FakeSession:
-    def __init__(self):
+    """Records executed statements. Also answers `FETCH PROP ON `Entity``
+    read-backs (used by upsert_nodes' created_at/first_doc_id preserve
+    logic) with canned rows, or a failure response when fetch_fails=True."""
+
+    def __init__(self, fetch_rows: list[dict] | None = None, fetch_fails: bool = False):
         self.executed = []
+        self._fetch_rows = fetch_rows if fetch_rows is not None else []
+        self._fetch_fails = fetch_fails
 
     def execute(self, stmt, *a, **k):
         self.executed.append(stmt)
+        if "FETCH PROP ON `Entity`" in stmt:
+            if self._fetch_fails:
+                return SimpleNamespace(
+                    is_succeeded=lambda: False,
+                    error_msg=lambda: "fetch boom",
+                    keys=lambda: [],
+                    row_size=lambda: 0,
+                )
+            cols = ["vid", "ca", "fdi"]
+            rows = self._fetch_rows
+            return SimpleNamespace(
+                is_succeeded=lambda: True,
+                error_msg=lambda: "",
+                keys=lambda: cols,
+                row_size=lambda: len(rows),
+                row_values=lambda i, _rows=rows, _cols=cols: [
+                    _Cast(_rows[i][c]) for c in _cols
+                ],
+            )
         return SimpleNamespace(
             is_succeeded=lambda: True,
             error_msg=lambda: "",
@@ -59,7 +94,7 @@ def test_upsert_nodes_writes_er_canonical_name_from_properties():
     blob = "\n".join(sess.executed)
     assert (
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name) VALUES" in blob
+        "er_canonical_name, first_doc_id) VALUES" in blob
     )
     assert '"Canon"' in blob
 
@@ -72,6 +107,67 @@ def test_upsert_nodes_defaults_er_canonical_name_to_empty_when_absent():
     store.upsert_nodes([node])
     blob = "\n".join(sess.executed)
     assert blob.rstrip(";").endswith('"")')
+
+
+# --- created_at/first_doc_id read-back preserve (first-seen) -----------
+
+
+def test_upsert_nodes_preserves_created_at_and_first_doc_id_for_existing_entity():
+    vid_a = entity_vid("A")
+    sess = _FakeSession(fetch_rows=[{"vid": vid_a, "ca": 111, "fdi": "d0"}])
+    store = _store_with_session(sess)
+    node = SimpleNamespace(
+        name="A", label="PERSON",
+        properties={"created_at": 999, "first_doc_id": "dNEW", "description": "newdesc"},
+    )
+
+    store.upsert_nodes([node])
+
+    inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
+    assert len(inserts) == 1
+    # created_at/first_doc_id come from the read-back (111/"d0"), NOT props
+    # (999/"dNEW"); description still overwrites from props ("newdesc").
+    expected_row = f'{_q_expect(vid_a)}:("A", "newdesc", 0, 111, "PERSON", "", "d0")'
+    assert expected_row in inserts[0]
+    assert "999" not in inserts[0]
+    assert "dNEW" not in inserts[0]
+
+
+def test_upsert_nodes_uses_props_for_new_entity_when_not_in_readback():
+    vid_b = entity_vid("B")
+    sess = _FakeSession(fetch_rows=[])  # empty read-back -> B is new
+    store = _store_with_session(sess)
+    node = SimpleNamespace(
+        name="B", label="ORG",
+        properties={"created_at": 7, "first_doc_id": "dB", "description": "d"},
+    )
+
+    store.upsert_nodes([node])
+
+    inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
+    assert len(inserts) == 1
+    expected_row = f'{_q_expect(vid_b)}:("B", "d", 0, 7, "ORG", "", "dB")'
+    assert expected_row in inserts[0]
+
+
+def test_upsert_nodes_readback_failure_treats_all_as_new_and_still_inserts():
+    vid_c = entity_vid("C")
+    sess = _FakeSession(fetch_fails=True)
+    store = _store_with_session(sess)
+    node = SimpleNamespace(
+        name="C", label="PERSON",
+        properties={"created_at": 42, "first_doc_id": "dC", "description": "d"},
+    )
+
+    store.upsert_nodes([node])  # must not raise despite the FETCH failure
+
+    fetch_attempts = [s for s in sess.executed if "FETCH PROP ON `Entity`" in s]
+    assert len(fetch_attempts) == 1  # read-back was attempted, then failed open
+
+    inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
+    assert len(inserts) == 1  # INSERT still issued (fail-open, no crash)
+    expected_row = f'{_q_expect(vid_c)}:("C", "d", 0, 42, "PERSON", "", "dC")'
+    assert expected_row in inserts[0]
 
 
 def test_upsert_relations_inserts_related_with_rel_type():
@@ -174,21 +270,24 @@ def test_upsert_nodes_batches_into_multi_values_statements(monkeypatch):
 
     store.upsert_nodes(nodes)
 
-    assert len(sess.executed) == 3  # 2 + 2 + 1
-    for stmt in sess.executed:
+    inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
+    fetches = [s for s in sess.executed if "FETCH PROP ON `Entity`" in s]
+    assert len(inserts) == 3  # 2 + 2 + 1
+    assert len(fetches) == 3  # one read-back per chunk
+    for stmt in inserts:
         assert stmt.startswith(
             "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-            "er_canonical_name) VALUES "
+            "er_canonical_name, first_doc_id) VALUES "
         )
     # first two statements have 2 comma-joined rows, last has 1
-    assert sess.executed[0].count(":(") == 2
-    assert sess.executed[1].count(":(") == 2
-    assert sess.executed[2].count(":(") == 1
+    assert inserts[0].count(":(") == 2
+    assert inserts[1].count(":(") == 2
+    assert inserts[2].count(":(") == 1
     # VID present and correctly quoted
     vid0 = entity_vid("Entity0")
-    assert f'{_q_expect(vid0)}:(' in sess.executed[0]
-    assert '"desc0"' in sess.executed[0]
-    assert '"PERSON"' in sess.executed[0]
+    assert f'{_q_expect(vid0)}:(' in inserts[0]
+    assert '"desc0"' in inserts[0]
+    assert '"PERSON"' in inserts[0]
 
 
 def _q_expect(value: str) -> str:
@@ -236,8 +335,9 @@ def test_upsert_nodes_batch_size_ge_len_emits_one_statement(monkeypatch):
     store = _store_with_session(sess)
     nodes = [_node(i) for i in range(5)]
     store.upsert_nodes(nodes)
-    assert len(sess.executed) == 1
-    assert sess.executed[0].count(":(") == 5
+    inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
+    assert len(inserts) == 1
+    assert inserts[0].count(":(") == 5
 
 
 def test_upsert_relations_batch_size_ge_len_emits_one_statement(monkeypatch):
