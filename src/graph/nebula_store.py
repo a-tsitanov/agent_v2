@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import threading
+from collections.abc import Iterator
 from typing import Any
 
 from loguru import logger
@@ -34,7 +35,7 @@ def entity_vid(name: str) -> str:
     return hashlib.blake2b((name or "").encode("utf-8"), digest_size=16).hexdigest()
 
 
-def _chunks(seq: list[Any], n: int) -> Any:
+def _chunks(seq: list[Any], n: int) -> Iterator[list[Any]]:
     """Yield successive n-sized slices of seq (n >= 1)."""
     for i in range(0, len(seq), n):
         yield seq[i : i + n]
