@@ -45,6 +45,19 @@ SCHEMA_DDL: list[str] = [
     "CREATE EDGE IF NOT EXISTS `MENTIONS` (doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `IN_COMMUNITY` (level int DEFAULT 0);",
     "CREATE EDGE IF NOT EXISTS `PARENT_OF` ();",
+    # Community vertices materialised by the BUILD stage of community
+    # detection (src/graph/community_writeback.py). Report columns
+    # (report/title/summary/summarized_at) are declared now so the SUMMARIZE
+    # slice adds only write logic, not a schema migration. `report_vec` is
+    # intentionally absent — it lives in Milvus (Phase 3).
+    "CREATE TAG IF NOT EXISTS `Community` ("
+    "id string, level int DEFAULT 0, member_count int DEFAULT 0, "
+    "members_hash string DEFAULT '', updated int DEFAULT 0, "
+    "report string DEFAULT '', title string DEFAULT '', "
+    "summary string DEFAULT '', summarized_at int DEFAULT 0);",
+    # Backs prune_level / prune_all / read_old_reports LOOKUPs (Nebula
+    # requires an index to LOOKUP by property).
+    "CREATE TAG INDEX IF NOT EXISTS `community_level_idx` ON `Community`(level);",
     # tag/edge indexes needed for full-scan + lookups (Nebula requires an
     # index to LOOKUP by property; traversals from a known VID do not).
     "CREATE TAG INDEX IF NOT EXISTS `entity_name_idx` ON `Entity`(name(256));",

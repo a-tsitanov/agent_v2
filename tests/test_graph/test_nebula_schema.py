@@ -72,3 +72,23 @@ def test_ensure_schema_selects_space_before_creates(monkeypatch):
     assert all(use_idx < i for i in schema_idxs), (
         "USE must be issued before any CREATE TAG/EDGE/INDEX statement"
     )
+
+
+def test_schema_has_community_tag_with_report_columns():
+    tag = next((s for s in SCHEMA_DDL if "CREATE TAG IF NOT EXISTS `Community`" in s), None)
+    assert tag is not None, "Community TAG missing from SCHEMA_DDL"
+    # Structural columns written by the BUILD stage + report columns declared
+    # now so the SUMMARIZE slice adds only writes, not a schema migration.
+    for col in ("id string", "level int", "member_count int", "members_hash string",
+                "updated int", "report string", "title string", "summary string",
+                "summarized_at int"):
+        assert col in tag, f"missing column: {col}"
+    # report_vec lives in Milvus (Phase 3) — never on the vertex.
+    assert "report_vec" not in tag
+
+
+def test_schema_has_community_level_index():
+    assert any(
+        "CREATE TAG INDEX IF NOT EXISTS `community_level_idx` ON `Community`(level)" in s
+        for s in SCHEMA_DDL
+    ), "community_level_idx missing (needed for prune/lookup by level)"
