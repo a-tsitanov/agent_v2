@@ -191,6 +191,20 @@ services:
     restart: unless-stopped
     profiles: ["nebula"]
 
+  # NebulaGraph Studio: web query console + graph visualization (the
+  # Neo4j-Browser analog). Open http://localhost:7001 and connect the UI to
+  # graphd at `nebula-graphd:9669`, space `kb`, login root/nebula. Same
+  # `nebula` profile so it comes up with the cluster.
+  nebula-studio:
+    image: vesoft/nebula-graph-studio:v3.10.0
+    ports:
+      - "7001:7001"
+    depends_on:
+      nebula-graphd:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["nebula"]
+
   # ── Wikibase: structured-data store (Wikidata-software stack) ───
   # MySQL backs Wikibase's MediaWiki schema.
   wikibase-mysql:
