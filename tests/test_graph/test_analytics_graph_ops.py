@@ -70,11 +70,13 @@ def test_neo4j_entity_identifiers_issues_identifiers_cypher():
     store = _RecStore(rows=[[{"id_type": "INN", "value": "123"}]])
     ops = ago.Neo4jAnalyticsGraphOps(store)
 
-    result = ops.entity_identifiers("A", ID_TYPES)
+    result = ops.entity_identifiers("A", ID_TYPES, 7)
 
     assert result == [{"id_type": "INN", "value": "123"}]
+    # top_n is caller-supplied (7 here), NOT a hardcoded default — proves the
+    # primitive's user-adjustable top_n reaches the query.
     assert store.calls == [
-        (ago._IDENTIFIERS, {"name": "A", "id_types": ID_TYPES, "top_n": ago._DEFAULT_TOP_N}),
+        (ago._IDENTIFIERS, {"name": "A", "id_types": ID_TYPES, "top_n": 7}),
     ]
     assert ago._IDENTIFIERS == (
         "MATCH (e:__Entity__ {name:$name})-[]-(id:__Entity__) "
@@ -102,7 +104,7 @@ def test_neo4j_neighbors_by_relation_issues_relation_cypher():
     store = _RecStore(rows=[[{"name": "B", "w": 1.0}]])
     ops = ago.Neo4jAnalyticsGraphOps(store)
 
-    result = ops.neighbors_by_relation("A", "OWNS", 5)
+    result = ops.neighbors_by_relation("A", "OWNS", "negated", 5)
 
     assert result == [{"name": "B", "w": 1.0}]
     assert store.calls == [
@@ -114,7 +116,7 @@ def test_neo4j_neighbors_by_relation_issues_relation_cypher():
                 "r.valid_to AS valid_to "
                 "ORDER BY r.weight DESC LIMIT $top_n"
             ),
-            {"name": "A", "rel_type": "OWNS", "polarity": None, "top_n": 5},
+            {"name": "A", "rel_type": "OWNS", "polarity": "negated", "top_n": 5},
         ),
     ]
 
@@ -259,7 +261,7 @@ def test_neo4j_entity_neighbors_fail_soft_returns_empty_on_raise():
 
 
 def test_neo4j_entity_identifiers_fail_soft_returns_empty_on_raise():
-    assert ago.Neo4jAnalyticsGraphOps(_RaisingStore()).entity_identifiers("A", ID_TYPES) == []
+    assert ago.Neo4jAnalyticsGraphOps(_RaisingStore()).entity_identifiers("A", ID_TYPES, 7) == []
 
 
 def test_neo4j_entity_communities_fail_soft_returns_empty_on_raise():
@@ -267,7 +269,7 @@ def test_neo4j_entity_communities_fail_soft_returns_empty_on_raise():
 
 
 def test_neo4j_neighbors_by_relation_fail_soft_returns_empty_on_raise():
-    assert ago.Neo4jAnalyticsGraphOps(_RaisingStore()).neighbors_by_relation("A", "OWNS", 5) == []
+    assert ago.Neo4jAnalyticsGraphOps(_RaisingStore()).neighbors_by_relation("A", "OWNS", None, 5) == []
 
 
 def test_neo4j_common_connections_fail_soft_returns_empty_on_raise():
@@ -339,7 +341,7 @@ def test_nebula_entity_neighbors_raises_not_implemented():
 def test_nebula_entity_identifiers_raises_not_implemented():
     ops = ago.NebulaAnalyticsGraphOps(_RecStore())
     try:
-        ops.entity_identifiers("A", ID_TYPES)
+        ops.entity_identifiers("A", ID_TYPES, 7)
         raise AssertionError("expected NotImplementedError")
     except NotImplementedError:
         pass
@@ -357,7 +359,7 @@ def test_nebula_entity_communities_raises_not_implemented():
 def test_nebula_neighbors_by_relation_raises_not_implemented():
     ops = ago.NebulaAnalyticsGraphOps(_RecStore())
     try:
-        ops.neighbors_by_relation("A", "OWNS", 5)
+        ops.neighbors_by_relation("A", "OWNS", None, 5)
         raise AssertionError("expected NotImplementedError")
     except NotImplementedError:
         pass

@@ -54,22 +54,11 @@ _COMMUNITIES = (
     "RETURN c.level AS level, c.title AS title"
 )
 
-# ``entity_identifiers``'s Protocol signature (per design §Design.1) is
-# ``(name, id_types)`` — it does not expose ``top_n`` even though
-# ``_IDENTIFIERS`` has a ``LIMIT $top_n``. Mirrors ``EntityDossierParams``'
-# / ``clamp_top_n``'s default of 25 (entity_dossier calls all four
-# fragments — _CORE/_NEIGHBORS/_IDENTIFIERS/_COMMUNITIES — with one shared
-# top_n, defaulted to 25).
-_DEFAULT_TOP_N = 25
-
-# ``neighbors_by_relation``'s Protocol signature is ``(name, rel, top_n)``
-# — it does not expose ``polarity``. Mirrors
-# ``NeighborsByRelationParams.polarity``'s default of ``None``.
-_DEFAULT_POLARITY = None
-
 # ``shared_identifier_entities``'s Protocol signature is
-# ``(id_types, top_n)`` — it does not expose ``min_owners``. Mirrors
-# ``SharedIdentifierParams.min_owners``'s default of 2.
+# ``(id_types, top_n)`` — it does not expose ``min_owners`` because the
+# primitive never varies it from its default (2), so mirroring the default
+# here is byte-for-byte. (Unlike top_n/polarity, which ARE caller-settable
+# on their primitives and so ARE exposed on the seam signatures below.)
 _DEFAULT_MIN_OWNERS = 2
 
 
@@ -78,11 +67,13 @@ class AnalyticsGraphOps(Protocol):
 
     def entity_neighbors(self, name: str, top_n: int) -> list[dict]: ...
 
-    def entity_identifiers(self, name: str, id_types: list[str]) -> list[dict]: ...
+    def entity_identifiers(self, name: str, id_types: list[str], top_n: int) -> list[dict]: ...
 
     def entity_communities(self, name: str) -> list[dict]: ...
 
-    def neighbors_by_relation(self, name: str, rel: str, top_n: int) -> list[dict]: ...
+    def neighbors_by_relation(
+        self, name: str, rel: str, polarity: str | None, top_n: int
+    ) -> list[dict]: ...
 
     def common_connections(self, a: str, b: str, top_n: int) -> list[dict]: ...
 
@@ -119,15 +110,17 @@ class Neo4jAnalyticsGraphOps:
     def entity_neighbors(self, name: str, top_n: int) -> list[dict]:
         return self._rows(_NEIGHBORS, {"name": name, "top_n": top_n, "id_types": ID_TYPES})
 
-    def entity_identifiers(self, name: str, id_types: list[str]) -> list[dict]:
+    def entity_identifiers(self, name: str, id_types: list[str], top_n: int) -> list[dict]:
         return self._rows(
-            _IDENTIFIERS, {"name": name, "id_types": id_types, "top_n": _DEFAULT_TOP_N}
+            _IDENTIFIERS, {"name": name, "id_types": id_types, "top_n": top_n}
         )
 
     def entity_communities(self, name: str) -> list[dict]:
         return self._rows(_COMMUNITIES, {"name": name})
 
-    def neighbors_by_relation(self, name: str, rel: str, top_n: int) -> list[dict]:
+    def neighbors_by_relation(
+        self, name: str, rel: str, polarity: str | None, top_n: int
+    ) -> list[dict]:
         cypher = (
             "MATCH (e:__Entity__ {name:$name})-[r]-(n:__Entity__) "
             "WHERE type(r)=$rel_type AND ($polarity IS NULL OR r.polarity=$polarity) "
@@ -138,7 +131,7 @@ class Neo4jAnalyticsGraphOps:
         params = {
             "name": name,
             "rel_type": rel,
-            "polarity": _DEFAULT_POLARITY,
+            "polarity": polarity,
             "top_n": top_n,
         }
         return self._rows(cypher, params)
@@ -220,13 +213,15 @@ class NebulaAnalyticsGraphOps:
     def entity_neighbors(self, name: str, top_n: int) -> list[dict]:
         raise NotImplementedError("NebulaAnalyticsGraphOps.entity_neighbors (Task 2)")
 
-    def entity_identifiers(self, name: str, id_types: list[str]) -> list[dict]:
+    def entity_identifiers(self, name: str, id_types: list[str], top_n: int) -> list[dict]:
         raise NotImplementedError("NebulaAnalyticsGraphOps.entity_identifiers (Task 2)")
 
     def entity_communities(self, name: str) -> list[dict]:
         raise NotImplementedError("NebulaAnalyticsGraphOps.entity_communities (Task 2)")
 
-    def neighbors_by_relation(self, name: str, rel: str, top_n: int) -> list[dict]:
+    def neighbors_by_relation(
+        self, name: str, rel: str, polarity: str | None, top_n: int
+    ) -> list[dict]:
         raise NotImplementedError("NebulaAnalyticsGraphOps.neighbors_by_relation (Task 2)")
 
     def common_connections(self, a: str, b: str, top_n: int) -> list[dict]:
