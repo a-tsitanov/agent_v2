@@ -22,8 +22,12 @@ async def test_write_article_threads_sources_and_max_relations():
         page_title="X", relations=[])
 
     store = MagicMock()
-    # change-detection read: stored hash differs from subgraph_hash -> CHANGED.
-    store.structured_query.return_value = [{"h": "OLD_HASH"}]
+
+    # fake WikiGraphOps: change-detection read returns a hash that differs
+    # from subgraph_hash -> CHANGED (not skipped).
+    ops = MagicMock()
+    ops.read_wiki_hash.return_value = "OLD_HASH"
+    m_build_ops = MagicMock(return_value=ops)
 
     mw = AsyncMock()
     mw.get_page.return_value = "human content"
@@ -32,6 +36,7 @@ async def test_write_article_threads_sources_and_max_relations():
     llm_pool.get.return_value = MagicMock()
 
     with patch("src.graph.store.build_graph_store", return_value=store), \
+         patch("src.graph.wiki_graph_ops.build_wiki_graph_ops", m_build_ops), \
          patch("src.graph.wiki_context.read_entity_subgraph",
                return_value=ctx) as m_subgraph, \
          patch("src.graph.wiki_context.read_source_docs",
@@ -48,6 +53,11 @@ async def test_write_article_threads_sources_and_max_relations():
         out = await write_entity_article("X")
 
     assert out == ArticleOutcome.WRITTEN.value
+
+    # hash-check + title-write route through the WikiGraphOps seam.
+    m_build_ops.assert_called_once_with(store)
+    ops.read_wiki_hash.assert_called_once_with("X")
+    ops.write_page_title.assert_called_once_with("X", ctx.page_title)
 
     # max_relations threaded into read_entity_subgraph (positional or kwarg).
     args, kwargs = m_subgraph.call_args
@@ -66,3 +76,36 @@ async def test_write_article_threads_sources_and_max_relations():
     r_kwargs = m_render.call_args.kwargs
     assert r_kwargs["source_doc_ids"] == ["d1"]
     assert r_kwargs["docs_base_url"] == settings.wiki.docs_base_url
+
+
+@pytest.mark.asyncio
+async def test_write_article_skips_when_seam_hash_matches():
+    ctx = EntityContext(
+        name="X", label="Org", description="d", wikibase_qid="Q5",
+        page_title="X", relations=[])
+
+    store = MagicMock()
+
+    # fake WikiGraphOps: change-detection read returns the SAME hash as the
+    # freshly computed subgraph_hash -> SKIPPED (no MediaWiki call).
+    ops = MagicMock()
+    ops.read_wiki_hash.return_value = "SAME_HASH"
+    m_build_ops = MagicMock(return_value=ops)
+
+    with patch("src.graph.store.build_graph_store", return_value=store), \
+         patch("src.graph.wiki_graph_ops.build_wiki_graph_ops", m_build_ops), \
+         patch("src.graph.wiki_context.read_entity_subgraph",
+               return_value=ctx), \
+         patch("src.graph.wiki_context.read_source_docs", return_value=["d1"]), \
+         patch("src.graph.wiki_context.subgraph_hash",
+               return_value="SAME_HASH"), \
+         patch("src.graph.wiki_dirty.clear_dirty") as m_clear, \
+         patch("src.workflow.wiki._deps.get_mediawiki") as m_get_mw:
+        out = await write_entity_article("X")
+
+    assert out == ArticleOutcome.SKIPPED.value
+    m_build_ops.assert_called_once_with(store)
+    ops.read_wiki_hash.assert_called_once_with("X")
+    ops.write_page_title.assert_not_called()
+    m_clear.assert_called_once_with(store, "X", "SAME_HASH")
+    m_get_mw.assert_not_called()

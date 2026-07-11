@@ -8,6 +8,7 @@ from temporalio.common import WorkflowIDReusePolicy
 from src.config import settings
 from src.graph.alerts import mark_watched
 from src.graph.store import build_graph_store
+from src.graph.wiki_graph_ops import build_wiki_graph_ops
 from src.workflow.client import get_temporal_client
 from src.workflow.monitor.workflow import MonitorSweepWorkflow
 from src.workflow.wiki.wiki_sweep import WikiSweepWorkflow
@@ -20,9 +21,7 @@ async def wiki_rebuild(all: bool = False) -> dict:
     if not settings.wiki.enabled:
         return {"status": "disabled"}
     if all:
-        build_graph_store().structured_query(
-            "MATCH (e:__Entity__) SET e.wiki_dirty = true, e.wiki_dirty_at = datetime()"
-        )
+        build_wiki_graph_ops(build_graph_store()).mark_all_dirty()
     client = await get_temporal_client()
     handle = await client.start_workflow(
         WikiSweepWorkflow.run,

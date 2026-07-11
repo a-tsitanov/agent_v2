@@ -48,11 +48,13 @@ async def write_entity_article(name: str) -> str:
         subgraph_hash,
     )
     from src.graph.wiki_dirty import clear_dirty
+    from src.graph.wiki_graph_ops import build_wiki_graph_ops
     from src.retrieval.llm_pool import get_llm_pool
     from src.workflow.wiki._deps import get_mediawiki
     from src.workflow.wiki.article import render_bot_section, splice_bot_section
 
     store = build_graph_store()
+    ops = build_wiki_graph_ops(store)
     # All Neo4j reads/writes here use the sync driver — off the shared loop.
     ctx = await asyncio.to_thread(
         read_entity_subgraph, store, name, settings.wiki.max_relations)
@@ -60,11 +62,8 @@ async def write_entity_article(name: str) -> str:
     h = subgraph_hash(ctx, docs)
     # change-detection: skip if the facts + source set are unchanged since
     # the last write.
-    cur_hash_rows = await asyncio.to_thread(
-        store.structured_query,
-        "MATCH (e:__Entity__ {name:$n}) RETURN coalesce(e.wiki_hash,'') AS h",
-        param_map={"n": name})
-    if cur_hash_rows and cur_hash_rows[0]["h"] == h:
+    cur_hash = await asyncio.to_thread(ops.read_wiki_hash, name)
+    if cur_hash == h:
         await asyncio.to_thread(clear_dirty, store, name, h)
         return ArticleOutcome.SKIPPED.value
 
@@ -86,10 +85,7 @@ async def write_entity_article(name: str) -> str:
     except Exception as exc:
         activity.logger.warning("ensure_sitelink failed name=%s: %s", name, exc)
     # persist page title + hash + clear dirty
-    await asyncio.to_thread(
-        store.structured_query,
-        "MATCH (e:__Entity__ {name:$n}) SET e.wiki_page_title=$t",
-        param_map={"n": name, "t": title})
+    await asyncio.to_thread(ops.write_page_title, name, title)
     await asyncio.to_thread(clear_dirty, store, name, h)
     return ArticleOutcome.WRITTEN.value
 
