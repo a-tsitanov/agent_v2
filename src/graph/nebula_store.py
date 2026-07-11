@@ -78,7 +78,16 @@ class NebulaGraphStore:
                     )
                     rows = self.structured_query(fetch_stmt)
                     preserved = {r["vid"]: (r.get("ca"), r.get("fdi")) for r in rows}
-                except Exception:
+                except Exception as exc:
+                    # Fail-open: this chunk's existing entities won't have their
+                    # created_at/first_doc_id preserved this round (they may
+                    # drift), but ingest continues. Logged so a persistent
+                    # read-back failure is not invisible (matches the
+                    # fail-open-but-logged convention of _exec/_execute_with_retry).
+                    logger.warning(
+                        "upsert_nodes read-back failed (no first-seen preservation "
+                        "this round): {e}", e=exc,
+                    )
                     preserved = {}
 
             def row(n: Any, _preserved: dict[str, tuple[Any, Any]] = preserved) -> str:
