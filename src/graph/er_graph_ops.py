@@ -119,10 +119,18 @@ class Neo4jERGraphOps:
 
 
 class NebulaERGraphOps:
-    """nGQL ER graph ops. STUB — implemented in Task 3.
+    """nGQL ER graph ops: verdict cache (VID-addressed ``ERVerdict``
+    vertices) + the loser->canonical edge-redirect merge.
 
     ``ensure_verdict_schema`` is a no-op: the ``ERVerdict`` TAG and its
     index are created by ``nebula_schema.ensure_schema``, not per-call.
+
+    Values are inline-quoted (nebula binds no params); every write here
+    goes through ``store.structured_query`` which RAISES on nGQL failure
+    (unlike the fail-open ``store._exec``/``upsert_*`` helpers elsewhere).
+    That is deliberate: ``merge_loser_into_canonical``'s safety guarantee
+    (never delete the loser without first repointing all of its edges)
+    depends on a failed re-insert raising BEFORE the delete is reached.
     """
 
     def __init__(self, store: Any):
@@ -132,13 +140,102 @@ class NebulaERGraphOps:
         return None
 
     def load_verdicts(self, keys: list[str]) -> dict[str, bool]:
-        raise NotImplementedError("NebulaERGraphOps.load_verdicts (Task 3)")
+        from src.graph.nebula_store import _q
+
+        vids = [verdict_vid(k) for k in keys]
+        if not vids:
+            return {}
+        listed = ", ".join(_q(v) for v in vids)
+        rows = self._store.structured_query(
+            f"FETCH PROP ON `ERVerdict` {listed} YIELD "
+            "`ERVerdict`.er_key AS key, `ERVerdict`.same AS same;"
+        )
+        return {r["key"]: bool(r["same"]) for r in (rows or []) if isinstance(r, dict)}
 
     def store_verdicts(self, entries: dict[str, bool]) -> None:
-        raise NotImplementedError("NebulaERGraphOps.store_verdicts (Task 3)")
+        import time
+
+        from src.graph.nebula_store import _chunks, _q
+
+        if not entries:
+            return
+        now_ms = int(time.time() * 1000)
+        rows = [
+            f"{_q(verdict_vid(k))}:({_q(k)}, {'true' if same else 'false'}, {now_ms})"
+            for k, same in entries.items()
+        ]
+        for chunk in _chunks(rows, settings.nebula.write_batch_size):
+            stmt = (
+                "INSERT VERTEX `ERVerdict` (er_key, same, updated) VALUES "
+                + ", ".join(chunk)
+                + ";"
+            )
+            self._store.structured_query(stmt)
 
     def merge_loser_into_canonical(self, *, loser: str, canon: str) -> None:
-        raise NotImplementedError("NebulaERGraphOps.merge_loser_into_canonical (Task 3)")
+        # NOTE: do NOT catch exceptions here — `structured_query` raises on
+        # any nGQL failure, and the caller's try/except relies on that to
+        # leave the loser intact (edges preserved) on ANY error. Re-inserts
+        # are idempotent upserts-by-endpoint, so a retry re-copies harmlessly.
+        from src.graph.nebula_store import _chunks, _q, entity_vid
+
+        lv, cv = entity_vid(loser), entity_vid(canon)
+        if lv == cv:
+            return
+
+        edge_cols = "rel_type, polarity, valid_from, valid_to, weight"
+
+        def edge_props(row: dict) -> str:
+            rt = row.get("rt")
+            pol = row.get("pol")
+            vf = row.get("vf")
+            vt = row.get("vt")
+            w = row.get("w")
+            return (
+                f"({_q(rt)}, {_q(pol)}, {int(vf or 0)}, {int(vt or 0)}, "
+                f"{float(w if w is not None else 1.0)})"
+            )
+
+        def insert_edges(rows: list[str]) -> None:
+            for chunk in _chunks(rows, settings.nebula.write_batch_size):
+                stmt = (
+                    f"INSERT EDGE `RELATED` ({edge_cols}) VALUES "
+                    + ", ".join(chunk)
+                    + ";"
+                )
+                self._store.structured_query(stmt)
+
+        # Out-edges: loser -> t  ==>  canon -> t (skip t == canon).
+        out_rows = self._store.structured_query(
+            f"GO FROM {_q(lv)} OVER `RELATED` YIELD "
+            "dst(edge) AS t, `RELATED`.rel_type AS rt, "
+            "`RELATED`.polarity AS pol, `RELATED`.valid_from AS vf, "
+            "`RELATED`.valid_to AS vt, `RELATED`.weight AS w;"
+        )
+        out_values = [
+            f'"{cv}" -> "{r.get("t")}":{edge_props(r)}'
+            for r in (out_rows or [])
+            if r.get("t") != cv
+        ]
+        insert_edges(out_values)
+
+        # In-edges: s -> loser  ==>  s -> canon (skip s == canon).
+        in_rows = self._store.structured_query(
+            f"GO FROM {_q(lv)} OVER `RELATED` REVERSELY YIELD "
+            "src(edge) AS s, `RELATED`.rel_type AS rt, "
+            "`RELATED`.polarity AS pol, `RELATED`.valid_from AS vf, "
+            "`RELATED`.valid_to AS vt, `RELATED`.weight AS w;"
+        )
+        in_values = [
+            f'"{r.get("s")}" -> "{cv}":{edge_props(r)}'
+            for r in (in_rows or [])
+            if r.get("s") != cv
+        ]
+        insert_edges(in_values)
+
+        # Only after both edge-redirect passes fully succeed do we drop the
+        # loser vertex — never delete-without-repointing.
+        self._store.structured_query(f"DELETE VERTEX {_q(lv)} WITH EDGE;")
 
 
 def build_er_graph_ops(store: Any) -> ERGraphOps:
