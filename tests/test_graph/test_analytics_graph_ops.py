@@ -167,7 +167,9 @@ def test_neo4j_shared_identifier_entities_issues_grouping_cypher():
     store = _RecStore(rows=[[{"value": "123", "id_type": "INN", "owners": ["A", "B"]}]])
     ops = ago.Neo4jAnalyticsGraphOps(store)
 
-    result = ops.shared_identifier_entities("INN", 5)
+    # min_owners is caller-supplied (3 here) — proves the primitive's
+    # user-settable min_owners reaches the query (was hardcoded to 2 before).
+    result = ops.shared_identifier_entities("INN", 3, 5)
 
     assert result == [{"value": "123", "id_type": "INN", "owners": ["A", "B"]}]
     assert store.calls == [
@@ -185,7 +187,7 @@ def test_neo4j_shared_identifier_entities_issues_grouping_cypher():
             ),
             {
                 "id_type": "INN",
-                "min_owners": ago._DEFAULT_MIN_OWNERS,
+                "min_owners": 3,
                 "top_n": 5,
                 "id_types": ID_TYPES,
             },
@@ -282,7 +284,7 @@ def test_neo4j_identifier_lookup_fail_soft_returns_empty_on_raise():
 
 def test_neo4j_shared_identifier_entities_fail_soft_returns_empty_on_raise():
     assert (
-        ago.Neo4jAnalyticsGraphOps(_RaisingStore()).shared_identifier_entities("INN", 5) == []
+        ago.Neo4jAnalyticsGraphOps(_RaisingStore()).shared_identifier_entities("INN", 2, 5) == []
     )
 
 
@@ -723,7 +725,7 @@ def test_nebula_shared_identifier_entities_single_type_groups_owners():
             {"vid": vid_type_owner, "name": "other-id", "label": "Email"},
         ]),
     ])
-    result = ago.NebulaAnalyticsGraphOps(store).shared_identifier_entities("INN", 5)
+    result = ago.NebulaAnalyticsGraphOps(store).shared_identifier_entities("INN", 2, 5)
     assert result == [{"value": "123", "id_type": "INN", "owners": ["A", "B"]}]
 
 
@@ -737,12 +739,12 @@ def test_nebula_shared_identifier_entities_below_min_owners_excluded():
         ("OVER `RELATED` BIDIRECT", [{"s": vid_inn, "d": vowner_a}]),
         ("id(vertex) AS vid", [{"vid": vowner_a, "name": "A", "label": "Organization"}]),
     ])
-    assert ago.NebulaAnalyticsGraphOps(store).shared_identifier_entities("INN", 5) == []
+    assert ago.NebulaAnalyticsGraphOps(store).shared_identifier_entities("INN", 2, 5) == []
 
 
 def test_nebula_shared_identifier_entities_none_scans_all_id_types():
     store = _NebulaRecStore(canned=[("LOOKUP ON `Entity`", [])])
-    result = ago.NebulaAnalyticsGraphOps(store).shared_identifier_entities(None, 5)
+    result = ago.NebulaAnalyticsGraphOps(store).shared_identifier_entities(None, 2, 5)
     assert result == []
     lookup_calls = [c for c in store.calls if c[0].startswith("LOOKUP ON `Entity`")]
     assert len(lookup_calls) == len(ID_TYPES)
@@ -750,7 +752,7 @@ def test_nebula_shared_identifier_entities_none_scans_all_id_types():
 
 def test_nebula_shared_identifier_entities_fail_soft_returns_empty_on_raise():
     assert (
-        ago.NebulaAnalyticsGraphOps(_NebulaRaisingStore()).shared_identifier_entities("INN", 5)
+        ago.NebulaAnalyticsGraphOps(_NebulaRaisingStore()).shared_identifier_entities("INN", 2, 5)
         == []
     )
 

@@ -105,8 +105,8 @@ class _FakeOps:
     def identifier_lookup(self, value):
         return self._record("identifier_lookup", value)
 
-    def shared_identifier_entities(self, id_types, top_n):
-        return self._record("shared_identifier_entities", id_types, top_n)
+    def shared_identifier_entities(self, id_types, min_owners, top_n):
+        return self._record("shared_identifier_entities", id_types, min_owners, top_n)
 
     def connection_path(self, source, target, hops):
         return self._record("connection_path", source, target, hops)
@@ -198,7 +198,7 @@ async def test_shared_identifier_entities_routes_through_seam(monkeypatch):
 
     res = await conn.shared_identifier_entities(object(), id_type="INN", top_n=5)
 
-    assert ops.calls["shared_identifier_entities"] == ("INN", 5)
+    assert ops.calls["shared_identifier_entities"] == ("INN", 2, 5)
     assert res.rows[0]["owners"] == ["A", "B"]
 
 

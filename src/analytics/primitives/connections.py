@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -32,12 +33,15 @@ async def entity_dossier(store: Any | None, *, name: str, top_n: int = 25) -> Pr
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
     ops = build_analytics_graph_ops(store)
-    core = ops.entity_core(name)
+    # Off the event loop (the seam does a blocking driver call) — preserves
+    # store_query.run_rows's `await asyncio.to_thread(...)` behaviour so these
+    # graph reads never block the Temporal activity's shared event loop.
+    core = await asyncio.to_thread(ops.entity_core, name)
     if not core:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    neighbors = ops.entity_neighbors(name, top_n)
-    identifiers = ops.entity_identifiers(name, ID_TYPES, top_n)
-    communities = ops.entity_communities(name)
+    neighbors = await asyncio.to_thread(ops.entity_neighbors, name, top_n)
+    identifiers = await asyncio.to_thread(ops.entity_identifiers, name, ID_TYPES, top_n)
+    communities = await asyncio.to_thread(ops.entity_communities, name)
     row = {
         "core": core[0],
         "connections": neighbors,
@@ -67,8 +71,9 @@ async def neighbors_by_relation(
     cypher = "analytics_graph_ops.neighbors_by_relation"
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    rows = build_analytics_graph_ops(store).neighbors_by_relation(
-        name, rel_type, polarity, top_n
+    rows = await asyncio.to_thread(
+        build_analytics_graph_ops(store).neighbors_by_relation,
+        name, rel_type, polarity, top_n,
     )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
@@ -84,7 +89,7 @@ async def cooccurrence(store: Any | None, *, name: str, top_n: int = 25) -> Prim
     cypher = "analytics_graph_ops.cooccurrence"
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    rows = build_analytics_graph_ops(store).cooccurrence(name, top_n)
+    rows = await asyncio.to_thread(build_analytics_graph_ops(store).cooccurrence, name, top_n)
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -102,7 +107,7 @@ async def common_connections(
     cypher = "analytics_graph_ops.common_connections"
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    rows = build_analytics_graph_ops(store).common_connections(a, b, top_n)
+    rows = await asyncio.to_thread(build_analytics_graph_ops(store).common_connections, a, b, top_n)
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -120,7 +125,7 @@ async def connection_path(
     cypher = "analytics_graph_ops.connection_path"
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    rows = build_analytics_graph_ops(store).connection_path(source, target, hops)
+    rows = await asyncio.to_thread(build_analytics_graph_ops(store).connection_path, source, target, hops)
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -147,12 +152,10 @@ async def shared_identifier_entities(
     cypher = "analytics_graph_ops.shared_identifier_entities"
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    # NOTE: the seam's shared_identifier_entities does not take min_owners
-    # (it always uses its own default of 2) — see
-    # src/graph/analytics_graph_ops.py's _DEFAULT_MIN_OWNERS comment. The
-    # primitive param is preserved above (params reporting) but the caller
-    # value is not currently threaded through when it differs from 2.
-    rows = build_analytics_graph_ops(store).shared_identifier_entities(id_type, top_n)
+    rows = await asyncio.to_thread(
+        build_analytics_graph_ops(store).shared_identifier_entities,
+        id_type, int(min_owners), top_n,
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -165,7 +168,7 @@ async def identifier_lookup(store: Any | None, *, value: str) -> PrimitiveResult
     cypher = "analytics_graph_ops.identifier_lookup"
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
-    rows = build_analytics_graph_ops(store).identifier_lookup(value)
+    rows = await asyncio.to_thread(build_analytics_graph_ops(store).identifier_lookup, value)
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 

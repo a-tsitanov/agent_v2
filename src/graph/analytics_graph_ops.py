@@ -60,14 +60,6 @@ _COMMUNITIES = (
     "RETURN c.level AS level, c.title AS title"
 )
 
-# ``shared_identifier_entities``'s Protocol signature is
-# ``(id_types, top_n)`` — it does not expose ``min_owners`` because the
-# primitive never varies it from its default (2), so mirroring the default
-# here is byte-for-byte. (Unlike top_n/polarity, which ARE caller-settable
-# on their primitives and so ARE exposed on the seam signatures below.)
-_DEFAULT_MIN_OWNERS = 2
-
-
 class AnalyticsGraphOps(Protocol):
     def entity_core(self, name: str) -> list[dict]: ...
 
@@ -85,7 +77,9 @@ class AnalyticsGraphOps(Protocol):
 
     def identifier_lookup(self, value: str) -> list[dict]: ...
 
-    def shared_identifier_entities(self, id_types: str | None, top_n: int) -> list[dict]: ...
+    def shared_identifier_entities(
+        self, id_types: str | None, min_owners: int, top_n: int
+    ) -> list[dict]: ...
 
     def connection_path(self, source: str, target: str, hops: int) -> list[dict]: ...
 
@@ -164,7 +158,9 @@ class Neo4jAnalyticsGraphOps:
         params = {"value": value, "id_types": ID_TYPES}
         return self._rows(cypher, params)
 
-    def shared_identifier_entities(self, id_types: str | None, top_n: int) -> list[dict]:
+    def shared_identifier_entities(
+        self, id_types: str | None, min_owners: int, top_n: int
+    ) -> list[dict]:
         cypher = (
             "MATCH (id:__Entity__) WHERE any(l IN labels(id) WHERE l IN $id_types) "
             "AND ($id_type IS NULL OR $id_type IN labels(id)) "
@@ -178,7 +174,7 @@ class Neo4jAnalyticsGraphOps:
         )
         params = {
             "id_type": id_types,
-            "min_owners": _DEFAULT_MIN_OWNERS,
+            "min_owners": min_owners,
             "top_n": top_n,
             "id_types": ID_TYPES,
         }
@@ -471,7 +467,9 @@ class NebulaAnalyticsGraphOps:
         return out
 
     @_nebula_fail_soft
-    def shared_identifier_entities(self, id_types: str | None, top_n: int) -> list[dict]:
+    def shared_identifier_entities(
+        self, id_types: str | None, min_owners: int, top_n: int
+    ) -> list[dict]:
         # "Correct but simple" graph-wide scan (per design doc — lower
         # priority than the per-entity reads above). No dedicated `label`
         # index exists on `Entity` (only `name`/`wiki_dirty` are indexed);
@@ -523,7 +521,7 @@ class NebulaAnalyticsGraphOps:
                 owner_props[ov][0] for ov in owners_by_id.get(vid, set())
                 if ov in owner_props and owner_props[ov][1] not in ID_TYPES
             })
-            if len(owner_names) >= _DEFAULT_MIN_OWNERS:
+            if len(owner_names) >= min_owners:
                 out.append({"value": idname, "id_type": id_type, "owners": owner_names})
         out.sort(key=lambda x: len(x["owners"]), reverse=True)
         return out[:top_n]
