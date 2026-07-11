@@ -14,6 +14,15 @@ def test_space_and_core_schema_present():
     assert "rel_type string" in "\n".join(SCHEMA_DDL)  # RELATED carries original type
 
 
+def test_related_edge_ddl_has_weight_column():
+    # Weighted Leiden parity with neo4j (merge.py writes properties["weight"]):
+    # fresh spaces must get a `weight` column on `RELATED`.
+    related_ddl = next(
+        s for s in SCHEMA_DDL if s.startswith("CREATE EDGE IF NOT EXISTS `RELATED`")
+    )
+    assert "weight double" in related_ddl
+
+
 def test_ddl_is_idempotent():
     # every statement must be IF NOT EXISTS so ensure_schema can re-run.
     # There is no longer a non-idempotent `USE` in either list.
@@ -106,3 +115,14 @@ def test_schema_has_community_level_index():
         "CREATE TAG INDEX IF NOT EXISTS `community_level_idx` ON `Community`(level)" in s
         for s in SCHEMA_DDL
     ), "community_level_idx missing (needed for prune/lookup by level)"
+
+
+def test_ensure_schema_alters_related_edge_to_add_weight():
+    # Best-effort schema-evolution step for EXISTING spaces (created before
+    # RELATED had a weight column). Fail-open: if the column already exists,
+    # the ALTER errors harmlessly (see _FakeResp always-succeeds here — the
+    # real fail-open behaviour is covered by _execute_with_retry's own
+    # tests/usage elsewhere).
+    fake = _FakeSession()
+    ensure_schema(fake)
+    assert "ALTER EDGE `RELATED` ADD (weight double DEFAULT 1.0);" in fake.statements

@@ -61,6 +61,26 @@ def test_upsert_relations_inserts_related_with_rel_type():
     assert '"WORKS_AT"' in blob            # original type preserved as rel_type value
 
 
+def test_upsert_relations_writes_weight_from_properties():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    rel = SimpleNamespace(source_id="a", target_id="b", label="WORKS_AT",
+                          properties={"weight": 7.0})
+    store.upsert_relations([rel])
+    blob = "\n".join(sess.executed)
+    assert "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) VALUES" in blob
+    assert blob.rstrip(";").endswith("7.0)")
+
+
+def test_upsert_relations_defaults_weight_to_one_when_absent():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    rel = SimpleNamespace(source_id="a", target_id="b", label="WORKS_AT", properties={})
+    store.upsert_relations([rel])
+    blob = "\n".join(sess.executed)
+    assert blob.rstrip(";").endswith("1.0)")
+
+
 def test_upsert_relations_rel_type_is_a_value_not_identifier():
     sess = _FakeSession()
     store = _store_with_session(sess)
@@ -114,7 +134,10 @@ def _rel(i: int) -> SimpleNamespace:
         source_id=f"Entity{i}",
         target_id=f"Entity{i + 1}",
         label="WORKS_WITH",
-        properties={"polarity": "pos", "valid_from": 100 + i, "valid_to": 200 + i},
+        properties={
+            "polarity": "pos", "valid_from": 100 + i, "valid_to": 200 + i,
+            "weight": float(i) + 1.0,
+        },
     )
 
 
@@ -157,7 +180,7 @@ def test_upsert_relations_batches_into_multi_values_statements(monkeypatch):
     assert len(sess.executed) == 3  # 2 + 2 + 1
     for stmt in sess.executed:
         assert stmt.startswith(
-            "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to) VALUES "
+            "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) VALUES "
         )
     assert sess.executed[0].count(" -> ") == 2
     assert sess.executed[1].count(" -> ") == 2

@@ -93,12 +93,14 @@ class NebulaGraphStore:
                 f"{_q(rel_type)}, "
                 f"{_q(props.get('polarity', ''))}, "
                 f"{int(props.get('valid_from', 0) or 0)}, "
-                f"{int(props.get('valid_to', 0) or 0)})"
+                f"{int(props.get('valid_to', 0) or 0)}, "
+                f"{float(props.get('weight', 1.0) or 1.0)})"
             )
 
         for chunk in _chunks(relations, settings.nebula.write_batch_size):
             stmt = (
-                "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to) VALUES "
+                "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) "
+                "VALUES "
                 + ", ".join(row(r) for r in chunk)
                 + ";"
             )

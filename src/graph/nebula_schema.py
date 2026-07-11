@@ -41,7 +41,7 @@ SCHEMA_DDL: list[str] = [
     "created_at int DEFAULT 0, label string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
     "rel_type string DEFAULT '', polarity string DEFAULT '', "
-    "valid_from int DEFAULT 0, valid_to int DEFAULT 0);",
+    "valid_from int DEFAULT 0, valid_to int DEFAULT 0, weight double DEFAULT 1.0);",
     "CREATE EDGE IF NOT EXISTS `MENTIONS` (doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `IN_COMMUNITY` (level int DEFAULT 0);",
     "CREATE EDGE IF NOT EXISTS `PARENT_OF` ();",
@@ -143,6 +143,16 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     # briefly, hence the small per-statement retry).
     for stmt in SCHEMA_DDL:
         _execute_with_retry(session, stmt, attempts=3, delay_s=1.0)
+
+    # 3b. Schema-evolution for EXISTING spaces created before RELATED had a
+    # `weight` column (SCHEMA_DDL's CREATE EDGE IF NOT EXISTS is a no-op on
+    # them). Best-effort/fail-open: if the column already exists, the ALTER
+    # fails harmlessly — _execute_with_retry logs a warning and returns
+    # False, it never raises.
+    _execute_with_retry(
+        session, "ALTER EDGE `RELATED` ADD (weight double DEFAULT 1.0);",
+        attempts=1, delay_s=0,
+    )
 
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
