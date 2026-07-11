@@ -101,31 +101,105 @@ class Neo4jCommunityWriteback:
 
 
 class NebulaCommunityWriteback:
-    """nGQL community BUILD write-back. Implemented in Task 3."""
+    """nGQL community BUILD write-back. INSERT is upsert-by-VID; both call
+    sites prune before merge, so INSERT-overwrite == neo4j MERGE+FOREACH on a
+    fresh node (no divergence). `report_vec` is never written to the vertex
+    (it lives in Milvus). Values are inline-quoted (nebula binds no params)."""
 
     def __init__(self, store: Any):
         self._store = store
 
+    def _exec(self, stmt: str) -> list[dict]:
+        return list(self._store.structured_query(stmt) or [])
+
     def ensure_schema(self) -> None:
-        # Nebula Community TAG + index are created by nebula_schema.ensure_schema.
+        # Community TAG + index are created by nebula_schema.ensure_schema.
         return None
 
-    def read_old_reports(self) -> list[dict]:
-        raise NotImplementedError("NebulaCommunityWriteback.read_old_reports (Task 3)")
+    def _insert_community_vertex(self, *, cvid, community_id, level,
+                                 member_count, members_hash, carry) -> None:
+        import time
 
-    def prune_level(self, level: int) -> None:
-        raise NotImplementedError("NebulaCommunityWriteback.prune_level (Task 3)")
+        from src.graph.nebula_store import _q
+        c = carry or {}
+        updated = int(time.time() * 1000)
+        self._exec(
+            "INSERT VERTEX `Community` "
+            "(id, level, member_count, members_hash, updated, "
+            "report, title, summary, summarized_at) VALUES "
+            f"{_q(cvid)}:({_q(community_id)}, {int(level)}, {int(member_count)}, "
+            f"{_q(members_hash)}, {updated}, "
+            f"{_q(c.get('report') or '')}, {_q(c.get('title') or '')}, "
+            f"{_q(c.get('summary') or '')}, {int(c.get('summarized_at') or 0)});"
+        )
 
-    def prune_all(self) -> None:
-        raise NotImplementedError("NebulaCommunityWriteback.prune_all (Task 3)")
+    def _insert_member_edges(self, *, cvid, level, members) -> None:
+        from src.graph.nebula_store import _q, entity_vid
+        # No stale-clear needed: both call sites prune (prune_level/prune_all
+        # via DELETE VERTEX ... WITH EDGE) BEFORE merge, so the community vertex
+        # is fresh with no incoming IN_COMMUNITY edges — the design's central
+        # prune-before-merge invariant. (neo4j's MERGE clears stale inline;
+        # prune-first makes that redundant on nebula, and avoids a fragile
+        # GO|DELETE pipe on the main write path.)
+        if not members:
+            return
+        values = ", ".join(
+            f"{_q(entity_vid(m))}->{_q(cvid)}:({int(level)})" for m in members
+        )
+        self._exec(f"INSERT EDGE `IN_COMMUNITY` (level) VALUES {values};")
 
     def merge_community(self, *, community_id, level, member_count,
                         members_hash, members, carry) -> None:
-        raise NotImplementedError("NebulaCommunityWriteback.merge_community (Task 3)")
+        cvid = community_vid(community_id, level)
+        self._insert_community_vertex(
+            cvid=cvid, community_id=community_id, level=level,
+            member_count=member_count, members_hash=members_hash, carry=carry)
+        self._insert_member_edges(cvid=cvid, level=level, members=members)
 
     def merge_subcommunity(self, *, community_id, level, parent_id,
                            member_count, members_hash, members, carry) -> None:
-        raise NotImplementedError("NebulaCommunityWriteback.merge_subcommunity (Task 3)")
+        from src.graph.nebula_store import _q
+        cvid = community_vid(community_id, level)
+        self._insert_community_vertex(
+            cvid=cvid, community_id=community_id, level=level,
+            member_count=member_count, members_hash=members_hash, carry=carry)
+        parent_vid = community_vid(parent_id, level - 1)
+        self._exec(
+            f"INSERT EDGE `PARENT_OF` () VALUES {_q(parent_vid)}->{_q(cvid)}:();"
+        )
+        self._insert_member_edges(cvid=cvid, level=level, members=members)
+
+    def _lookup_vids(self, where: str | None) -> list[str]:
+        clause = f" WHERE {where}" if where else ""
+        rows = self._exec(f"LOOKUP ON `Community`{clause} YIELD id(vertex) AS vid;")
+        return [r["vid"] for r in rows if r.get("vid")]
+
+    def _delete_vids(self, vids: list[str]) -> None:
+        from src.graph.nebula_store import _q
+        if not vids:
+            return
+        listed = ", ".join(_q(v) for v in vids)
+        self._exec(f"DELETE VERTEX {listed} WITH EDGE;")
+
+    def prune_level(self, level: int) -> None:
+        self._delete_vids(self._lookup_vids(f"`Community`.level == {int(level)}"))
+
+    def prune_all(self) -> None:
+        self._delete_vids(self._lookup_vids(None))
+
+    def read_old_reports(self) -> list[dict]:
+        from src.graph.nebula_store import _q
+        vids = self._lookup_vids(None)
+        if not vids:
+            return []
+        listed = ", ".join(_q(v) for v in vids)
+        rows = self._exec(
+            f"FETCH PROP ON `Community` {listed} YIELD "
+            "`Community`.level AS level, `Community`.members_hash AS h, "
+            "`Community`.report AS report, `Community`.title AS title, "
+            "`Community`.summary AS summary, `Community`.summarized_at AS summarized_at;"
+        )
+        return [r for r in rows if (r.get("report") or "").strip()]
 
 
 def build_community_writeback(store: Any) -> CommunityWriteback:

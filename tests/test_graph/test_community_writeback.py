@@ -67,3 +67,97 @@ def test_neo4j_prune_and_read_and_ensure_use_the_constants():
 def test_dispatch_returns_neo4j_when_backend_not_nebula(monkeypatch):
     monkeypatch.setattr(cw.settings.graph, "backend", "neo4j")
     assert isinstance(cw.build_community_writeback(_RecStore()), cw.Neo4jCommunityWriteback)
+
+
+from src.graph.nebula_store import entity_vid
+
+
+class _RecSession:
+    """Fake NebulaGraphStore: records structured_query(q) statements; returns
+    a canned row list per matched substring for reads."""
+    def __init__(self, read_map=None):
+        self.stmts = []
+        self._read_map = read_map or {}
+    def structured_query(self, query, param_map=None):
+        assert not param_map, "nebula writeback must inline values (no param_map)"
+        self.stmts.append(query)
+        for needle, rows in self._read_map.items():
+            if needle in query:
+                return rows
+        return []
+
+
+def test_nebula_merge_community_inserts_vertex_and_member_edges():
+    s = _RecSession()
+    wb = cw.NebulaCommunityWriteback(s)
+    wb.merge_community(community_id="7", level=0, member_count=2,
+                       members_hash="h", members=["Alice", "Bob"], carry=None)
+    joined = "\n".join(s.stmts)
+    cvid = cw.community_vid("7", 0)
+    assert 'INSERT VERTEX `Community`' in joined
+    assert f'"{cvid}":(' in joined
+    # report_vec never written to the vertex
+    assert "report_vec" not in joined
+    # IN_COMMUNITY edges from each member's entity_vid to the community vid, with level
+    assert 'INSERT EDGE `IN_COMMUNITY`' in joined
+    assert f'"{entity_vid("Alice")}"->"{cvid}"' in joined
+    assert f'"{entity_vid("Bob")}"->"{cvid}"' in joined
+
+
+def test_nebula_merge_subcommunity_adds_parent_of_edge():
+    s = _RecSession()
+    wb = cw.NebulaCommunityWriteback(s)
+    wb.merge_subcommunity(community_id="9", level=1, parent_id="7",
+                          member_count=1, members_hash="h2",
+                          members=["Carol"], carry={"report": "R", "title": "T",
+                                                    "summary": "S", "report_vec": [0.1],
+                                                    "summarized_at": 5})
+    joined = "\n".join(s.stmts)
+    child = cw.community_vid("9", 1)
+    parent = cw.community_vid("7", 0)
+    assert 'INSERT EDGE `PARENT_OF`' in joined
+    assert f'"{parent}"->"{child}"' in joined
+    # carry report text lands on the vertex; report_vec does not
+    assert '"R"' in joined and '"T"' in joined and '"S"' in joined
+    assert "0.1" not in joined
+
+
+def test_nebula_prune_level_lookups_then_deletes_with_edge():
+    cvid = cw.community_vid("7", 0)
+    s = _RecSession(read_map={"LOOKUP ON `Community` WHERE": [{"vid": cvid}]})
+    wb = cw.NebulaCommunityWriteback(s)
+    wb.prune_level(0)
+    joined = "\n".join(s.stmts)
+    assert "LOOKUP ON `Community` WHERE `Community`.level == 0" in joined
+    assert f'DELETE VERTEX "{cvid}" WITH EDGE' in joined
+
+
+def test_nebula_prune_all_no_vertices_is_noop():
+    s = _RecSession(read_map={"LOOKUP ON `Community` YIELD": []})
+    wb = cw.NebulaCommunityWriteback(s)
+    wb.prune_all()
+    # LOOKUP ran, but no DELETE VERTEX (nothing to delete)
+    assert any("LOOKUP ON `Community` YIELD" in q for q in s.stmts)
+    assert not any("DELETE VERTEX" in q for q in s.stmts)
+
+
+def test_nebula_read_old_reports_returns_rows_with_nonblank_report():
+    cvid = cw.community_vid("7", 0)
+    s = _RecSession(read_map={
+        "LOOKUP ON `Community` YIELD": [{"vid": cvid}],
+        "FETCH PROP ON `Community`": [
+            {"level": 0, "h": "h", "report": "r", "title": "t",
+             "summary": "s", "summarized_at": 9},
+            {"level": 0, "h": "h2", "report": "", "title": "", "summary": "", "summarized_at": 0},
+        ],
+    })
+    wb = cw.NebulaCommunityWriteback(s)
+    rows = wb.read_old_reports()
+    assert len(rows) == 1                       # blank-report row dropped
+    assert rows[0]["h"] == "h" and rows[0]["report"] == "r"
+    assert rows[0].get("report_vec") is None    # not stored on the vertex
+
+
+def test_dispatch_returns_nebula_when_backend_nebula(monkeypatch):
+    monkeypatch.setattr(cw.settings.graph, "backend", "nebula")
+    assert isinstance(cw.build_community_writeback(_RecSession()), cw.NebulaCommunityWriteback)
