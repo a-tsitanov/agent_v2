@@ -114,6 +114,35 @@ def _probe_tag_write_ready(
     return False
 
 
+def _probe_edge_write_ready(
+    session: Any, edge: str, insert_stmt: str, cleanup_stmts: list[str], *,
+    attempts: int, delay_s: float,
+) -> bool:
+    """Probe until an INSERT against `edge` lands, then run `cleanup_stmts`.
+
+    An `ALTER EDGE ... ADD` (existing space) and a fresh `CREATE EDGE` (new
+    space) both propagate to storaged with the same ~1-heartbeat lag as a tag,
+    so the first edge-write touching a just-added column can hit
+    "Unknown column"/"No schema found" until it propagates. The write path
+    (`upsert_relations`) is fail-open, so a raced batch is silently DROPPED —
+    wait for readiness here. Never raises.
+    """
+    from loguru import logger
+
+    for attempt in range(1, attempts + 1):
+        if session.execute(insert_stmt).is_succeeded():
+            for stmt in cleanup_stmts:
+                session.execute(stmt)
+            return True
+        if attempt < attempts:
+            time.sleep(delay_s)
+    logger.warning(
+        "nebula ensure_schema: `{e}` edge not write-ready after {n} attempt(s)",
+        e=edge, n=attempts,
+    )
+    return False
+
+
 def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 1.0) -> None:
     """Execute SPACE_DDL then SCHEMA_DDL on an open nebula3 session.
 
@@ -176,4 +205,22 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         "report, title, summary, summarized_at) "
         f'VALUES "{probe}":("", 0, 0, "", 0, "", "", "", 0);',
         probe, attempts=use_attempts, delay_s=use_delay_s,
+    )
+
+    # The `RELATED` weight column reaches storaged with the same lag (via the
+    # fresh CREATE EDGE on a new space, or the ALTER EDGE above on an existing
+    # one). Probe a weighted edge-write between two sentinel vertices until it
+    # lands, so the first ingest batch's weighted edges aren't silently dropped
+    # by the fail-open write path.
+    probe_b = "__kb_schema_probe_b__"
+    session.execute(
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label) VALUES "
+        f'"{probe}":("", "", 0, 0, ""), "{probe_b}":("", "", 0, 0, "");'
+    )
+    _probe_edge_write_ready(
+        session, "RELATED",
+        "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) "
+        f'VALUES "{probe}" -> "{probe_b}":("", "", 0, 0, 1.0);',
+        [f'DELETE VERTEX "{probe}" WITH EDGE;', f'DELETE VERTEX "{probe_b}" WITH EDGE;'],
+        attempts=use_attempts, delay_s=use_delay_s,
     )

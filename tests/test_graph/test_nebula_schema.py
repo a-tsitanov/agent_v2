@@ -126,3 +126,17 @@ def test_ensure_schema_alters_related_edge_to_add_weight():
     fake = _FakeSession()
     ensure_schema(fake)
     assert "ALTER EDGE `RELATED` ADD (weight double DEFAULT 1.0);" in fake.statements
+
+
+def test_ensure_schema_probes_related_weighted_edge_write():
+    # The RELATED weight column (fresh CREATE EDGE or the ALTER on an existing
+    # space) propagates to storaged with a lag; ensure_schema must probe a
+    # weighted edge-write until it lands so the first fail-open ingest batch
+    # doesn't silently drop edges ("Unknown column weight").
+    fake = _FakeSession()
+    ensure_schema(fake)
+    joined = "\n".join(fake.statements)
+    assert "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight)" in joined
+    assert "__kb_schema_probe_b__" in joined
+    # both sentinel vertices are cleaned up WITH EDGE
+    assert 'DELETE VERTEX "__kb_schema_probe_b__" WITH EDGE;' in fake.statements
