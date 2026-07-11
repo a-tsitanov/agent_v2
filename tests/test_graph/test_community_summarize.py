@@ -1,3 +1,6 @@
+import asyncio
+
+import src.workflow.search.activities.community as cact
 from src.graph import community_summarize as cs
 from src.graph.community_writeback import community_vid
 from src.graph.nebula_store import entity_vid
@@ -110,3 +113,23 @@ def test_nebula_read_member_context_intra_community_filter_and_cap():
     assert "KNOWS" in by_name["A"]["rel_types"] and "KNOWS" in by_name["B"]["rel_types"]
     assert "IGNORED" not in by_name["A"]["rel_types"]      # non-member edge excluded
     assert len(by_name["A"]["rel_types"]) <= 10
+
+
+def test_gather_context_routes_member_read_through_seam(monkeypatch):
+    captured = {}
+
+    class _FakeSumm:
+        def read_member_context(self, *, community_id, level):
+            captured["member"] = (community_id, level)
+            return [{"name": "a", "description": "d", "rel_types": ["R"]}]
+        def read_child_reports(self, *, community_id, level):
+            captured["child"] = (community_id, level)
+            return []
+        def write_report(self, **kw):
+            captured["write"] = kw
+
+    monkeypatch.setattr(cact, "build_community_summarize", lambda store: _FakeSumm())
+    p = cact.SummarizeCommunityParams(community_id="7", level=0)
+    body = asyncio.run(cact._gather_context(object(), p))
+    assert captured["member"] == ("7", 0)
+    assert isinstance(body, str) and body            # context string built from the rows

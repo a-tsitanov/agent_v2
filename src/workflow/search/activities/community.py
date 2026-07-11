@@ -31,6 +31,7 @@ from typing import Any
 
 from temporalio import activity
 
+from src.graph.community_summarize import build_community_summarize
 from src.graph.community_vector_store import build_community_report_vector_store
 from src.workflow.contracts import (
     DetectCommunitiesParams,
@@ -39,50 +40,6 @@ from src.workflow.contracts import (
     SummarizeCommunityParams,
     SummarizeCommunityResult,
 )
-
-# Read the members' names + descriptions for the summary prompt (and any
-# inter-member relations to give the LLM relational context).  Members are
-# resolved from Neo4j by ``community_id`` via the ``IN_COMMUNITY`` links
-# that ``detect`` already persisted (level 0) — so the summarize params
-# carry only a count, never the full name list (Temporal payload stays
-# tiny).  ``o`` is constrained to the SAME community so relation context
-# matches the legacy ``o.name IN $members`` semantics.
-_MEMBER_CONTEXT_CYPHER = """
-MATCH (c:Community {id: $community_id, level: $level})<-[:IN_COMMUNITY]-(e:__Entity__)
-OPTIONAL MATCH (e)-[r]-(o:__Entity__)-[:IN_COMMUNITY]->(c)
-RETURN e.name AS name,
-       coalesce(e.description, '') AS description,
-       collect(DISTINCT type(r))[..10] AS rel_types
-ORDER BY name
-"""
-
-# Child-report context for level>0 communities — a parent report is
-# composed from its children's reports (cheaper than re-reading every
-# leaf member).  Direction is intentional: PARENT_OF runs coarser→finer
-# (``(parent {level:k})-[:PARENT_OF]->(child {level:k+1})``), so a level-k
-# community here reads its finer level-(k+1) constituents — i.e. a coarse
-# report is built bottom-up from its finer children.  Only children that
-# ALREADY have a report participate, so the summarise fan-out MUST run
-# finest-level-first for parents to see them — that level ordering is wired
-# in Phase 3 (CommunityBuildWorkflow); until then the level>0 path is
-# latent (the build workflow only detects the coarsest level).
-_CHILD_REPORTS_CYPHER = """
-MATCH (c:Community {id: $community_id, level: $level})-[:PARENT_OF]->(child:Community)
-WHERE child.report IS NOT NULL
-RETURN child.title AS title, child.summary AS summary
-ORDER BY child.member_count DESC
-"""
-
-# Idempotent: re-running updates the report on the SAME :Community node
-# (keyed on id+level) rather than creating a new one.  ``summary`` is kept
-# as a plain column (embedding source + lexical-fallback text); ``report``
-# is the JSON-serialised structured report; ``report_vec`` is the native
-# embedding (may be unset on embed failure — fail-open).
-_WRITE_REPORT_CYPHER = """
-MERGE (c:Community {id: $community_id, level: $level})
-SET c.report = $report, c.title = $title, c.summary = $summary,
-    c.report_vec = $report_vec, c.summarized_at = timestamp()
-"""
 
 # Small-tier, /no_think, Russian-friendly.  Returns a STRUCTURED report as
 # JSON.  Importance is a 1-100 salience score the dynamic-selection phase
@@ -322,16 +279,17 @@ async def detect_communities_activity(
 async def _gather_context(store, params: SummarizeCommunityParams) -> str:
     """Build the LLM context body for ONE community.
 
-    level 0  → from member entities/relations (``_MEMBER_CONTEXT_CYPHER``).
-    level>0  → from CHILD reports (``_CHILD_REPORTS_CYPHER``); falls back to
-               member context when no child reports exist yet.
+    level 0  → from member entities/relations (``summ.read_member_context``).
+    level>0  → from CHILD reports (``summ.read_child_reports``); falls back
+               to member context when no child reports exist yet.
     """
+    summ = build_community_summarize(store)
+
     if params.level > 0:
         try:
             child_rows = await asyncio.to_thread(
-                store.structured_query,
-                _CHILD_REPORTS_CYPHER,
-                {"community_id": params.community_id, "level": params.level},
+                summ.read_child_reports,
+                community_id=params.community_id, level=params.level,
             )
             child_rows = list(child_rows or [])
         except Exception as exc:
@@ -346,9 +304,8 @@ async def _gather_context(store, params: SummarizeCommunityParams) -> str:
 
     try:
         rows = await asyncio.to_thread(
-            store.structured_query,
-            _MEMBER_CONTEXT_CYPHER,
-            {"community_id": params.community_id, "level": params.level},
+            summ.read_member_context,
+            community_id=params.community_id, level=params.level,
         )
         rows = list(rows or [])
     except Exception as exc:
@@ -437,7 +394,7 @@ async def summarize_community_activity(
     # 3b. Mirror the report vector through the CommunityReportVectorStore
     #     seam (fail-open — never blocks persistence below).  On the
     #     default neo4j/native backend this is a no-op (report_vec is
-    #     persisted on the :Community node by _WRITE_REPORT_CYPHER below);
+    #     persisted on the :Community node by summ.write_report below);
     #     under an opt-in Milvus backend this is the actual write.
     if report_vec is not None:
         try:
@@ -457,17 +414,12 @@ async def summarize_community_activity(
     # 4. Persist the report (idempotent MERGE on id+level).
     persisted = False
     try:
+        summ = build_community_summarize(store)
         await asyncio.to_thread(
-            store.structured_query,
-            _WRITE_REPORT_CYPHER,
-            {
-                "community_id": params.community_id,
-                "level": params.level,
-                "report": json.dumps(report, ensure_ascii=False),
-                "title": title,
-                "summary": summary,
-                "report_vec": report_vec,
-            },
+            summ.write_report,
+            community_id=params.community_id, level=params.level,
+            report=json.dumps(report, ensure_ascii=False),
+            title=title, summary=summary, report_vec=report_vec,
         )
         persisted = True
     except Exception as exc:
