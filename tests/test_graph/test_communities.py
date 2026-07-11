@@ -11,8 +11,11 @@ call and returns canned rows for the Leiden-stream read.  We assert:
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+import src.graph.communities as comm
 from src.graph.communities import detect_communities
 
 
@@ -509,3 +512,50 @@ async def test_single_level_merge_passes_all_params():
     store = _ParamCheckingStore(rows)
     await detect_communities(store, min_size=3)
     assert store.missing == [], f"missing query params: {store.missing}"
+
+
+# ── Task 4: BUILD write-back routed through the CommunityWriteback seam ──
+
+
+class _FakeWriteback:
+    def __init__(self):
+        self.calls = []
+    def ensure_schema(self): self.calls.append(("ensure_schema",))
+    def read_old_reports(self):
+        self.calls.append(("read_old_reports",))
+        return []
+    def prune_level(self, level): self.calls.append(("prune_level", level))
+    def prune_all(self): self.calls.append(("prune_all",))
+    def merge_community(self, **kw): self.calls.append(("merge_community", kw["community_id"], kw["level"]))
+    def merge_subcommunity(self, **kw): self.calls.append(("merge_subcommunity", kw["community_id"], kw["level"]))
+
+
+def test_detect_communities_routes_writeback_through_seam(monkeypatch):
+    monkeypatch.setattr(comm.settings.temporal, "community_backend", "leidenalg")
+
+    def fake_extract(store, *, batch_size=50_000):
+        edges = [("a", "b", 5.0), ("b", "c", 5.0), ("a", "c", 5.0),
+                 ("x", "y", 5.0), ("y", "z", 5.0), ("x", "z", 5.0), ("c", "x", 0.1)]
+        return edges, list("abcxyz")
+    monkeypatch.setattr(comm, "extract_entity_edges", fake_extract)
+
+    fake = _FakeWriteback()
+    # detect_communities does a LAZY per-call `from src.graph.community_writeback
+    # import build_community_writeback` (module-level would create an import
+    # cycle — community_writeback.py imports Cypher constants FROM
+    # communities.py). That local import re-resolves fresh from the SOURCE
+    # module on every call, so the patch target is the source module, not
+    # `comm` (unlike `extract_entity_edges`, which IS a genuine module-level
+    # import in communities.py and so is patchable via `comm` directly).
+    import src.graph.community_writeback as community_writeback
+    monkeypatch.setattr(community_writeback, "build_community_writeback", lambda store: fake)
+
+    class _Store:
+        def structured_query(self, cypher, param_map=None): return []
+    refs = asyncio.run(comm.detect_communities(_Store(), min_size=2, level=0))
+    assert len(refs) == 2
+    kinds = [c[0] for c in fake.calls]
+    assert kinds[0] == "ensure_schema"
+    assert ("prune_level", 0) in fake.calls
+    assert kinds.count("merge_community") == 2      # two cliques, single level
+    assert "prune_all" not in kinds

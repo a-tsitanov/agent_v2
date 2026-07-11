@@ -257,7 +257,8 @@ async def _read_old_reports(store: Any | None) -> dict[tuple[int, str], dict]:
     if store is None:
         return {}
     try:
-        rows = await asyncio.to_thread(_run_query, store, _READ_OLD_REPORTS_CYPHER)
+        from src.graph.community_writeback import build_community_writeback
+        rows = await asyncio.to_thread(build_community_writeback(store).read_old_reports)
     except Exception as exc:
         logger.warning("communities: read old reports failed: {e}", e=exc)
         return {}
@@ -515,42 +516,28 @@ async def detect_communities(
         pn=stats["nodes"], pr=stats["rels"],
     )
 
-    # Persist :Community nodes + member links (idempotent MERGE).
+    # Persist :Community nodes + member links via the backend writeback
+    # (neo4j: the historical Cypher verbatim; nebula: nGQL).
+    from src.graph.community_writeback import build_community_writeback
+    writeback = build_community_writeback(store)
     try:
-        await asyncio.to_thread(_run_query, store, _COMMUNITY_CONSTRAINT)
-        from src.graph.index import ensure_community_indexes
-        await asyncio.to_thread(ensure_community_indexes, store)
-        # Prune the prior run's communities for THIS level FIRST so a
-        # rebuild starts clean (Leiden may renumber/shrink ids, leaving
-        # ghost :Community nodes + orphaned summaries).  Level-scoped.
-        await asyncio.to_thread(
-            _run_query, store, _PRUNE_LEVEL_CYPHER, {"level": level},
-        )
-        for comm in communities:
+        await asyncio.to_thread(writeback.ensure_schema)
+        # Prune the prior run's communities for THIS level FIRST so a rebuild
+        # starts clean (Leiden may renumber/shrink ids). Level-scoped.
+        await asyncio.to_thread(writeback.prune_level, level)
+        for comm_ref in communities:
+            # asyncio.to_thread forwards **kwargs; each call is awaited before
+            # the next iteration, so no closure/late-binding concern.
             await asyncio.to_thread(
-                _run_query, store, _MERGE_COMMUNITY_CYPHER,
-                {
-                    "community_id": comm.community_id,
-                    "level": comm.level,
-                    "member_count": comm.member_count,
-                    "members_hash": comm.members_hash,
-                    "members": comm.members,
-                    # No carry-over on the single-level path; the MERGE's
-                    # FOREACH no-ops when $carry_report is NULL.  ALL params
-                    # the Cypher references must still be passed or Neo4j
-                    # raises ParameterMissing (incl. carry_summarized_at).
-                    "carry_report": None, "carry_title": None,
-                    "carry_summary": None, "carry_report_vec": None,
-                    "carry_summarized_at": None,
-                },
+                writeback.merge_community,
+                community_id=comm_ref.community_id, level=comm_ref.level,
+                member_count=comm_ref.member_count, members_hash=comm_ref.members_hash,
+                members=comm_ref.members, carry=None,
             )
     except Exception as exc:
         logger.warning("communities: :Community write failed: {e}", e=exc)
-        # Detection still succeeded; surface what we grouped so the
-        # workflow can at least attempt summaries.
     finally:
-        # Only the GDS path allocates an in-memory projection (`graph_name`)
-        # that needs dropping; leidenalg/graphscope never define it.
+        # Only the GDS path allocates an in-memory projection to drop.
         if settings.temporal.community_backend not in ("leidenalg", "graphscope"):
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(_run_query, store, _drop_cypher(graph_name))
@@ -676,39 +663,34 @@ async def detect_hierarchy(
 
     # Persist the hierarchy.  Communities are sorted coarsest-first, so a
     # level-k node's level-(k-1) parent is always written before it.
+    from src.graph.community_writeback import build_community_writeback
+    writeback = build_community_writeback(store)
     try:
-        await asyncio.to_thread(_run_query, store, _COMMUNITY_CONSTRAINT)
-        from src.graph.index import ensure_community_indexes
-        await asyncio.to_thread(ensure_community_indexes, store)
+        await asyncio.to_thread(writeback.ensure_schema)
         # Prune EVERY prior :Community (depth/ids can change between runs).
-        await asyncio.to_thread(_run_query, store, _PRUNE_ALL_CYPHER)
-        for comm, carry in zip(communities, carry_params):
-            if comm.level == 0:
-                # Coarsest: entity IN_COMMUNITY links (identical to today).
+        await asyncio.to_thread(writeback.prune_all)
+        for comm_ref, carry in zip(communities, carry_params):
+            carry_clean = {
+                "report": carry.get("carry_report"),
+                "title": carry.get("carry_title"),
+                "summary": carry.get("carry_summary"),
+                "report_vec": carry.get("carry_report_vec"),
+                "summarized_at": carry.get("carry_summarized_at"),
+            }
+            if comm_ref.level == 0:
                 await asyncio.to_thread(
-                    _run_query, store, _MERGE_COMMUNITY_CYPHER,
-                    {
-                        "community_id": comm.community_id,
-                        "level": comm.level,
-                        "member_count": comm.member_count,
-                        "members_hash": comm.members_hash,
-                        "members": comm.members,
-                        **carry,
-                    },
+                    writeback.merge_community,
+                    community_id=comm_ref.community_id, level=comm_ref.level,
+                    member_count=comm_ref.member_count, members_hash=comm_ref.members_hash,
+                    members=comm_ref.members, carry=carry_clean,
                 )
             else:
-                # Finer: PARENT_OF edge + member IN_COMMUNITY links (leaf context).
                 await asyncio.to_thread(
-                    _run_query, store, _MERGE_SUBCOMMUNITY_CYPHER,
-                    {
-                        "community_id": comm.community_id,
-                        "level": comm.level,
-                        "member_count": comm.member_count,
-                        "members_hash": comm.members_hash,
-                        "members": comm.members,
-                        "parent_id": comm.parent_id,
-                        **carry,
-                    },
+                    writeback.merge_subcommunity,
+                    community_id=comm_ref.community_id, level=comm_ref.level,
+                    parent_id=comm_ref.parent_id, member_count=comm_ref.member_count,
+                    members_hash=comm_ref.members_hash, members=comm_ref.members,
+                    carry=carry_clean,
                 )
     except Exception as exc:
         logger.warning("communities: :Community hierarchy write failed: {e}", e=exc)
