@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 from temporalio import activity
 
+from src.graph.community_read import build_community_read
 from src.graph.community_vector_store import build_community_report_vector_store
 from src.workflow.contracts import (
     CommunitySummaryRef,
@@ -37,17 +38,6 @@ from src.workflow.contracts import (
     MapPartialParams,
     MapPartialResult,
 )
-
-# Read the stored community summaries for a level, largest first so the
-# most informative communities lead when ``limit`` truncates.  Empty/
-# unsummarised communities are skipped (summary IS NOT NULL / non-blank).
-_READ_SUMMARIES_CYPHER = """
-MATCH (c:Community {level: $level})
-WHERE c.summary IS NOT NULL AND trim(c.summary) <> ''
-RETURN c.id AS community_id, c.level AS level, c.summary AS summary,
-       coalesce(c.member_count, 0) AS member_count
-ORDER BY member_count DESC, community_id ASC
-"""
 
 # Semantic selection (v1): kNN over the structured community report
 # vectors, routed through ``CommunityReportVectorStore.knn`` (the
@@ -296,12 +286,9 @@ async def _map_communities_lexical(
 ) -> MapCommunitiesResult:
     """LEXICAL path: read stored summaries + rank by query word-overlap.
     Fail-safe → empty list on any store error."""
+    reader = build_community_read(store)
     try:
-        rows = await asyncio.to_thread(
-            store.structured_query,
-            _READ_SUMMARIES_CYPHER,
-            {"level": params.level},
-        )
+        rows = await asyncio.to_thread(reader.read_summaries, level=params.level)
         rows = list(rows or [])
     except Exception as exc:
         activity.logger.warning("map_communities  read err=%s", exc)
