@@ -122,7 +122,7 @@ class NebulaGraphEdgeExport:
             rows = self._exec(
                 f"LOOKUP ON `Entity` WHERE `Entity`.name > {_q(after)} "
                 "YIELD `Entity`.name AS name | ORDER BY $-.name ASC "
-                f"LIMIT {int(batch_size)};"
+                f"| LIMIT {int(batch_size)};"
             )
             if not rows:
                 break

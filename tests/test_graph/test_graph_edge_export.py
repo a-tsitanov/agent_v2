@@ -121,11 +121,13 @@ def test_nebula_stream_names_keyset_lookup_advances_after_and_stops():
     names = exp.stream_names(batch_size=2)
 
     assert names == ["A", "B", "C"]
+    # nebula requires LIMIT as its OWN pipe stage (`| LIMIT n`), not a trailing
+    # clause after ORDER BY — the missing pipe was a live SyntaxError near LIMIT.
     assert store.stmts == [
         'LOOKUP ON `Entity` WHERE `Entity`.name > "" YIELD `Entity`.name AS name '
-        "| ORDER BY $-.name ASC LIMIT 2;",
+        "| ORDER BY $-.name ASC | LIMIT 2;",
         'LOOKUP ON `Entity` WHERE `Entity`.name > "B" YIELD `Entity`.name AS name '
-        "| ORDER BY $-.name ASC LIMIT 2;",
+        "| ORDER BY $-.name ASC | LIMIT 2;",
     ]
 
 
