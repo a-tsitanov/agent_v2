@@ -92,8 +92,10 @@ def test_nebula_read_member_context_intra_community_filter_and_cap():
     s = _RecNebula(read_map={
         'OVER `IN_COMMUNITY` REVERSELY': [{"m": a}, {"m": b}],
         "FETCH PROP ON `Entity`": [
-            {"name": "A", "description": "da"},
-            {"name": "B", "description": "db"},
+            # real nebula FETCH ... YIELD id(vertex) AS vid returns the vid per
+            # row; props are keyed by it (order-independent), NOT positionally.
+            {"vid": b, "name": "B", "description": "db"},
+            {"vid": a, "name": "A", "description": "da"},
         ],
         'OVER `RELATED`': [
             {"s": a, "d": b, "rt": "KNOWS"},        # intra-community -> counts for A and B

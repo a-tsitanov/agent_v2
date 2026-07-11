@@ -129,12 +129,11 @@ class NebulaCommunitySummarize:
             f"FETCH PROP ON `Entity` {listed} YIELD id(vertex) AS vid, "
             "`Entity`.name AS name, `Entity`.description AS description;"
         )
-        # Key by the row's own vid when present (real nGQL rows always carry
-        # it); fall back to positional pairing with `members` for fakes/tests
-        # whose canned rows omit "vid" but preserve request order.
+        # Key props by each row's own vid (the FETCH YIELDs id(vertex) AS vid).
+        # FETCH does NOT guarantee input order, so never pair positionally.
         props = {
-            r.get("vid", v): (r.get("name") or "", r.get("description") or "")
-            for v, r in zip(members, prop_rows, strict=False)
+            r["vid"]: (r.get("name") or "", r.get("description") or "")
+            for r in prop_rows
         }
         edges = self._exec(
             f"GO FROM {listed} OVER `RELATED` BIDIRECT YIELD "
