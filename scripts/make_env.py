@@ -332,6 +332,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "NEBULA_PORT": "Порт NebulaGraph graphd (по умолчанию 9669).",
     "NEBULA_SPACE": "Имя графового space в NebulaGraph.",
     "NEBULA_USER": "Пользователь NebulaGraph.",
+    "NEBULA_WRITE_BATCH_SIZE": "Число строк на один INSERT VERTEX/EDGE (батчинг multi-VALUES). >= 1.",
     # ── Neo4jSettings (NEO4J_*) — граф ───────────────────────────────
     "NEO4J_DATABASE": "Имя базы Neo4j.",
     "NEO4J_PASSWORD": "Пароль Neo4j. Секрет; в проде сменить дефолт 'changeme'.",

@@ -34,6 +34,12 @@ def entity_vid(name: str) -> str:
     return hashlib.blake2b((name or "").encode("utf-8"), digest_size=16).hexdigest()
 
 
+def _chunks(seq: list[Any], n: int) -> Any:
+    """Yield successive n-sized slices of seq (n >= 1)."""
+    for i in range(0, len(seq), n):
+        yield seq[i : i + n]
+
+
 def _q(value: Any) -> str:
     """Quote a scalar for inline nGQL (strings only; ints pass through)."""
     if isinstance(value, bool):
@@ -51,37 +57,49 @@ class NebulaGraphStore:
 
     # --- writes ---------------------------------------------------------
     def upsert_nodes(self, nodes: list[Any]) -> None:
-        for n in nodes:
+        def row(n: Any) -> str:
             props = getattr(n, "properties", {}) or {}
             vid = entity_vid(getattr(n, "name", ""))
-            stmt = (
-                "INSERT VERTEX `Entity` "
-                "(name, description, mention_count, created_at, label) VALUES "
+            return (
                 f"{_q(vid)}:({_q(getattr(n, 'name', ''))}, "
                 f"{_q(props.get('description', ''))}, "
                 f"{int(props.get('mention_count', 0) or 0)}, "
                 f"{int(props.get('created_at', 0) or 0)}, "
-                f"{_q(getattr(n, 'label', '') or '')});"
+                f"{_q(getattr(n, 'label', '') or '')})"
+            )
+
+        for chunk in _chunks(nodes, settings.nebula.write_batch_size):
+            stmt = (
+                "INSERT VERTEX `Entity` "
+                "(name, description, mention_count, created_at, label) VALUES "
+                + ", ".join(row(n) for n in chunk)
+                + ";"
             )
             self._exec(stmt)
 
     def upsert_relations(self, relations: list[Any]) -> None:
-        for r in relations:
-            # Neo4j allows dynamic relationship types; Nebula needs declared
-            # edge types. Entity-entity relations all become `RELATED`, with
-            # the original type stored in the `rel_type` PROPERTY (a value,
-            # so no edge-identifier injection). See ADR / Phase-2 spec.
+        # Neo4j allows dynamic relationship types; Nebula needs declared
+        # edge types. Entity-entity relations all become `RELATED`, with
+        # the original type stored in the `rel_type` PROPERTY (a value,
+        # so no edge-identifier injection). See ADR / Phase-2 spec.
+        def row(r: Any) -> str:
             rel_type = getattr(r, "label", "") or ""
             props = getattr(r, "properties", {}) or {}
             src = entity_vid(getattr(r, "source_id", ""))
             tgt = entity_vid(getattr(r, "target_id", ""))
-            stmt = (
-                "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to) VALUES "
+            return (
                 f"{_q(src)} -> {_q(tgt)}:("
                 f"{_q(rel_type)}, "
                 f"{_q(props.get('polarity', ''))}, "
                 f"{int(props.get('valid_from', 0) or 0)}, "
-                f"{int(props.get('valid_to', 0) or 0)});"
+                f"{int(props.get('valid_to', 0) or 0)})"
+            )
+
+        for chunk in _chunks(relations, settings.nebula.write_batch_size):
+            stmt = (
+                "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to) VALUES "
+                + ", ".join(row(r) for r in chunk)
+                + ";"
             )
             self._exec(stmt)
 

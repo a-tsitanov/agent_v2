@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.config import settings
 from src.graph.nebula_store import NebulaGraphStore, entity_vid
 
 
@@ -95,3 +96,106 @@ def test_structured_query_rejects_params():
     store.structured_query("YIELD 1", {})
     store.structured_query("YIELD 1")
     assert sess.executed == ["YIELD 1", "YIELD 1"]
+
+
+# --- write batching (multi-VALUES INSERT) -------------------------------
+
+
+def _node(i: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=f"Entity{i}",
+        label="PERSON",
+        properties={"description": f"desc{i}", "mention_count": i, "created_at": 1000 + i},
+    )
+
+
+def _rel(i: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        source_id=f"Entity{i}",
+        target_id=f"Entity{i + 1}",
+        label="WORKS_WITH",
+        properties={"polarity": "pos", "valid_from": 100 + i, "valid_to": 200 + i},
+    )
+
+
+def test_upsert_nodes_batches_into_multi_values_statements(monkeypatch):
+    monkeypatch.setattr(settings.nebula, "write_batch_size", 2)
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    nodes = [_node(i) for i in range(5)]
+
+    store.upsert_nodes(nodes)
+
+    assert len(sess.executed) == 3  # 2 + 2 + 1
+    for stmt in sess.executed:
+        assert stmt.startswith(
+            "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label) VALUES "
+        )
+    # first two statements have 2 comma-joined rows, last has 1
+    assert sess.executed[0].count(":(") == 2
+    assert sess.executed[1].count(":(") == 2
+    assert sess.executed[2].count(":(") == 1
+    # VID present and correctly quoted
+    vid0 = entity_vid("Entity0")
+    assert f'{_q_expect(vid0)}:(' in sess.executed[0]
+    assert '"desc0"' in sess.executed[0]
+    assert '"PERSON"' in sess.executed[0]
+
+
+def _q_expect(value: str) -> str:
+    return f'"{value}"'
+
+
+def test_upsert_relations_batches_into_multi_values_statements(monkeypatch):
+    monkeypatch.setattr(settings.nebula, "write_batch_size", 2)
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    rels = [_rel(i) for i in range(5)]
+
+    store.upsert_relations(rels)
+
+    assert len(sess.executed) == 3  # 2 + 2 + 1
+    for stmt in sess.executed:
+        assert stmt.startswith(
+            "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to) VALUES "
+        )
+    assert sess.executed[0].count(" -> ") == 2
+    assert sess.executed[1].count(" -> ") == 2
+    assert sess.executed[2].count(" -> ") == 1
+    src0, tgt0 = entity_vid("Entity0"), entity_vid("Entity1")
+    assert f'"{src0}" -> "{tgt0}"' in sess.executed[0]
+    assert '"WORKS_WITH"' in sess.executed[0]
+
+
+def test_upsert_nodes_empty_list_emits_no_statements():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    store.upsert_nodes([])
+    assert sess.executed == []
+
+
+def test_upsert_relations_empty_list_emits_no_statements():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    store.upsert_relations([])
+    assert sess.executed == []
+
+
+def test_upsert_nodes_batch_size_ge_len_emits_one_statement(monkeypatch):
+    monkeypatch.setattr(settings.nebula, "write_batch_size", 100)
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    nodes = [_node(i) for i in range(5)]
+    store.upsert_nodes(nodes)
+    assert len(sess.executed) == 1
+    assert sess.executed[0].count(":(") == 5
+
+
+def test_upsert_relations_batch_size_ge_len_emits_one_statement(monkeypatch):
+    monkeypatch.setattr(settings.nebula, "write_batch_size", 100)
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    rels = [_rel(i) for i in range(5)]
+    store.upsert_relations(rels)
+    assert len(sess.executed) == 1
+    assert sess.executed[0].count(" -> ") == 5

@@ -165,6 +165,10 @@ class NebulaSettings(BaseSettings):
     user: str = "root"
     password: SecretStr = SecretStr("nebula")
     space: str = "kb"
+    # Rows per INSERT VERTEX/EDGE statement (multi-VALUES batching). Higher
+    # amortises round-trips at ingest scale; see docs/superpowers/specs/
+    # 2026-07-11-nebula-ingest-batch-design.md.
+    write_batch_size: int = Field(default=256, ge=1)
 
 
 class PostgresSettings(BaseSettings):
