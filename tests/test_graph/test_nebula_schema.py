@@ -175,7 +175,7 @@ def test_ensure_schema_entity_probe_includes_er_canonical_name():
     joined = "\n".join(fake.statements)
     assert (
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name, first_doc_id)" in joined
+        "er_canonical_name, first_doc_id, " in joined
     )
 
 
@@ -198,7 +198,7 @@ def test_ensure_schema_entity_probe_includes_first_doc_id():
     joined = "\n".join(fake.statements)
     assert (
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name, first_doc_id)" in joined
+        "er_canonical_name, first_doc_id, " in joined
     )
 
 
@@ -214,3 +214,52 @@ def test_ensure_schema_probes_related_weighted_edge_write():
     assert "__kb_schema_probe_b__" in joined
     # both sentinel vertices are cleaned up WITH EDGE
     assert 'DELETE VERTEX "__kb_schema_probe_b__" WITH EDGE;' in fake.statements
+
+
+def test_entity_ddl_has_wiki_columns():
+    # Wiki-editor graph ops (nebula-wiki-ops design, Design.1): dirty-flag
+    # bookkeeping + article metadata, mirrors er_canonical_name/first_doc_id.
+    entity_ddl = next(
+        s for s in SCHEMA_DDL if s.startswith("CREATE TAG IF NOT EXISTS `Entity`")
+    )
+    for col in (
+        "wiki_dirty bool",
+        "wiki_dirty_at int",
+        "wiki_hash string",
+        "wiki_synced_at int",
+        "wiki_page_title string",
+        "wikibase_qid string",
+    ):
+        assert col in entity_ddl, f"missing column: {col}"
+
+
+def test_ensure_schema_alters_entity_to_add_wiki_columns():
+    # Best-effort schema-evolution step for EXISTING spaces (created before
+    # Entity had the wiki columns). Fail-open, same pattern as the
+    # RELATED.weight / er_canonical_name / first_doc_id ALTERs.
+    fake = _FakeSession()
+    ensure_schema(fake)
+    assert any(
+        s.startswith("ALTER TAG `Entity` ADD (wiki_dirty") for s in fake.statements
+    ), "ALTER TAG `Entity` ADD (wiki_dirty... missing from ensure_schema"
+
+
+def test_schema_has_wiki_dirty_index():
+    assert any(
+        "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty)" in s
+        for s in SCHEMA_DDL
+    ), "entity_wiki_dirty_idx missing (backs the select-dirty LOOKUP by wiki_dirty)"
+
+
+def test_ensure_schema_entity_probe_includes_wiki_columns():
+    # The Entity write-readiness probe must grow to cover the 6 new wiki
+    # columns too, so ensure_schema waits for the ALTER(s) to propagate
+    # before the first wiki-sweep write touches them.
+    fake = _FakeSession()
+    ensure_schema(fake)
+    joined = "\n".join(fake.statements)
+    assert (
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
+        "er_canonical_name, first_doc_id, wiki_dirty, wiki_dirty_at, wiki_hash, "
+        "wiki_synced_at, wiki_page_title, wikibase_qid)" in joined
+    )

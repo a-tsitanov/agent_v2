@@ -36,10 +36,17 @@ SPACE_DDL = (
 SCHEMA_DDL: list[str] = [
     # `label string DEFAULT ''` is intentional: the Phase-1 write adapter
     # uses it to store the entity type (mirrors Neo4j's node label).
+    # wiki_dirty/wiki_dirty_at/wiki_hash/wiki_synced_at/wiki_page_title/
+    # wikibase_qid back the wiki-editor graph ops (nebula-wiki-ops design,
+    # Design.1): dirty-flag bookkeeping (mark/select/clear) + article
+    # metadata written by the sweep.
     "CREATE TAG IF NOT EXISTS `Entity` ("
     "name string, description string, mention_count int DEFAULT 0, "
     "created_at int DEFAULT 0, label string DEFAULT '', "
-    "er_canonical_name string DEFAULT '', first_doc_id string DEFAULT '');",
+    "er_canonical_name string DEFAULT '', first_doc_id string DEFAULT '', "
+    "wiki_dirty bool DEFAULT false, wiki_dirty_at int DEFAULT 0, "
+    "wiki_hash string DEFAULT '', wiki_synced_at int DEFAULT 0, "
+    "wiki_page_title string DEFAULT '', wikibase_qid string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
     "rel_type string DEFAULT '', polarity string DEFAULT '', "
     "valid_from int DEFAULT 0, valid_to int DEFAULT 0, weight double DEFAULT 1.0);",
@@ -68,6 +75,10 @@ SCHEMA_DDL: list[str] = [
     "CREATE TAG IF NOT EXISTS `ERVerdict` ("
     "er_key string, same bool DEFAULT false, updated int DEFAULT 0);",
     "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256));",
+    # Backs the wiki-sweep's select-dirty LOOKUP (WikiSweepWorkflow /
+    # NebulaWikiGraphOps.select_dirty) — Nebula requires an index to LOOKUP
+    # by a non-VID property.
+    "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty);",
 ]
 
 
@@ -207,6 +218,21 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3e. Same schema-evolution story for EXISTING spaces created before
+    # `Entity` had the 6 wiki-editor columns (nebula-wiki-ops design,
+    # Design.1: dirty-flag bookkeeping + article metadata). Best-effort/
+    # fail-open, same pattern as the ALTERs above. Nebula's `ALTER TAG ...
+    # ADD (...)` accepts a comma-separated multi-column list in one
+    # statement, so all 6 are added together here.
+    _execute_with_retry(
+        session,
+        "ALTER TAG `Entity` ADD (wiki_dirty bool DEFAULT false, "
+        "wiki_dirty_at int DEFAULT 0, wiki_hash string DEFAULT '', "
+        "wiki_synced_at int DEFAULT 0, wiki_page_title string DEFAULT '', "
+        "wikibase_qid string DEFAULT '');",
+        attempts=1, delay_s=0,
+    )
+
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
@@ -220,8 +246,9 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     _probe_tag_write_ready(
         session, "Entity",
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name, first_doc_id) "
-        f'VALUES "{probe}":("", "", 0, 0, "", "", "");',
+        "er_canonical_name, first_doc_id, wiki_dirty, wiki_dirty_at, wiki_hash, "
+        "wiki_synced_at, wiki_page_title, wikibase_qid) "
+        f'VALUES "{probe}":("", "", 0, 0, "", "", "", false, 0, "", 0, "", "");',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
     _probe_tag_write_ready(
