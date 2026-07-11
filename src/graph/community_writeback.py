@@ -12,8 +12,6 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Protocol
 
-from loguru import logger  # noqa: F401  # used by NebulaCommunityWriteback in Task 3
-
 from src.config import settings
 from src.graph.communities import (
     _COMMUNITY_CONSTRAINT,
