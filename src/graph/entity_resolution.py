@@ -58,6 +58,7 @@ from llama_index.core.graph_stores.types import (
 from llama_index.core.schema import BaseNode
 from loguru import logger
 
+from src.graph.er_graph_ops import build_er_graph_ops
 from src.graph.lightrag_parse import (
     _normalize_entity_name,
 )
@@ -827,15 +828,10 @@ def _load_verdict_cache(store, keys) -> dict[str, bool]:
     if store is None or not keys:
         return {}
     try:
-        rows = store.structured_query(
-            "MATCH (v:ERVerdict) WHERE v.key IN $keys "
-            "RETURN v.key AS key, v.same AS same",
-            param_map={"keys": keys},
-        )
+        return build_er_graph_ops(store).load_verdicts(keys)
     except Exception as exc:
         logger.warning("ER verdict cache load failed: {e}", e=exc)
         return {}
-    return {r["key"]: bool(r["same"]) for r in (rows or []) if isinstance(r, dict)}
 
 
 def _store_verdicts(store, entries: dict[str, bool]) -> None:
@@ -848,17 +844,7 @@ def _store_verdicts(store, entries: dict[str, bool]) -> None:
     if store is None or not entries:
         return
     try:
-        # Idempotent: backs the MERGE and prevents duplicate :ERVerdict
-        # nodes under concurrent writes; also indexes the IN-list load.
-        store.structured_query(
-            "CREATE CONSTRAINT er_verdict_key IF NOT EXISTS "
-            "FOR (v:ERVerdict) REQUIRE v.key IS UNIQUE"
-        )
-        store.structured_query(
-            "UNWIND $rows AS row MERGE (v:ERVerdict {key: row.key}) "
-            "SET v.same = row.same, v.updated = datetime()",
-            param_map={"rows": [{"key": k, "same": s} for k, s in entries.items()]},
-        )
+        build_er_graph_ops(store).store_verdicts(entries)
     except Exception as exc:
         logger.warning("ER verdict cache store failed: {e}", e=exc)
 
@@ -1100,34 +1086,9 @@ async def _cleanup_stored_losers(
     for loser_name, canon_name in pairs:
         try:
             await asyncio.to_thread(
-                graph_store.structured_query,
-                """
-                MATCH (loser:__Entity__ {name: $loser})
-                MATCH (canon:__Entity__ {name: $canon})
-                WHERE elementId(loser) <> elementId(canon)
-                // Copy outgoing edges loser→X to canon→X
-                CALL {
-                    WITH loser, canon
-                    MATCH (loser)-[r]->(t)
-                    WHERE elementId(t) <> elementId(canon)
-                    WITH canon, t, type(r) AS rt, properties(r) AS rp
-                    CALL apoc.merge.relationship(canon, rt, {}, rp, t, {})
-                        YIELD rel
-                    RETURN count(*) AS _o
-                }
-                // Copy incoming edges X→loser to X→canon
-                CALL {
-                    WITH loser, canon
-                    MATCH (s)-[r]->(loser)
-                    WHERE elementId(s) <> elementId(canon)
-                    WITH canon, s, type(r) AS rt, properties(r) AS rp
-                    CALL apoc.merge.relationship(s, rt, {}, rp, canon, {})
-                        YIELD rel
-                    RETURN count(*) AS _i
-                }
-                DETACH DELETE loser
-                """,
-                {"loser": loser_name, "canon": canon_name},
+                build_er_graph_ops(graph_store).merge_loser_into_canonical,
+                loser=loser_name,
+                canon=canon_name,
             )
         except Exception as exc:
             # Safe-by-inaction: leave the loser node INTACT (with its

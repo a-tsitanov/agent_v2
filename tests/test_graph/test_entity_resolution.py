@@ -535,6 +535,157 @@ async def test_cleanup_stored_losers_safe_on_failure():
     assert "DETACH DELETE" not in calls[0]["query"] or "apoc.merge" in calls[0]["query"]
 
 
+# ── ERGraphOps seam wiring (Task 4) ─────────────────────────────────
+
+
+def test_load_verdict_cache_routes_through_er_graph_ops_seam(monkeypatch):
+    """`_load_verdict_cache` must delegate to
+    `build_er_graph_ops(store).load_verdicts(keys)` rather than issuing
+    Cypher inline."""
+    import src.graph.entity_resolution as er
+
+    class _FakeOps:
+        def __init__(self):
+            self.calls: list[list[str]] = []
+
+        def load_verdicts(self, keys):
+            self.calls.append(list(keys))
+            return {"k1": True}
+
+    fake = _FakeOps()
+    seam_calls: list[Any] = []
+
+    def _fake_build(store):
+        seam_calls.append(store)
+        return fake
+
+    monkeypatch.setattr(er, "build_er_graph_ops", _fake_build)
+
+    store = object()
+    result = er._load_verdict_cache(store, ["k1", "k2"])
+
+    assert result == {"k1": True}
+    assert fake.calls == [["k1", "k2"]]
+    assert seam_calls == [store]
+
+
+def test_load_verdict_cache_fail_open_when_seam_raises(monkeypatch):
+    """Contract preserved: any error from the seam is logged and
+    swallowed — `_load_verdict_cache` returns `{}`, never raises."""
+    import src.graph.entity_resolution as er
+
+    class _BoomOps:
+        def load_verdicts(self, keys):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(er, "build_er_graph_ops", lambda store: _BoomOps())
+
+    assert er._load_verdict_cache(object(), ["k1"]) == {}
+
+
+def test_store_verdicts_routes_through_er_graph_ops_seam(monkeypatch):
+    """`_store_verdicts` must delegate to
+    `build_er_graph_ops(store).store_verdicts(entries)` rather than
+    issuing the constraint + UNWIND-MERGE Cypher inline."""
+    import src.graph.entity_resolution as er
+
+    class _FakeOps:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def store_verdicts(self, entries):
+            self.calls.append(dict(entries))
+
+    fake = _FakeOps()
+    seam_calls: list[Any] = []
+
+    def _fake_build(store):
+        seam_calls.append(store)
+        return fake
+
+    monkeypatch.setattr(er, "build_er_graph_ops", _fake_build)
+
+    store = object()
+    er._store_verdicts(store, {"k": True})
+
+    assert fake.calls == [{"k": True}]
+    assert seam_calls == [store]
+
+
+def test_store_verdicts_fail_open_when_seam_raises(monkeypatch):
+    """Contract preserved: any error from the seam is logged and
+    swallowed — `_store_verdicts` must not raise."""
+    import src.graph.entity_resolution as er
+
+    class _BoomOps:
+        def store_verdicts(self, entries):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(er, "build_er_graph_ops", lambda store: _BoomOps())
+
+    er._store_verdicts(object(), {"k": True})  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stored_losers_routes_through_er_graph_ops_seam(monkeypatch):
+    """The merge loop must delegate to
+    `build_er_graph_ops(graph_store).merge_loser_into_canonical(loser=,
+    canon=)` for each pair, in order, with the exact kwargs."""
+    import src.graph.entity_resolution as er
+
+    class _FakeOps:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def merge_loser_into_canonical(self, *, loser, canon):
+            self.calls.append({"loser": loser, "canon": canon})
+
+    fake = _FakeOps()
+    monkeypatch.setattr(er, "build_er_graph_ops", lambda store: fake)
+
+    await er._cleanup_stored_losers(
+        object(), [("Loser A", "Canon A"), ("Loser B", "Canon B")],
+    )
+
+    assert fake.calls == [
+        {"loser": "Loser A", "canon": "Canon A"},
+        {"loser": "Loser B", "canon": "Canon B"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_stored_losers_fail_open_when_seam_raises(monkeypatch):
+    """SAFETY-CRITICAL: when `merge_loser_into_canonical` raises for one
+    pair (the nebula seam's "never delete without repointing" guarantee
+    surfaces as a raise), the loser must be left intact — no exception
+    escapes the loop, and subsequent pairs are still processed."""
+    import src.graph.entity_resolution as er
+
+    class _FlakyOps:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def merge_loser_into_canonical(self, *, loser, canon):
+            self.calls.append({"loser": loser, "canon": canon})
+            if loser == "Loser A":
+                raise RuntimeError("nGQL re-insert failed")
+
+    fake = _FlakyOps()
+    monkeypatch.setattr(er, "build_er_graph_ops", lambda store: fake)
+
+    # Must not raise, despite the first pair's seam call failing.
+    await er._cleanup_stored_losers(
+        object(), [("Loser A", "Canon A"), ("Loser B", "Canon B")],
+    )
+
+    # Both pairs were attempted — the failure on pair 1 didn't abort the
+    # loop, so pair 2 still got its (successful) merge attempt.
+    assert fake.calls == [
+        {"loser": "Loser A", "canon": "Canon A"},
+        {"loser": "Loser B", "canon": "Canon B"},
+    ]
+
+
 @pytest.mark.asyncio
 async def test_singletons_get_er_vec_when_native_knn_enabled() -> None:
     """With native kNN on, singletons also get the native `er_vec` list
