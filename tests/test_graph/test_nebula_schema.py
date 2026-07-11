@@ -244,11 +244,20 @@ def test_ensure_schema_alters_entity_to_add_wiki_columns():
     ), "ALTER TAG `Entity` ADD (wiki_dirty... missing from ensure_schema"
 
 
-def test_schema_has_wiki_dirty_index():
-    assert any(
-        "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty)" in s
-        for s in SCHEMA_DDL
-    ), "entity_wiki_dirty_idx missing (backs the select-dirty LOOKUP by wiki_dirty)"
+def test_ensure_schema_creates_wiki_dirty_index_after_entity_probe():
+    # entity_wiki_dirty_idx is on the ALTER-added `wiki_dirty` column, so it is
+    # NOT in SCHEMA_DDL (that would run before the ALTER on an existing space
+    # and fail); ensure_schema creates it AFTER the Entity write-readiness
+    # probe. Assert it's issued, and issued AFTER an Entity probe INSERT.
+    fake = _FakeSession()
+    ensure_schema(fake)
+    idx_stmt = "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty);"
+    assert idx_stmt in fake.statements, "entity_wiki_dirty_idx not created by ensure_schema"
+    idx_i = fake.statements.index(idx_stmt)
+    entity_probe_i = next(
+        i for i, s in enumerate(fake.statements) if s.startswith("INSERT VERTEX `Entity`")
+    )
+    assert entity_probe_i < idx_i, "wiki_dirty index must be created AFTER the Entity probe"
 
 
 def test_ensure_schema_entity_probe_includes_wiki_columns():

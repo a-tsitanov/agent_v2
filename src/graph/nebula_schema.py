@@ -75,10 +75,10 @@ SCHEMA_DDL: list[str] = [
     "CREATE TAG IF NOT EXISTS `ERVerdict` ("
     "er_key string, same bool DEFAULT false, updated int DEFAULT 0);",
     "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256));",
-    # Backs the wiki-sweep's select-dirty LOOKUP (WikiSweepWorkflow /
-    # NebulaWikiGraphOps.select_dirty) — Nebula requires an index to LOOKUP
-    # by a non-VID property.
-    "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty);",
+    # NOTE: `entity_wiki_dirty_idx` (on the ALTER-added `wiki_dirty` column) is
+    # NOT here — an index on an ALTERed column must be created AFTER the ALTER
+    # has propagated, else on an EXISTING space this CREATE runs before the
+    # column exists and fails. It is created post-probe in ensure_schema.
 ]
 
 
@@ -251,6 +251,20 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         f'VALUES "{probe}":("", "", 0, 0, "", "", "", false, 0, "", 0, "", "");',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
+
+    # The `entity_wiki_dirty_idx` index is on the ALTER-added `wiki_dirty`
+    # column, so it can only be created AFTER the Entity probe above confirms
+    # that column is write-ready (on an EXISTING space the ALTER + its
+    # propagation must land first; putting this in SCHEMA_DDL would run it
+    # before the ALTER and fail). Best-effort/fail-open. `wiki_dirty` is a
+    # brand-new default-false column, so no REBUILD is needed (nothing is
+    # dirty yet; the index populates as the wiki sweep marks entities).
+    _execute_with_retry(
+        session,
+        "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty);",
+        attempts=3, delay_s=1.0,
+    )
+
     _probe_tag_write_ready(
         session, "Community",
         "INSERT VERTEX `Community` (id, level, member_count, members_hash, updated, "
