@@ -39,7 +39,7 @@ SCHEMA_DDL: list[str] = [
     "CREATE TAG IF NOT EXISTS `Entity` ("
     "name string, description string, mention_count int DEFAULT 0, "
     "created_at int DEFAULT 0, label string DEFAULT '', "
-    "er_canonical_name string DEFAULT '');",
+    "er_canonical_name string DEFAULT '', first_doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
     "rel_type string DEFAULT '', polarity string DEFAULT '', "
     "valid_from int DEFAULT 0, valid_to int DEFAULT 0, weight double DEFAULT 1.0);",
@@ -198,6 +198,15 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3d. Same schema-evolution story for EXISTING spaces created before
+    # `Entity` had `first_doc_id` (first-seen provenance). Best-effort/
+    # fail-open, same pattern as the RELATED.weight / er_canonical_name
+    # ALTERs above.
+    _execute_with_retry(
+        session, "ALTER TAG `Entity` ADD (first_doc_id string DEFAULT '');",
+        attempts=1, delay_s=0,
+    )
+
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
@@ -211,8 +220,8 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     _probe_tag_write_ready(
         session, "Entity",
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name) "
-        f'VALUES "{probe}":("", "", 0, 0, "", "");',
+        "er_canonical_name, first_doc_id) "
+        f'VALUES "{probe}":("", "", 0, 0, "", "", "");',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
     _probe_tag_write_ready(

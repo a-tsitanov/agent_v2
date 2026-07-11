@@ -33,6 +33,15 @@ def test_schema_has_er_verdict_tag_and_index():
     ), "er_verdict_key_idx missing (needed for verdict cache LOOKUP by key)"
 
 
+def test_entity_ddl_has_first_doc_id_column():
+    # Entity first-seen provenance (stamp_first_seen writes it via
+    # upsert_nodes/UPDATE VERTEX; see nebula-first-seen design doc).
+    entity_ddl = next(
+        s for s in SCHEMA_DDL if s.startswith("CREATE TAG IF NOT EXISTS `Entity`")
+    )
+    assert "first_doc_id string" in entity_ddl
+
+
 def test_related_edge_ddl_has_weight_column():
     # Weighted Leiden parity with neo4j (merge.py writes properties["weight"]):
     # fresh spaces must get a `weight` column on `RELATED`.
@@ -166,7 +175,30 @@ def test_ensure_schema_entity_probe_includes_er_canonical_name():
     joined = "\n".join(fake.statements)
     assert (
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name)" in joined
+        "er_canonical_name, first_doc_id)" in joined
+    )
+
+
+def test_ensure_schema_alters_entity_to_add_first_doc_id():
+    # Best-effort schema-evolution step for EXISTING spaces (created before
+    # Entity had first_doc_id). Fail-open, same pattern as the RELATED
+    # weight / er_canonical_name ALTERs.
+    fake = _FakeSession()
+    ensure_schema(fake)
+    assert "ALTER TAG `Entity` ADD (first_doc_id string DEFAULT '');" in fake.statements
+
+
+def test_ensure_schema_entity_probe_includes_first_doc_id():
+    # The Entity write-readiness probe must cover first_doc_id too, so
+    # ensure_schema waits for the ALTER to propagate before the first
+    # ingest write touches it (same propagation-lag class as
+    # er_canonical_name/RELATED.weight).
+    fake = _FakeSession()
+    ensure_schema(fake)
+    joined = "\n".join(fake.statements)
+    assert (
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
+        "er_canonical_name, first_doc_id)" in joined
     )
 
 
