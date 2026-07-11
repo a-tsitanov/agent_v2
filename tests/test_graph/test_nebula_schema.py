@@ -74,6 +74,20 @@ def test_ensure_schema_selects_space_before_creates(monkeypatch):
     )
 
 
+def test_ensure_schema_probes_both_entity_and_community():
+    # Both write-target tags share the storaged propagation lag (CREATE/DESCRIBE
+    # succeed ~1 heartbeat before INSERT works). ensure_schema must probe-write
+    # a sentinel for BOTH `Entity` (ingest) and `Community` (community BUILD) so
+    # the first post-DDL write to EITHER doesn't race "Schema not exist".
+    fake = _FakeSession()
+    ensure_schema(fake)
+    joined = "\n".join(fake.statements)
+    assert "INSERT VERTEX `Entity` " in joined, "Entity write-readiness probe missing"
+    assert "INSERT VERTEX `Community` " in joined, "Community write-readiness probe missing"
+    # each successful probe removes its sentinel vertex
+    assert fake.statements.count('DELETE VERTEX "__kb_schema_probe__";') == 2
+
+
 def test_schema_has_community_tag_with_report_columns():
     tag = next((s for s in SCHEMA_DDL if "CREATE TAG IF NOT EXISTS `Community`" in s), None)
     assert tag is not None, "Community TAG missing from SCHEMA_DDL"

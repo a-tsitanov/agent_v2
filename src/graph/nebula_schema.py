@@ -87,6 +87,33 @@ def _execute_with_retry(session: Any, stmt: str, *, attempts: int, delay_s: floa
     return False
 
 
+def _probe_tag_write_ready(
+    session: Any, tag: str, insert_stmt: str, probe_vid: str, *,
+    attempts: int, delay_s: float,
+) -> bool:
+    """Probe until an INSERT against `tag` lands, then delete the sentinel.
+
+    Storaged schema propagation lags meta by ~1 heartbeat, so CREATE/DESCRIBE
+    succeed before an INSERT works ("Schema not exist"/"No schema found"). A
+    real write landing is the only reliable readiness signal. Returns True
+    once ready; logs a warning and returns False if it never lands within
+    `attempts`. Never raises.
+    """
+    from loguru import logger
+
+    for attempt in range(1, attempts + 1):
+        if session.execute(insert_stmt).is_succeeded():
+            session.execute(f'DELETE VERTEX "{probe_vid}";')
+            return True
+        if attempt < attempts:
+            time.sleep(delay_s)
+    logger.warning(
+        "nebula ensure_schema: `{t}` tag not write-ready after {n} attempt(s)",
+        t=tag, n=attempts,
+    )
+    return False
+
+
 def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 1.0) -> None:
     """Execute SPACE_DDL then SCHEMA_DDL on an open nebula3 session.
 
@@ -121,20 +148,22 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
     # is NOT a reliable readiness signal; the only one is a real write
-    # landing. Probe with a sentinel `Entity` vertex until it succeeds, then
-    # remove it, so the first caller write doesn't race propagation.
+    # landing. Probe EACH write-target tag with a sentinel vertex until it
+    # lands, then remove it, so the first caller write doesn't race
+    # propagation. Both `Entity` (ingest) and `Community` (community BUILD)
+    # are probed — they share the lag, so probing only one leaves the other's
+    # first post-DDL write able to hit "Schema not exist".
     probe = "__kb_schema_probe__"
-    probe_insert = (
+    _probe_tag_write_ready(
+        session, "Entity",
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label) "
-        f'VALUES "{probe}":("", "", 0, 0, "");'
+        f'VALUES "{probe}":("", "", 0, 0, "");',
+        probe, attempts=use_attempts, delay_s=use_delay_s,
     )
-    for attempt in range(1, use_attempts + 1):
-        if session.execute(probe_insert).is_succeeded():
-            session.execute(f'DELETE VERTEX "{probe}";')
-            return
-        if attempt < use_attempts:
-            time.sleep(use_delay_s)
-    logger.warning(
-        "nebula ensure_schema: `Entity` tag not write-ready after {n} attempt(s)",
-        n=use_attempts,
+    _probe_tag_write_ready(
+        session, "Community",
+        "INSERT VERTEX `Community` (id, level, member_count, members_hash, updated, "
+        "report, title, summary, summarized_at) "
+        f'VALUES "{probe}":("", 0, 0, "", 0, "", "", "", 0);',
+        probe, attempts=use_attempts, delay_s=use_delay_s,
     )
