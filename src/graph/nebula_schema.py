@@ -38,7 +38,8 @@ SCHEMA_DDL: list[str] = [
     # uses it to store the entity type (mirrors Neo4j's node label).
     "CREATE TAG IF NOT EXISTS `Entity` ("
     "name string, description string, mention_count int DEFAULT 0, "
-    "created_at int DEFAULT 0, label string DEFAULT '');",
+    "created_at int DEFAULT 0, label string DEFAULT '', "
+    "er_canonical_name string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
     "rel_type string DEFAULT '', polarity string DEFAULT '', "
     "valid_from int DEFAULT 0, valid_to int DEFAULT 0, weight double DEFAULT 1.0);",
@@ -61,6 +62,12 @@ SCHEMA_DDL: list[str] = [
     # tag/edge indexes needed for full-scan + lookups (Nebula requires an
     # index to LOOKUP by property; traversals from a known VID do not).
     "CREATE TAG INDEX IF NOT EXISTS `entity_name_idx` ON `Entity`(name(256));",
+    # Entity-resolution decision cache: backs ER's pairwise same/different
+    # verdict lookup so it can skip re-judging a pair (mirrors the neo4j
+    # `:ERVerdict {key, same}` node). VID = `verdict_vid(key)`.
+    "CREATE TAG IF NOT EXISTS `ERVerdict` ("
+    "er_key string, same bool DEFAULT false, updated int DEFAULT 0);",
+    "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256));",
 ]
 
 
@@ -183,6 +190,14 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3c. Same schema-evolution story for EXISTING spaces created before
+    # `Entity` had `er_canonical_name` (entity-resolution canonical stamp).
+    # Best-effort/fail-open, same as the RELATED.weight ALTER above.
+    _execute_with_retry(
+        session, "ALTER TAG `Entity` ADD (er_canonical_name string DEFAULT '');",
+        attempts=1, delay_s=0,
+    )
+
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
@@ -195,8 +210,9 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     probe = "__kb_schema_probe__"
     _probe_tag_write_ready(
         session, "Entity",
-        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label) "
-        f'VALUES "{probe}":("", "", 0, 0, "");',
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
+        "er_canonical_name) "
+        f'VALUES "{probe}":("", "", 0, 0, "", "");',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
     _probe_tag_write_ready(

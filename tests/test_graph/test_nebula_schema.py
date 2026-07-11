@@ -14,6 +14,25 @@ def test_space_and_core_schema_present():
     assert "rel_type string" in "\n".join(SCHEMA_DDL)  # RELATED carries original type
 
 
+def test_entity_ddl_has_er_canonical_name_column():
+    # Entity-resolution canonical stamp (ER writes it via upsert_nodes).
+    entity_ddl = next(
+        s for s in SCHEMA_DDL if s.startswith("CREATE TAG IF NOT EXISTS `Entity`")
+    )
+    assert "er_canonical_name string" in entity_ddl
+
+
+def test_schema_has_er_verdict_tag_and_index():
+    tag = next((s for s in SCHEMA_DDL if "CREATE TAG IF NOT EXISTS `ERVerdict`" in s), None)
+    assert tag is not None, "ERVerdict TAG missing from SCHEMA_DDL"
+    for col in ("er_key string", "same bool", "updated int"):
+        assert col in tag, f"missing column: {col}"
+    assert any(
+        "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256))" in s
+        for s in SCHEMA_DDL
+    ), "er_verdict_key_idx missing (needed for verdict cache LOOKUP by key)"
+
+
 def test_related_edge_ddl_has_weight_column():
     # Weighted Leiden parity with neo4j (merge.py writes properties["weight"]):
     # fresh spaces must get a `weight` column on `RELATED`.
@@ -126,6 +145,29 @@ def test_ensure_schema_alters_related_edge_to_add_weight():
     fake = _FakeSession()
     ensure_schema(fake)
     assert "ALTER EDGE `RELATED` ADD (weight double DEFAULT 1.0);" in fake.statements
+
+
+def test_ensure_schema_alters_entity_to_add_er_canonical_name():
+    # Best-effort schema-evolution step for EXISTING spaces (created before
+    # Entity had er_canonical_name). Fail-open, same pattern as the RELATED
+    # weight ALTER.
+    fake = _FakeSession()
+    ensure_schema(fake)
+    assert "ALTER TAG `Entity` ADD (er_canonical_name string DEFAULT '');" in fake.statements
+
+
+def test_ensure_schema_entity_probe_includes_er_canonical_name():
+    # The Entity write-readiness probe must cover the new column too, so
+    # ensure_schema waits for the ALTER to propagate before the first
+    # ingest write touches er_canonical_name (same propagation-lag class
+    # already handled for RELATED.weight).
+    fake = _FakeSession()
+    ensure_schema(fake)
+    joined = "\n".join(fake.statements)
+    assert (
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
+        "er_canonical_name)" in joined
+    )
 
 
 def test_ensure_schema_probes_related_weighted_edge_write():

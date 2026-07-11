@@ -49,6 +49,31 @@ def test_upsert_nodes_inserts_entity_vertex():
     assert "Иванов" in blob
 
 
+def test_upsert_nodes_writes_er_canonical_name_from_properties():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    node = SimpleNamespace(name="Иванов", label="PERSON",
+                           properties={"description": "d", "mention_count": 3,
+                                       "er_canonical_name": "Canon"})
+    store.upsert_nodes([node])
+    blob = "\n".join(sess.executed)
+    assert (
+        "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
+        "er_canonical_name) VALUES" in blob
+    )
+    assert '"Canon"' in blob
+
+
+def test_upsert_nodes_defaults_er_canonical_name_to_empty_when_absent():
+    sess = _FakeSession()
+    store = _store_with_session(sess)
+    node = SimpleNamespace(name="Иванов", label="PERSON",
+                           properties={"description": "d", "mention_count": 3})
+    store.upsert_nodes([node])
+    blob = "\n".join(sess.executed)
+    assert blob.rstrip(";").endswith('"")')
+
+
 def test_upsert_relations_inserts_related_with_rel_type():
     sess = _FakeSession()
     store = _store_with_session(sess)
@@ -152,7 +177,8 @@ def test_upsert_nodes_batches_into_multi_values_statements(monkeypatch):
     assert len(sess.executed) == 3  # 2 + 2 + 1
     for stmt in sess.executed:
         assert stmt.startswith(
-            "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label) VALUES "
+            "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
+            "er_canonical_name) VALUES "
         )
     # first two statements have 2 comma-joined rows, last has 1
     assert sess.executed[0].count(":(") == 2

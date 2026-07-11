@@ -66,13 +66,14 @@ class NebulaGraphStore:
                 f"{_q(props.get('description', ''))}, "
                 f"{int(props.get('mention_count', 0) or 0)}, "
                 f"{int(props.get('created_at', 0) or 0)}, "
-                f"{_q(getattr(n, 'label', '') or '')})"
+                f"{_q(getattr(n, 'label', '') or '')}, "
+                f"{_q(props.get('er_canonical_name', '') or '')})"
             )
 
         for chunk in _chunks(nodes, settings.nebula.write_batch_size):
             stmt = (
                 "INSERT VERTEX `Entity` "
-                "(name, description, mention_count, created_at, label) VALUES "
+                "(name, description, mention_count, created_at, label, er_canonical_name) VALUES "
                 + ", ".join(row(n) for n in chunk)
                 + ";"
             )
