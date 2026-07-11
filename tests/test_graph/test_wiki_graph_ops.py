@@ -296,7 +296,7 @@ def test_nebula_mark_all_dirty_issues_lookup_then_per_vid_update():
     assert len(store.calls) == 3  # 1 LOOKUP + 2 per-vid UPDATE
     lookup_stmt, lookup_pm = store.calls[0]
     assert lookup_pm is None
-    assert "wiki_dirty != true" in lookup_stmt
+    assert "wiki_dirty == false" in lookup_stmt
     for stmt, pm in store.calls[1:]:
         assert pm is None
         assert "UPDATE VERTEX ON `Entity`" in stmt

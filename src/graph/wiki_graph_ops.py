@@ -220,7 +220,7 @@ class NebulaWikiGraphOps:
         from src.graph.nebula_store import _q
 
         rows = self._store.structured_query(
-            "LOOKUP ON `Entity` WHERE `Entity`.wiki_dirty != true "
+            "LOOKUP ON `Entity` WHERE `Entity`.wiki_dirty == false "
             "YIELD id(vertex) AS vid;"
         )
         now = int(time.time() * 1000)
