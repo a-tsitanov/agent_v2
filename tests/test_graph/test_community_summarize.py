@@ -133,3 +133,28 @@ def test_gather_context_routes_member_read_through_seam(monkeypatch):
     body = asyncio.run(cact._gather_context(object(), p))
     assert captured["member"] == ("7", 0)
     assert isinstance(body, str) and body            # context string built from the rows
+
+
+# Cypher-content-shape guards for the 3 constants, moved here with them from
+# tests/test_workflow/test_search_community.py (their new canonical home).
+def test_write_report_cypher_shape():
+    cy = cs._WRITE_REPORT_CYPHER
+    assert "MERGE (c:Community {id: $community_id, level: $level})" in cy
+    for field in ("c.report = $report", "c.title = $title",
+                  "c.summary = $summary", "c.report_vec = $report_vec",
+                  "c.summarized_at = timestamp()"):
+        assert field in cy
+
+
+def test_child_reports_cypher_shape():
+    cy = cs._CHILD_REPORTS_CYPHER
+    assert "-[:PARENT_OF]->(child:Community)" in cy
+    assert "child.report IS NOT NULL" in cy
+    assert "ORDER BY child.member_count DESC" in cy
+
+
+def test_member_context_cypher_shape():
+    cy = cs._MEMBER_CONTEXT_CYPHER
+    assert "<-[:IN_COMMUNITY]-(e:__Entity__)" in cy
+    assert "(e)-[r]-(o:__Entity__)-[:IN_COMMUNITY]->(c)" in cy
+    assert "collect(DISTINCT type(r))[..10] AS rel_types" in cy

@@ -502,20 +502,10 @@ def test_parse_report_tolerates_bad_finding_shapes():
     assert out["findings"] == [{"statement": "ok", "importance": 0}]
 
 
-def test_write_report_cypher_shape():
-    cy = community_mod._WRITE_REPORT_CYPHER
-    assert "MERGE (c:Community {id: $community_id, level: $level})" in cy
-    for field in ("c.report = $report", "c.title = $title",
-                  "c.summary = $summary", "c.report_vec = $report_vec",
-                  "c.summarized_at = timestamp()"):
-        assert field in cy
-
-
-def test_child_reports_cypher_shape():
-    cy = community_mod._CHILD_REPORTS_CYPHER
-    assert "-[:PARENT_OF]->(child:Community)" in cy
-    assert "child.report IS NOT NULL" in cy
-    assert "ORDER BY child.member_count DESC" in cy
+# NOTE: _WRITE_REPORT_CYPHER / _CHILD_REPORTS_CYPHER / _MEMBER_CONTEXT_CYPHER
+# moved to src/graph/community_summarize.py (the CommunitySummarize seam) —
+# their exact-Cypher-shape coverage now lives in
+# tests/test_graph/test_community_summarize.py (test_neo4j_*_issues_exact_cypher*).
 
 
 def test_project_cypher_is_undirected_for_leiden():
