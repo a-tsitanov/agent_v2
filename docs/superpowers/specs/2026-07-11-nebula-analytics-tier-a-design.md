@@ -72,6 +72,27 @@ Move the Cypher constants into the Neo4j impl. Downstream row-mapping unchanged.
 
 Order runs simplest-reuse-first (aggregations proves the MATCH pattern) → blocked-heavy last.
 
+## REVISED classification (post file-by-file inspection, 2026-07-11)
+
+Reading each primitive against the live nebula schema sharpened the plan. **Guiding principle:** a family where EVERY primitive is blocked already returns `[]` under nebula via `run_rows`'s fail-soft — building a seam that also returns `[]` is dead code. So **build a seam only for families with ≥1 portable primitive; document+skip fully-blocked families.**
+
+**BUILD seam (≥1 portable):**
+- `aggregations` ✅ DONE (7 portable)
+- `quality` ✅ DONE (4 portable)
+- `domain` — 2 portable (issue_resolution_stats via 2 queries + Python two-level agg; communication_stats via MATCH rel_type IN + undirected dedup)
+- `events` — `new_events` PARTIAL (new **entities** portable via `e.created_at`; new **edges** → `[]` — RELATED has no `created_at`/`first_doc_id`, the deferred REL-first-seen gap); `entity_new_connections` → `[]` (same REL-first-seen)
+- `rollups` — 1 portable (numeric_rollup: MATCH `label=='Amount'` neighbor, Python parse/agg in the primitive)
+- `signals` — 3 portable (recommended_merges = name-group; review_queue = shell-org via query+Python; circular_ownership = var-len OWNS cycle); `risk_score`+`investigate_next` → `[]` (no `risk_score`/`risk_band`/`completeness_score` columns)
+- `communities` — 2 portable (community_overview on Community tag; entity_communities via IN_COMMUNITY); `personalized_pagerank` → `[]` (GDS compute, Tier-B, degrades via analysis fail-open)
+
+**SKIP + document (all primitives blocked → already `[]` via run_rows fail-soft):**
+- `events_llm` — event columns (`event_type`/`event_ts_raw`/`event_start_epoch`/…/`polarity`) absent from the nebula Entity schema (E2 event-timeframe ingest feature not ported to nebula)
+- `dynamics` — `valid_from`/`valid_to` are ISO-**strings** in neo4j (Cypher does `substring(r.valid_from,0,7)` + string range compares) but **int64** in nebula: a representation divergence, not a translation; plus RELATED has no `created_at` (whats_changed) and topic_trend/entity_activity are Chunk-dependent. Needs a dedicated temporal-dynamics slice once REL temporal semantics settle under nebula.
+- `centrality` — `pagerank`/`betweenness`/`eigenvector` columns + `LIKELY_LINK` edge absent (Tier-B centrality materialize)
+- `alerts` — no `:Alert` tag in nebula + Arc-2 monitor not writing alerts under nebula
+
+This revision means **5 more seams** (domain, events, rollups, signals, communities), not 10, plus 4 documented-skipped families — a more honest scope: the skipped families genuinely need separate tracks (schema columns, ingest features, or distributed compute), not query translation.
+
 ## Out of scope (deferred)
 - Tier-B compute stages under nebula (risk-scoring, centrality/materialize, communities distributed) — separate track; until then the blocked primitives stay `[]`.
 - Adding `risk_score` / centrality-metric columns or `LIKELY_LINK`/`Chunk` to the nebula schema.
