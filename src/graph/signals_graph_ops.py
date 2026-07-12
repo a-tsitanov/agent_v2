@@ -128,14 +128,34 @@ class NebulaSignalsGraphOps:
 
     @_nebula_fail_soft
     def risk_score(self, name: str | None, band: str | None, top_n: int) -> list[dict]:
-        # No risk_score/risk_band columns on the nebula Entity tag (Tier-B risk
-        # materialize) — cannot be surfaced. Documented degrade.
-        return []
+        # risk_score/risk_band/risk_components are materialized on Entity by the
+        # in-worker risk stage (materialize_activities). Default 0 = unmaterialized.
+        from src.graph.nebula_store import _q
+
+        clauses = ["e.`Entity`.risk_score > 0"]
+        if name:
+            clauses.append(f"e.`Entity`.name == {_q(name)}")
+        if band:
+            clauses.append(f"e.`Entity`.risk_band == {_q(band)}")
+        where = " AND ".join(clauses)
+        stmt = (
+            f"MATCH (e:`Entity`) WHERE {where} "
+            "RETURN e.`Entity`.name AS name, e.`Entity`.risk_score AS score, "
+            "e.`Entity`.risk_band AS band, e.`Entity`.risk_components AS components "
+            f"ORDER BY score DESC LIMIT {int(top_n)};"
+        )
+        return self._exec(stmt)
 
     @_nebula_fail_soft
     def investigate_next(self, top_n: int) -> list[dict]:
-        # No risk_score/completeness_score columns (Tier-B). Documented degrade.
-        return []
+        # High risk x low completeness. risk_score/completeness_score materialized.
+        stmt = (
+            "MATCH (e:`Entity`) WHERE e.`Entity`.risk_score > 0 "
+            "RETURN e.`Entity`.name AS name, e.`Entity`.risk_score AS risk, "
+            "e.`Entity`.completeness_score AS completeness "
+            f"ORDER BY risk DESC, completeness ASC LIMIT {int(top_n)};"
+        )
+        return self._exec(stmt)
 
     @_nebula_fail_soft
     def recommended_merges(self, top_n: int) -> list[dict]:

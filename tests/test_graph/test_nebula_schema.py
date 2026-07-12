@@ -272,6 +272,8 @@ def test_ensure_schema_entity_probe_includes_wiki_columns():
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
         "er_canonical_name, first_doc_id, wiki_dirty, wiki_dirty_at, wiki_hash, "
         "wiki_synced_at, wiki_page_title, wikibase_qid, "
-        "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision)"
+        "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision, "
+        "pagerank, betweenness, eigenvector, risk_score, risk_band, risk_components, "
+        "completeness_score)"
         in joined
     )

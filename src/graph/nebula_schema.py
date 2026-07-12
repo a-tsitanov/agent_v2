@@ -52,7 +52,17 @@ SCHEMA_DDL: list[str] = [
     # nebula tag has no optional columns) — empty/0 for non-event entities.
     "event_type string DEFAULT '', event_ts_raw string DEFAULT '', "
     "event_start_epoch int DEFAULT 0, event_end_epoch int DEFAULT 0, "
-    "event_ts_precision string DEFAULT '');",
+    "event_ts_precision string DEFAULT '', "
+    # Offline-materialized centrality + risk scores (analytics/materialize.py).
+    # COMPUTE-written (in-worker igraph under nebula), NOT ingest-written, so
+    # upsert_nodes omits them — they default to 0/'' on re-ingest and the
+    # centrality/risk materialize re-writes them (the offline-materialize
+    # lifecycle). Backs centrality.top_central_entities + signals.risk_score /
+    # investigate_next.
+    "pagerank double DEFAULT 0.0, betweenness double DEFAULT 0.0, "
+    "eigenvector double DEFAULT 0.0, risk_score double DEFAULT 0.0, "
+    "risk_band string DEFAULT '', risk_components string DEFAULT '', "
+    "completeness_score double DEFAULT 0.0);",
     # valid_from/valid_to are OPAQUE ISO date strings (or '') — matching the
     # neo4j representation and what src/graph/merge.py emits. They were
     # originally (mistakenly) declared int, which crashed the write path on the
@@ -306,6 +316,18 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3g. Same for EXISTING spaces created before the offline-materialize
+    # centrality/risk columns (analytics/materialize.py writes them under nebula
+    # via in-worker igraph; centrality/signals-risk reads read them).
+    _execute_with_retry(
+        session,
+        "ALTER TAG `Entity` ADD (pagerank double DEFAULT 0.0, "
+        "betweenness double DEFAULT 0.0, eigenvector double DEFAULT 0.0, "
+        "risk_score double DEFAULT 0.0, risk_band string DEFAULT '', "
+        "risk_components string DEFAULT '', completeness_score double DEFAULT 0.0);",
+        attempts=1, delay_s=0,
+    )
+
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
@@ -321,9 +343,11 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
         "er_canonical_name, first_doc_id, wiki_dirty, wiki_dirty_at, wiki_hash, "
         "wiki_synced_at, wiki_page_title, wikibase_qid, "
-        "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision) "
+        "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision, "
+        "pagerank, betweenness, eigenvector, risk_score, risk_band, risk_components, "
+        "completeness_score) "
         f'VALUES "{probe}":("", "", 0, 0, "", "", "", false, 0, "", 0, "", "", '
-        '"", "", 0, 0, "");',
+        '"", "", 0, 0, "", 0.0, 0.0, 0.0, 0.0, "", "", 0.0);',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
 

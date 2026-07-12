@@ -419,6 +419,12 @@ class TemporalSettings(BaseSettings):
     # (project policy: benchmark before adopting).
     community_backend: Literal["gds", "leidenalg", "graphscope"] = "gds"
 
+    # Centrality COMPUTE backend. "gds" = in-Neo4j GDS pageRank/betweenness/
+    # eigenvector (legacy). "igraph" = in-worker igraph over the edge-export seam
+    # (memory off Neo4j; the ONLY option under nebula, which has no GDS — nebula
+    # forces igraph regardless of this flag; see analytics/materialize.py).
+    centrality_backend: Literal["gds", "igraph"] = "gds"
+
     @property
     def target(self) -> str:
         return f"{self.host}:{self.port}"

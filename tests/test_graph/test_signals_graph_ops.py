@@ -79,16 +79,24 @@ def test_neo4j_fail_soft():
 # --- Nebula: blocked -> [] ----------------------------------------------
 
 
-def test_nebula_risk_score_empty():
-    store = _NebulaRecStore()
-    assert sgo.NebulaSignalsGraphOps(store).risk_score(None, None, 20) == []
-    assert store.calls == []  # no query — columns absent
+def test_nebula_risk_score_reads_materialized_column():
+    store = _NebulaRecStore(canned=[("e.`Entity`.risk_score > 0", [
+        {"name": "Shell", "score": 0.8, "band": "high", "components": "{}"}])])
+    result = sgo.NebulaSignalsGraphOps(store).risk_score("Shell", "high", 20)
+    assert result == [{"name": "Shell", "score": 0.8, "band": "high", "components": "{}"}]
+    stmt = store.calls[0][0]
+    assert "e.`Entity`.risk_score > 0" in stmt
+    assert "e.`Entity`.name == \"Shell\"" in stmt
+    assert "e.`Entity`.risk_band == \"high\"" in stmt
+    assert "ORDER BY score DESC LIMIT 20" in stmt
 
 
-def test_nebula_investigate_next_empty():
-    store = _NebulaRecStore()
-    assert sgo.NebulaSignalsGraphOps(store).investigate_next(20) == []
-    assert store.calls == []
+def test_nebula_investigate_next_reads_risk_and_completeness():
+    store = _NebulaRecStore(canned=[("risk_score > 0", [
+        {"name": "X", "risk": 0.9, "completeness": 0.2}])])
+    result = sgo.NebulaSignalsGraphOps(store).investigate_next(20)
+    assert result == [{"name": "X", "risk": 0.9, "completeness": 0.2}]
+    assert "ORDER BY risk DESC, completeness ASC LIMIT 20" in store.calls[0][0]
 
 
 # --- Nebula: recommended_merges (Python grouping) -----------------------
