@@ -121,15 +121,18 @@ def test_stamp_nebula_issues_update_vertex_when_created_at_zero(monkeypatch):
         assert cypher is not None, f"missing UPDATE VERTEX for vid {vid}"
         assert 'SET created_at = 42, first_doc_id = "doc9" WHEN created_at == 0' in cypher
 
-    # rel no-op: no UPDATE EDGE / rel statement issued
-    assert not any("UPDATE EDGE" in c[0] for c in store.calls)
-    assert not any("RELATED" in c[0] for c in store.calls)
+    # rel first-seen: one UPDATE EDGE for ("x","L","y") on rank 0, guarded
+    edge_calls = [c for c in store.calls if "UPDATE EDGE ON `RELATED`" in c[0]]
+    assert len(edge_calls) == 1
+    vid_x, vid_y = entity_vid("x"), entity_vid("y")
+    assert f'"{vid_x}" -> "{vid_y}"@0' in edge_calls[0][0]
+    assert 'SET created_at = 42, first_doc_id = "doc9" WHEN created_at == 0' in edge_calls[0][0]
 
     # nebula path uses inline nGQL, not param_map
     assert all(param_map == {} for _, param_map in store.calls)
 
 
-def test_stamp_nebula_relations_only_is_noop(monkeypatch):
+def test_stamp_nebula_relations_only_issues_update_edge(monkeypatch):
     monkeypatch.setattr(first_seen_mod.settings.graph, "backend", "nebula", raising=False)
     store = _Rec()
     stamp_first_seen(
@@ -139,7 +142,11 @@ def test_stamp_nebula_relations_only_is_noop(monkeypatch):
         ingest_epoch=42,
         doc_id="doc9",
     )
-    assert store.calls == []
+    assert len(store.calls) == 1
+    stmt = store.calls[0][0]
+    assert "UPDATE EDGE ON `RELATED`" in stmt
+    assert f'"{entity_vid("x")}" -> "{entity_vid("y")}"@0' in stmt
+    assert "WHEN created_at == 0" in stmt
 
 
 def test_stamp_nebula_fail_soft_on_store_error(monkeypatch):

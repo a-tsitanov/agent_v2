@@ -52,9 +52,13 @@ SCHEMA_DDL: list[str] = [
     # originally (mistakenly) declared int, which crashed the write path on the
     # first relation carrying a real validity window (int('2026-01-15')); an
     # existing space is migrated int→string in ensure_schema.
+    # created_at (E1 first-seen ingest epoch-day) + first_doc_id give RELATED the
+    # same first-seen provenance as Entity, so events.new_edges /
+    # entity_new_connections and dynamics.whats_changed's first-seen axis work.
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
     "rel_type string DEFAULT '', polarity string DEFAULT '', "
-    "valid_from string DEFAULT '', valid_to string DEFAULT '', weight double DEFAULT 1.0);",
+    "valid_from string DEFAULT '', valid_to string DEFAULT '', weight double DEFAULT 1.0, "
+    "created_at int DEFAULT 0, first_doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `MENTIONS` (doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `IN_COMMUNITY` (level int DEFAULT 0);",
     "CREATE EDGE IF NOT EXISTS `PARENT_OF` ();",
@@ -245,6 +249,15 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     # string via SCHEMA_DDL; an int space must be recreated (cutover re-ingests).
     _migrate_related_validity_to_string(session)
 
+    # 3b-3. RELATED first-seen columns for EXISTING spaces (created_at/first_doc_id
+    # — added after RELATED already existed). Best-effort/fail-open, same as the
+    # weight ALTER; a fresh space gets them from SCHEMA_DDL's CREATE EDGE.
+    _execute_with_retry(
+        session,
+        "ALTER EDGE `RELATED` ADD (created_at int DEFAULT 0, first_doc_id string DEFAULT '');",
+        attempts=1, delay_s=0,
+    )
+
     # 3c. Same schema-evolution story for EXISTING spaces created before
     # `Entity` had `er_canonical_name` (entity-resolution canonical stamp).
     # Best-effort/fail-open, same as the RELATED.weight ALTER above.
@@ -329,8 +342,9 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     )
     _probe_edge_write_ready(
         session, "RELATED",
-        "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) "
-        f'VALUES "{probe}" -> "{probe_b}":("", "", "", "", 1.0);',
+        "INSERT EDGE `RELATED` "
+        "(rel_type, polarity, valid_from, valid_to, weight, created_at, first_doc_id) "
+        f'VALUES "{probe}" -> "{probe_b}":("", "", "", "", 1.0, 0, "");',
         [f'DELETE VERTEX "{probe}" WITH EDGE;', f'DELETE VERTEX "{probe_b}" WITH EDGE;'],
         attempts=use_attempts, delay_s=use_delay_s,
     )

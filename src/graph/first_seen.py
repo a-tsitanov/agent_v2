@@ -9,10 +9,10 @@ original stamp.
 
 Backend dispatch (``settings.graph.backend``):
 - neo4j (default): the Cypher templates below via ``structured_query``.
-- nebula: per-entity ``UPDATE VERTEX ... WHEN created_at == 0`` (atomic,
-  first-write-wins). Relationship first-seen is a no-op under nebula — the
-  RELATED edge type lacks created_at/first_doc_id columns (deferred
-  follow-up; see docs/superpowers/specs/2026-07-11-nebula-first-seen-design.md).
+- nebula: per-entity ``UPDATE VERTEX ... WHEN created_at == 0`` and per-edge
+  ``UPDATE EDGE ON `RELATED` ... WHEN created_at == 0`` (atomic, first-write-
+  wins). RELATED carries created_at/first_doc_id columns (see nebula_schema),
+  and upsert_relations read-back-preserves them across re-upserts.
 """
 
 from __future__ import annotations
@@ -130,14 +130,21 @@ def _stamp_first_seen_nebula(
         )
         store.structured_query(stmt)
 
-    if relations:
-        # RELATED lacks created_at/first_doc_id under nebula — deferred
-        # follow-up (see design doc §Out of scope). No-op, not a loop.
-        logger.debug(
-            "stamp_first_seen: nebula relation first-seen is a no-op "
-            "(RELATED has no created_at/first_doc_id); {n} relation(s) skipped",
-            n=len(relations),
+    for src, _label, tgt in relations:
+        # Rank 0 (upsert_relations writes the default rank); WHEN created_at == 0
+        # keeps first-seen semantics (a re-mentioned edge keeps its stamp). Per-
+        # edge try/except: UPDATE EDGE raises if the edge is missing (e.g. an
+        # ER-merged-away endpoint), which must not abort the rest — mirrors the
+        # per-name resilience in the wiki mark_dirty path.
+        stmt = (
+            f'UPDATE EDGE ON `RELATED` "{entity_vid(src)}" -> "{entity_vid(tgt)}"@0 '
+            f"SET created_at = {int(ingest_epoch)}, first_doc_id = {_q(doc_id)} "
+            "WHEN created_at == 0;"
         )
+        try:
+            store.structured_query(stmt)
+        except Exception as exc:  # one missing edge must not stop the rest
+            logger.debug("stamp_first_seen: nebula rel stamp skipped ({e})", e=exc)
 
 
 __all__ = ["stamp_first_seen"]

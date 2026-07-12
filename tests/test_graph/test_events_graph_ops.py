@@ -77,16 +77,41 @@ def test_nebula_new_entities_matches_created_at():
     assert "ORDER BY created_at DESC LIMIT 25" in stmt  # aliased ORDER BY
 
 
-def test_nebula_new_edges_returns_empty_rel_first_seen_absent():
-    store = _NebulaRecStore()
-    assert ego.NebulaEventsGraphOps(store).new_edges(19786, 25) == []
-    assert store.calls == []  # no query issued — column absent
+def test_nebula_new_edges_scans_and_filters_by_created_at():
+    rows = [
+        {"src": "A", "rel": "OWNS", "tgt": "B", "created_at": 19799, "first_doc_id": "d1"},
+        {"src": "C", "rel": "OWNS", "tgt": "D", "created_at": 19700, "first_doc_id": "d2"},  # stale
+        {"src": "E", "rel": "CONTACT", "tgt": "F", "created_at": 19790, "first_doc_id": "d3"},
+    ]
+    store = _NebulaRecStore(canned=[("MATCH (a:`Entity`)-[r:`RELATED`]->", rows)])
+    result = ego.NebulaEventsGraphOps(store).new_edges(19786, 25)
+    # >= 19786 kept, sorted created_at desc
+    assert result == [
+        {"src": "A", "rel": "OWNS", "tgt": "B", "created_at": 19799, "first_doc_id": "d1"},
+        {"src": "E", "rel": "CONTACT", "tgt": "F", "created_at": 19790, "first_doc_id": "d3"},
+    ]
+    assert "WHERE" not in store.calls[0][0]  # full scan, no edge-property WHERE
 
 
-def test_nebula_entity_new_connections_returns_empty():
-    store = _NebulaRecStore()
-    assert ego.NebulaEventsGraphOps(store).entity_new_connections("A", 19786, 25) == []
-    assert store.calls == []
+def test_nebula_new_edges_respects_top_n():
+    rows = [{"src": f"S{i}", "rel": "OWNS", "tgt": "T", "created_at": 19790 + i,
+             "first_doc_id": "d"} for i in range(5)]
+    store = _NebulaRecStore(canned=[("MATCH (a:`Entity`)-[r:`RELATED`]->", rows)])
+    result = ego.NebulaEventsGraphOps(store).new_edges(19786, 2)
+    assert len(result) == 2 and result[0]["created_at"] == 19794
+
+
+def test_nebula_entity_new_connections_name_anchored():
+    store = _NebulaRecStore(canned=[
+        ("e.`Entity`.name ==", [{"rel": "OWNS", "other": "B", "created_at": 19799,
+                                 "first_doc_id": "d1"}])
+    ])
+    result = ego.NebulaEventsGraphOps(store).entity_new_connections("A", 19786, 25)
+    assert result == [{"rel": "OWNS", "other": "B", "created_at": 19799, "first_doc_id": "d1"}]
+    stmt = store.calls[0][0]
+    assert "e.`Entity`.name == \"A\"" in stmt
+    assert "r.created_at >= 19786" in stmt
+    assert "ORDER BY created_at DESC LIMIT 25" in stmt
 
 
 # --- Dispatch ------------------------------------------------------------

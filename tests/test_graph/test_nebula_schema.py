@@ -210,7 +210,8 @@ def test_ensure_schema_probes_related_weighted_edge_write():
     fake = _FakeSession()
     ensure_schema(fake)
     joined = "\n".join(fake.statements)
-    assert "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight)" in joined
+    assert ("INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight, "
+            "created_at, first_doc_id)") in joined
     assert "__kb_schema_probe_b__" in joined
     # both sentinel vertices are cleaned up WITH EDGE
     assert 'DELETE VERTEX "__kb_schema_probe_b__" WITH EDGE;' in fake.statements

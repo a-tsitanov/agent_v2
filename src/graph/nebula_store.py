@@ -123,25 +123,63 @@ class NebulaGraphStore:
         # edge types. Entity-entity relations all become `RELATED`, with
         # the original type stored in the `rel_type` PROPERTY (a value,
         # so no edge-identifier injection). See ADR / Phase-2 spec.
-        def row(r: Any) -> str:
-            rel_type = getattr(r, "label", "") or ""
-            props = getattr(r, "properties", {}) or {}
-            src = entity_vid(getattr(r, "source_id", ""))
-            tgt = entity_vid(getattr(r, "target_id", ""))
-            return (
-                f"{_q(src)} -> {_q(tgt)}:("
-                f"{_q(rel_type)}, "
-                f"{_q(props.get('polarity', ''))}, "
-                # valid_from/valid_to are opaque ISO date strings (or None) —
-                # store as strings (int() here crashed on a real ISO window).
-                f"{_q(props.get('valid_from') or '')}, "
-                f"{_q(props.get('valid_to') or '')}, "
-                f"{float(props.get('weight', 1.0) or 1.0)})"
-            )
-
         for chunk in _chunks(relations, settings.nebula.write_batch_size):
+            # Read-back (best-effort): preserve created_at/first_doc_id for edges
+            # that already exist. INSERT EDGE resets omitted columns on nebula, so
+            # without this every re-upsert would wipe first-seen provenance (same
+            # rework as upsert_nodes). Keyed by (src_vid, tgt_vid) — upsert writes
+            # rank 0. Fail-open: a FETCH failure just skips preservation this round.
+            keys = {
+                (entity_vid(getattr(r, "source_id", "")), entity_vid(getattr(r, "target_id", "")))
+                for r in chunk
+            }
+            preserved: dict[tuple[str, str], tuple[Any, Any]] = {}
+            if keys:
+                try:
+                    edge_list = ", ".join(f"{_q(s)}->{_q(t)}" for s, t in keys)
+                    rows = self.structured_query(
+                        f"FETCH PROP ON `RELATED` {edge_list} YIELD "
+                        "src(edge) AS s, dst(edge) AS d, "
+                        "`RELATED`.created_at AS ca, `RELATED`.first_doc_id AS fdi;"
+                    )
+                    preserved = {
+                        (r["s"], r["d"]): (r.get("ca"), r.get("fdi")) for r in rows
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "upsert_relations read-back failed (no first-seen preservation "
+                        "this round): {e}", e=exc,
+                    )
+                    preserved = {}
+
+            def row(r: Any, _preserved: dict[tuple[str, str], tuple[Any, Any]] = preserved) -> str:
+                rel_type = getattr(r, "label", "") or ""
+                props = getattr(r, "properties", {}) or {}
+                src = entity_vid(getattr(r, "source_id", ""))
+                tgt = entity_vid(getattr(r, "target_id", ""))
+                # first-write-wins: keep the existing created_at/first_doc_id if the
+                # edge already carries one (created_at != 0), else take this pass's.
+                prev = _preserved.get((src, tgt))
+                if prev and int(prev[0] or 0) != 0:
+                    ca, fdi = int(prev[0] or 0), (prev[1] or "")
+                else:
+                    ca = int(props.get("created_at", 0) or 0)
+                    fdi = props.get("first_doc_id", "") or ""
+                return (
+                    f"{_q(src)} -> {_q(tgt)}:("
+                    f"{_q(rel_type)}, "
+                    f"{_q(props.get('polarity', ''))}, "
+                    # valid_from/valid_to are opaque ISO date strings (or None) —
+                    # store as strings (int() here crashed on a real ISO window).
+                    f"{_q(props.get('valid_from') or '')}, "
+                    f"{_q(props.get('valid_to') or '')}, "
+                    f"{float(props.get('weight', 1.0) or 1.0)}, "
+                    f"{ca}, {_q(fdi)})"
+                )
+
             stmt = (
-                "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) "
+                "INSERT EDGE `RELATED` "
+                "(rel_type, polarity, valid_from, valid_to, weight, created_at, first_doc_id) "
                 "VALUES "
                 + ", ".join(row(r) for r in chunk)
                 + ";"

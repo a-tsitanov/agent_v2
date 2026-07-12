@@ -189,8 +189,9 @@ def test_upsert_relations_writes_weight_from_properties():
                           properties={"weight": 7.0})
     store.upsert_relations([rel])
     blob = "\n".join(sess.executed)
-    assert "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) VALUES" in blob
-    assert blob.rstrip(";").endswith("7.0)")
+    assert ("INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight, "
+            "created_at, first_doc_id) VALUES") in blob
+    assert '7.0, 0, "")' in blob  # weight then created_at=0, first_doc_id=""
 
 
 def test_upsert_relations_defaults_weight_to_one_when_absent():
@@ -199,7 +200,7 @@ def test_upsert_relations_defaults_weight_to_one_when_absent():
     rel = SimpleNamespace(source_id="a", target_id="b", label="WORKS_AT", properties={})
     store.upsert_relations([rel])
     blob = "\n".join(sess.executed)
-    assert blob.rstrip(";").endswith("1.0)")
+    assert '1.0, 0, "")' in blob  # default weight 1.0 then created_at=0, first_doc_id=""
 
 
 def test_upsert_relations_rel_type_is_a_value_not_identifier():
@@ -211,7 +212,10 @@ def test_upsert_relations_rel_type_is_a_value_not_identifier():
     blob = "\n".join(sess.executed)
     assert "INSERT EDGE `RELATED`" in blob     # always RELATED edge type
     assert "INSERT EDGE `X" not in blob        # label never spliced as an edge-type identifier
-    assert len(sess.executed) == 1             # a single statement — no injected 2nd statement
+    # one FETCH read-back + one INSERT; the label never becomes a 3rd (injected) stmt
+    inserts = [s for s in sess.executed if s.startswith("INSERT EDGE `RELATED`")]
+    assert len(inserts) == 1
+    assert "DROP SPACE" in blob                 # present only as an escaped rel_type value
 
 
 def test_q_escapes_newlines():
@@ -302,17 +306,20 @@ def test_upsert_relations_batches_into_multi_values_statements(monkeypatch):
 
     store.upsert_relations(rels)
 
-    assert len(sess.executed) == 3  # 2 + 2 + 1
-    for stmt in sess.executed:
+    # each batch does a FETCH read-back then an INSERT; assert on the INSERTs.
+    inserts = [s for s in sess.executed if s.startswith("INSERT EDGE `RELATED`")]
+    assert len(inserts) == 3  # 2 + 2 + 1
+    for stmt in inserts:
         assert stmt.startswith(
-            "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) VALUES "
+            "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight, "
+            "created_at, first_doc_id) VALUES "
         )
-    assert sess.executed[0].count(" -> ") == 2
-    assert sess.executed[1].count(" -> ") == 2
-    assert sess.executed[2].count(" -> ") == 1
+    assert inserts[0].count(" -> ") == 2
+    assert inserts[1].count(" -> ") == 2
+    assert inserts[2].count(" -> ") == 1
     src0, tgt0 = entity_vid("Entity0"), entity_vid("Entity1")
-    assert f'"{src0}" -> "{tgt0}"' in sess.executed[0]
-    assert '"WORKS_WITH"' in sess.executed[0]
+    assert f'"{src0}" -> "{tgt0}"' in inserts[0]
+    assert '"WORKS_WITH"' in inserts[0]
 
 
 def test_upsert_nodes_empty_list_emits_no_statements():
@@ -346,5 +353,6 @@ def test_upsert_relations_batch_size_ge_len_emits_one_statement(monkeypatch):
     store = _store_with_session(sess)
     rels = [_rel(i) for i in range(5)]
     store.upsert_relations(rels)
-    assert len(sess.executed) == 1
-    assert sess.executed[0].count(" -> ") == 5
+    inserts = [s for s in sess.executed if s.startswith("INSERT EDGE `RELATED`")]
+    assert len(inserts) == 1  # one INSERT (a single FETCH read-back precedes it)
+    assert inserts[0].count(" -> ") == 5
