@@ -149,7 +149,7 @@ class GraphSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="GRAPH_", env_file=".env", extra="ignore")
 
-    backend: Literal["neo4j", "nebula"] = "neo4j"
+    backend: Literal["neo4j", "nebula"] = "nebula"
 
 
 class NebulaSettings(BaseSettings):

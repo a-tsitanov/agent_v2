@@ -97,41 +97,10 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # ── Graph DB: Neo4j Enterprise (Stage 6) ────────────────────────────
-  neo4j:
-    image: neo4j:5-enterprise
-    environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-changeme}
-      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
-      # graph-data-science (GDS) added for community detection (Plan #2 R6:
-      # CommunityBuildWorkflow runs gds.leiden). Leiden ships in the open
-      # GDS library, so Community GDS on Neo4j Enterprise is sufficient.
-      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
-      # GDS + APOC procedures must be allow-listed to be callable.
-      NEO4J_dbms_security_procedures_unrestricted: "gds.*,apoc.*"
-      NEO4J_dbms_security_procedures_allowlist: "gds.*,apoc.*"
-      # Leiden on a large KG is memory-hungry — the GDS undirected
-      # projection holds every edge in BOTH directions in JVM heap, so a
-      # 1G cap OOMs ("Java heap space") on real graphs.  Defaults bumped
-      # and made env-overridable; size to the host (Neo4j wants roughly
-      # heap_max + pagecache free RAM — ~6G for these defaults).  Drop them
-      # for a tiny dev box, raise for a large corpus.
-      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP_INITIAL:-1G}"
-      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP_MAX:-4G}"
-      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-1G}"
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-    restart: unless-stopped
+  # ── Graph DB: Neo4j — DECOMMISSIONED (migration cutover 2026-07-11) ──
+  # NebulaGraph is now the sole graph backend (GRAPH_BACKEND default = nebula).
+  # The neo4j service was removed here; its impl code is retained (inert) for
+  # rollback until a production re-ingest validates nebula end-to-end.
 
   # ── Graph DB: NebulaGraph dev cluster (migration Phase 1) ───────────
   # Single-replica dev topology: metad + storaged + graphd. After first
@@ -445,7 +414,6 @@ services:
       POSTGRES_HOST: postgres
       MILVUS_HOST: milvus
       MINIO_ENDPOINT: minio:9000
-      NEO4J_URI: bolt://neo4j:7687
       TEMPORAL_HOST: temporal
     restart: "no"
     profiles: ["init"]
@@ -460,8 +428,6 @@ volumes:
   etcd_data:
   minio_data:
   milvus_data:
-  neo4j_data:
-  neo4j_logs:
   nebula_meta:
   nebula_storage:
   pg_data:

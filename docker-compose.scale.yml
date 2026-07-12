@@ -44,7 +44,6 @@ services:
       METRICS_ENABLED: "false"
     deploy: {replicas: 2}
     depends_on:
-      neo4j: {condition: service_healthy}
       temporal: {condition: service_started}
 
   worker-main:                   # fetch/parse/index/canonical/finalize (DocumentIngestWorkflow)
