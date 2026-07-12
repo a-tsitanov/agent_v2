@@ -7,17 +7,29 @@ from tests.test_analytics.conftest import _FakeStore
 
 @pytest.mark.asyncio
 async def test_community_overview_reads_level():
+    # _FakeStore drives the default Neo4jCommunitiesGraphOps path.
     store = _FakeStore(rows=[{"title": "Поставки", "summary": "...", "member_count": 12}])
     res = await com.community_overview(store, level=0)
     assert res.params["level"] == 0
-    assert "c:Community" in res.cypher and "member_count" in res.cypher
+    assert res.rows[0]["member_count"] == 12
+
+
+@pytest.mark.asyncio
+async def test_community_overview_fail_soft_none_store():
+    assert (await com.community_overview(None)).rows == []
 
 
 @pytest.mark.asyncio
 async def test_entity_communities_by_name():
     store = _FakeStore(rows=[{"level": 0, "title": "Поставки", "summary": "s"}])
     res = await com.entity_communities(store, name="Ромашка")
-    assert ":IN_COMMUNITY" in res.cypher
+    assert res.params["name"] == "Ромашка"
+    assert res.rows[0]["title"] == "Поставки"
+
+
+@pytest.mark.asyncio
+async def test_entity_communities_fail_soft_none_store():
+    assert (await com.entity_communities(None, name="X")).rows == []
 
 
 @pytest.mark.asyncio

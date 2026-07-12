@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.ids import clamp_top_n
-from src.analytics.store_query import run_rows
 from src.graph.analysis import personalized_pagerank as _analysis_ppr
+from src.graph.communities_graph_ops import build_communities_graph_ops
 
 
 class _Params(BaseModel):
@@ -25,13 +26,14 @@ async def community_overview(
     store: Any | None, *, level: int = 0, top_n: int = 20
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n)
-    cypher = (
-        "MATCH (c:Community {level:$level}) "
-        "RETURN c.title AS title, c.summary AS summary, c.member_count AS member_count "
-        "ORDER BY c.member_count DESC LIMIT $top_n"
-    )
+    cypher = "communities_graph_ops.community_overview"
     params = {"level": int(level), "top_n": top_n}
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_communities_graph_ops(store).community_overview, int(level), top_n
+    )
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 class EntityCommunitiesParams(_Params):
@@ -39,12 +41,12 @@ class EntityCommunitiesParams(_Params):
 
 
 async def entity_communities(store: Any | None, *, name: str) -> PrimitiveResult:
-    cypher = (
-        "MATCH (e:__Entity__ {name:$name})-[:IN_COMMUNITY]->(c:Community) "
-        "RETURN c.level AS level, c.title AS title, c.summary AS summary"
-    )
+    cypher = "communities_graph_ops.entity_communities"
     params = {"name": name}
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(build_communities_graph_ops(store).entity_communities, name)
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 class PersonalizedPagerankParams(_Params):
