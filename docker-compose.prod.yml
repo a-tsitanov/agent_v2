@@ -22,6 +22,12 @@ x-app-env: &app-env
   MINIO_ENDPOINT: minio:9000
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+  # ── Graph: NebulaGraph (sole backend post-cutover; GRAPH_BACKEND default) ──
+  GRAPH_BACKEND: ${GRAPH_BACKEND:-nebula}
+  NEBULA_HOST: nebula-graphd
+  NEBULA_PORT: "9669"
+  NEBULA_USER: ${NEBULA_USER:-root}
+  NEBULA_PASSWORD: ${NEBULA_PASSWORD:-nebula}
   # ── LLM proxy: EXTERNAL (litellm/ollama not in this compose) ──
   LITELLM_BASE_URL: ${LITELLM_BASE_URL:?set LITELLM_BASE_URL to the external proxy}
   LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-litellm-stub}
@@ -102,7 +108,10 @@ services:
   # re-run on every fresh boot.
   init:
     <<: [*app-build]
-    command: ["python", "-m", "scripts.setup_db"]
+    # Register the NebulaGraph storaged host (ADD HOSTS) BEFORE setup_db, so the
+    # graph is writable before workers/api (which depend on init) start. Both
+    # are idempotent — safe on every boot.
+    command: ["sh", "-c", "python -m scripts.nebula_bootstrap && python -m scripts.setup_db"]
     environment: *app-env
     restart: "no"
     depends_on:
@@ -110,6 +119,7 @@ services:
       milvus: {condition: service_healthy}
       minio: {condition: service_healthy}
       temporal: {condition: service_started}
+      nebula-graphd: {condition: service_healthy}
 
   api:
     <<: [*app-build]
@@ -164,6 +174,7 @@ services:
       - "${MCP_SEARCH_PORT:-9001}:9001"
     depends_on:
       temporal: {condition: service_started}
+      nebula-graphd: {condition: service_healthy}
     restart: unless-stopped
 
   mcp-tools:
@@ -174,9 +185,61 @@ services:
       - "${MCP_TOOLS_PORT:-9002}:9002"
     depends_on:
       milvus: {condition: service_healthy}
+      nebula-graphd: {condition: service_healthy}
     restart: unless-stopped
 
   # ───────────────────────── backing services ────────────────────────
+
+  # ── Graph DB: NebulaGraph cluster (sole graph backend post-cutover) ──
+  # After a fresh start the storaged host must be registered once via
+  # `ADD HOSTS` — the `init` service runs scripts/nebula_bootstrap.py before
+  # setup_db, so workers only start once the graph is writable.
+  nebula-metad:
+    image: vesoft/nebula-metad:v3.8.0
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-metad", "--ws_ip=nebula-metad", "--port=9559", "--data_path=/data/meta", "--heartbeat_interval_secs=1"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nebula-metad:19559/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    volumes:
+      - nebula_meta:/data/meta
+    restart: unless-stopped
+
+  nebula-storaged:
+    image: vesoft/nebula-storaged:v3.8.0
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-storaged", "--ws_ip=nebula-storaged", "--port=9779", "--data_path=/data/storage", "--heartbeat_interval_secs=1"]
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nebula-storaged:19779/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    volumes:
+      - nebula_storage:/data/storage
+    restart: unless-stopped
+
+  nebula-graphd:
+    image: vesoft/nebula-graphd:v3.8.0
+    command: ["--meta_server_addrs=nebula-metad:9559", "--local_ip=nebula-graphd", "--ws_ip=nebula-graphd", "--port=9669", "--heartbeat_interval_secs=1"]
+    # graphd gates only on metad — storaged isn't fully "healthy" until it's
+    # registered via ADD HOSTS (issued THROUGH graphd), so gating on storaged
+    # deadlocks. metad -> graphd up -> init's ADD HOSTS activates storaged.
+    depends_on:
+      nebula-metad:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://nebula-graphd:19669/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
@@ -456,6 +519,8 @@ volumes:
   etcd_data:
   minio_data:
   milvus_data:
+  nebula_meta:
+  nebula_storage:
   pg_data:
   wikibase_mysql_data:
   wikibase_images:
