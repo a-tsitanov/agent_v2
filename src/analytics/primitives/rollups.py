@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections import defaultdict
 from typing import Any
@@ -10,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.ids import clamp_top_n
-from src.analytics.store_query import run_rows
+from src.graph.rollups_graph_ops import build_rollups_graph_ops
 
 _NUM = re.compile(r"-?\d[\d  .,]*")
 
@@ -46,13 +47,11 @@ async def numeric_rollup(
     store: Any | None, *, counterparty: str | None = None, top_n: int = 20
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n)
-    cypher = (
-        "MATCH (e:__Entity__)-[]-(a:__Entity__:Amount) "
-        "WHERE ($cp IS NULL OR e.name=$cp) "
-        "RETURN e.name AS counterparty, a.name AS amount"
-    )
+    cypher = "rollups_graph_ops.amount_edges"
     params = {"cp": counterparty}
-    raw = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    raw = await asyncio.to_thread(build_rollups_graph_ops(store).amount_edges, counterparty)
     agg: dict[str, dict] = defaultdict(lambda: {"total": 0.0, "count": 0})
     for r in raw:
         v = parse_amount(str(r.get("amount", "")))
