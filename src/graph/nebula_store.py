@@ -107,12 +107,20 @@ class NebulaGraphStore:
                     f"{ca}, "
                     f"{_q(getattr(n, 'label', '') or '')}, "
                     f"{_q(props.get('er_canonical_name', '') or '')}, "
-                    f"{_q(fdi)})"
+                    f"{_q(fdi)}, "
+                    # E2 event-timeframe fields (empty/0 for non-event entities).
+                    f"{_q(props.get('event_type', '') or '')}, "
+                    f"{_q(props.get('event_ts_raw', '') or '')}, "
+                    f"{int(props.get('event_start_epoch') or 0)}, "
+                    f"{int(props.get('event_end_epoch') or 0)}, "
+                    f"{_q(props.get('event_ts_precision', '') or '')})"
                 )
 
             stmt = (
                 "INSERT VERTEX `Entity` (name, description, mention_count, created_at, "
-                "label, er_canonical_name, first_doc_id) VALUES "
+                "label, er_canonical_name, first_doc_id, "
+                "event_type, event_ts_raw, event_start_epoch, event_end_epoch, "
+                "event_ts_precision) VALUES "
                 + ", ".join(row(n) for n in chunk)
                 + ";"
             )

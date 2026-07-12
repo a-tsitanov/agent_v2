@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -10,24 +11,12 @@ from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.events_burst import build_burst_cypher
 from src.analytics.ids import clamp_top_n
 from src.analytics.store_query import run_rows
+from src.graph.events_llm_graph_ops import build_events_llm_graph_ops
 from src.retrieval.date_filters import today_epoch_days
 
 
 class _Params(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
-
-_EVENT_CORE = (
-    "MATCH (e:__Entity__:EventOrAction {name:$name}) "
-    "RETURN e.name AS name, e.event_type AS event_type, e.event_ts_raw AS event_ts_raw, "
-    "e.event_start_epoch AS event_start_epoch, e.event_end_epoch AS event_end_epoch, "
-    "e.event_ts_precision AS event_ts_precision, e.polarity AS polarity"
-)
-_EVENT_ACTORS = (
-    "MATCH (e:__Entity__:EventOrAction {name:$name})-[r]-(n) "
-    "RETURN n.name AS actor_name, type(r) AS rel "
-    "LIMIT $top_n"
-)
 
 
 class EventDossierParams(_Params):
@@ -38,18 +27,19 @@ class EventDossierParams(_Params):
 async def event_dossier(store: Any | None, *, name: str, top_n: int = 25) -> PrimitiveResult:
     """Event dossier: core event info + actors."""
     top_n = clamp_top_n(top_n, default=25)
+    cypher = "events_llm_graph_ops.event_core ;; events_llm_graph_ops.event_actors"
     params = {"name": name, "top_n": top_n}
     if store is None:
-        return PrimitiveResult(cypher=_EVENT_CORE, params=params, rows=[])
-    core = await run_rows(store, _EVENT_CORE, params)
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    ops = build_events_llm_graph_ops(store)
+    core = await asyncio.to_thread(ops.event_core, name)
     if not core:
-        return PrimitiveResult(cypher=_EVENT_CORE, params=params, rows=[])
-    actors = await run_rows(store, _EVENT_ACTORS, params)
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    actors = await asyncio.to_thread(ops.event_actors, name, top_n)
     row = {
         "core": core[0],
         "actors": actors,
     }
-    cypher = " ;; ".join([_EVENT_CORE, _EVENT_ACTORS])
     return PrimitiveResult(cypher=cypher, params=params, rows=[row])
 
 
@@ -72,20 +62,17 @@ async def event_timeline(
     with created_at fallback.
     """
     top_n = clamp_top_n(top_n, default=50)
-    params: dict[str, Any] = {"entity": entity, "top_n": top_n}
-    where = ""
+    since_secs = None
     if window_days is not None:
-        params["since_secs"] = (today_epoch_days() - int(window_days)) * 86400
-        where = "WHERE coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs "
-    cypher = (
-        "MATCH (p:__Entity__ {name:$entity})-[:PARTICIPATED_IN]-(e:__Entity__:EventOrAction) "
-        f"{where}"
-        "RETURN e.name AS name, e.event_type AS event_type, e.event_ts_raw AS event_ts_raw, "
-        "e.event_start_epoch AS event_start_epoch, e.event_end_epoch AS event_end_epoch, "
-        "e.event_ts_precision AS event_ts_precision "
-        "ORDER BY e.event_start_epoch IS NULL, e.event_start_epoch DESC LIMIT $top_n"
+        since_secs = (today_epoch_days() - int(window_days)) * 86400
+    cypher = "events_llm_graph_ops.event_timeline"
+    params: dict[str, Any] = {"entity": entity, "top_n": top_n, "since_secs": since_secs}
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_events_llm_graph_ops(store).event_timeline, entity, since_secs, top_n
     )
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 _TRENDING = build_burst_cypher(watched_only=False)

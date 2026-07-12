@@ -94,7 +94,8 @@ def test_upsert_nodes_writes_er_canonical_name_from_properties():
     blob = "\n".join(sess.executed)
     assert (
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-        "er_canonical_name, first_doc_id) VALUES" in blob
+        "er_canonical_name, first_doc_id, event_type, event_ts_raw, event_start_epoch, "
+        "event_end_epoch, event_ts_precision) VALUES" in blob
     )
     assert '"Canon"' in blob
 
@@ -127,7 +128,7 @@ def test_upsert_nodes_preserves_created_at_and_first_doc_id_for_existing_entity(
     assert len(inserts) == 1
     # created_at/first_doc_id come from the read-back (111/"d0"), NOT props
     # (999/"dNEW"); description still overwrites from props ("newdesc").
-    expected_row = f'{_q_expect(vid_a)}:("A", "newdesc", 0, 111, "PERSON", "", "d0")'
+    expected_row = f'{_q_expect(vid_a)}:("A", "newdesc", 0, 111, "PERSON", "", "d0", "", "", 0, 0, "")'
     assert expected_row in inserts[0]
     assert "999" not in inserts[0]
     assert "dNEW" not in inserts[0]
@@ -146,7 +147,7 @@ def test_upsert_nodes_uses_props_for_new_entity_when_not_in_readback():
 
     inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
     assert len(inserts) == 1
-    expected_row = f'{_q_expect(vid_b)}:("B", "d", 0, 7, "ORG", "", "dB")'
+    expected_row = f'{_q_expect(vid_b)}:("B", "d", 0, 7, "ORG", "", "dB", "", "", 0, 0, "")'
     assert expected_row in inserts[0]
 
 
@@ -166,7 +167,7 @@ def test_upsert_nodes_readback_failure_treats_all_as_new_and_still_inserts():
 
     inserts = [s for s in sess.executed if s.startswith("INSERT VERTEX")]
     assert len(inserts) == 1  # INSERT still issued (fail-open, no crash)
-    expected_row = f'{_q_expect(vid_c)}:("C", "d", 0, 42, "PERSON", "", "dC")'
+    expected_row = f'{_q_expect(vid_c)}:("C", "d", 0, 42, "PERSON", "", "dC", "", "", 0, 0, "")'
     assert expected_row in inserts[0]
 
 
@@ -281,7 +282,8 @@ def test_upsert_nodes_batches_into_multi_values_statements(monkeypatch):
     for stmt in inserts:
         assert stmt.startswith(
             "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
-            "er_canonical_name, first_doc_id) VALUES "
+            "er_canonical_name, first_doc_id, event_type, event_ts_raw, event_start_epoch, "
+            "event_end_epoch, event_ts_precision) VALUES "
         )
     # first two statements have 2 comma-joined rows, last has 1
     assert inserts[0].count(":(") == 2

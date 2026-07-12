@@ -46,7 +46,13 @@ SCHEMA_DDL: list[str] = [
     "er_canonical_name string DEFAULT '', first_doc_id string DEFAULT '', "
     "wiki_dirty bool DEFAULT false, wiki_dirty_at int DEFAULT 0, "
     "wiki_hash string DEFAULT '', wiki_synced_at int DEFAULT 0, "
-    "wiki_page_title string DEFAULT '', wikibase_qid string DEFAULT '');",
+    "wiki_page_title string DEFAULT '', wikibase_qid string DEFAULT '', "
+    # E2 event-timeframe fields on EventOrAction entities (event_merge.py sets
+    # them in the entity props → upsert_nodes). Present on every Entity row (a
+    # nebula tag has no optional columns) — empty/0 for non-event entities.
+    "event_type string DEFAULT '', event_ts_raw string DEFAULT '', "
+    "event_start_epoch int DEFAULT 0, event_end_epoch int DEFAULT 0, "
+    "event_ts_precision string DEFAULT '');",
     # valid_from/valid_to are OPAQUE ISO date strings (or '') — matching the
     # neo4j representation and what src/graph/merge.py emits. They were
     # originally (mistakenly) declared int, which crashed the write path on the
@@ -290,6 +296,16 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3f. Same for EXISTING spaces created before the E2 event-timeframe columns
+    # (event_dossier / event_timeline read them off EventOrAction entities).
+    _execute_with_retry(
+        session,
+        "ALTER TAG `Entity` ADD (event_type string DEFAULT '', "
+        "event_ts_raw string DEFAULT '', event_start_epoch int DEFAULT 0, "
+        "event_end_epoch int DEFAULT 0, event_ts_precision string DEFAULT '');",
+        attempts=1, delay_s=0,
+    )
+
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
@@ -304,8 +320,10 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         session, "Entity",
         "INSERT VERTEX `Entity` (name, description, mention_count, created_at, label, "
         "er_canonical_name, first_doc_id, wiki_dirty, wiki_dirty_at, wiki_hash, "
-        "wiki_synced_at, wiki_page_title, wikibase_qid) "
-        f'VALUES "{probe}":("", "", 0, 0, "", "", "", false, 0, "", 0, "", "");',
+        "wiki_synced_at, wiki_page_title, wikibase_qid, "
+        "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision) "
+        f'VALUES "{probe}":("", "", 0, 0, "", "", "", false, 0, "", 0, "", "", '
+        '"", "", 0, 0, "");',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
 
