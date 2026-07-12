@@ -70,6 +70,11 @@ dependencies = [
     # (mcp-search/mcp-tools crash-loop, exit 132).  47.0.0/48.0.0 verified
     # broken, 44.0.3/45.0.7/46.0.5 verified OK on this host.
     "cryptography>=44,<47",
+
+    # NebulaGraph client — the sole graph backend post-cutover (GRAPH_BACKEND
+    # default = nebula). Pinned to the 3.8 line to match the cluster (v3.8.x).
+    # Was previously only in the dev .venv (ad-hoc), which broke the prod image.
+    "nebula3-python>=3.8,<3.9",
 ]
 
 [project.optional-dependencies]
