@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict
 from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.events_burst import build_burst_cypher
 from src.analytics.ids import clamp_top_n
-from src.analytics.store_query import run_rows
 from src.graph.events_llm_graph_ops import build_events_llm_graph_ops
 from src.retrieval.date_filters import today_epoch_days
 
@@ -97,17 +96,23 @@ async def trending_events(
     top_n = clamp_top_n(top_n, default=20)
     bw = max(int(baseline_windows), 1)
     today = today_epoch_days()
+    since_recent = today - int(window_days)
+    since_baseline = today - int(window_days) * (bw + 1)
     params = {
-        "since_recent": today - int(window_days),
-        "since_baseline": today - int(window_days) * (bw + 1),
+        "since_recent": since_recent,
+        "since_baseline": since_baseline,
         "baseline_windows": bw,
         "min_count": int(min_count),
         "ratio": 1.0,
         "top_n": top_n,
     }
-    return PrimitiveResult(
-        cypher=_TRENDING, params=params, rows=await run_rows(store, _TRENDING, params)
+    if store is None:
+        return PrimitiveResult(cypher=_TRENDING, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_events_llm_graph_ops(store).trending_events,
+        since_recent, since_baseline, bw, int(min_count), 1.0, top_n,
     )
+    return PrimitiveResult(cypher=_TRENDING, params=params, rows=rows)
 
 
 register(

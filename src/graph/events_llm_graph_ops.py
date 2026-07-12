@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from src.analytics.events_burst import build_burst_cypher
 from src.config import settings
 
 _EVENT_CORE = (
@@ -49,6 +50,10 @@ _EVENT_FIELDS = (
     "event_type", "event_ts_raw", "event_start_epoch", "event_end_epoch", "event_ts_precision",
 )
 
+# E3 burst query (watched_only=False — the trending_events primitive). Single
+# source of truth is src/analytics/events_burst.py.
+_TRENDING = build_burst_cypher(watched_only=False)
+
 
 class EventsLlmGraphOps(Protocol):
     def event_core(self, name: str) -> list[dict]: ...
@@ -56,6 +61,16 @@ class EventsLlmGraphOps(Protocol):
     def event_actors(self, name: str, top_n: int) -> list[dict]: ...
 
     def event_timeline(self, entity: str, since_secs: int | None, top_n: int) -> list[dict]: ...
+
+    def trending_events(
+        self,
+        since_recent: int,
+        since_baseline: int,
+        baseline_windows: int,
+        min_count: int,
+        ratio: float,
+        top_n: int,
+    ) -> list[dict]: ...
 
 
 class Neo4jEventsLlmGraphOps:
@@ -83,6 +98,27 @@ class Neo4jEventsLlmGraphOps:
             params["since_secs"] = since_secs
             where = "WHERE coalesce(e.event_start_epoch, e.created_at * 86400) >= $since_secs "
         return self._rows(_EVENT_TIMELINE.replace("{where}", where), params)
+
+    def trending_events(
+        self,
+        since_recent: int,
+        since_baseline: int,
+        baseline_windows: int,
+        min_count: int,
+        ratio: float,
+        top_n: int,
+    ) -> list[dict]:
+        return self._rows(
+            _TRENDING,
+            {
+                "since_recent": since_recent,
+                "since_baseline": since_baseline,
+                "baseline_windows": baseline_windows,
+                "min_count": min_count,
+                "ratio": ratio,
+                "top_n": top_n,
+            },
+        )
 
 
 def _nebula_fail_soft(method: Callable[..., list[dict]]) -> Callable[..., list[dict]]:
@@ -218,6 +254,68 @@ class NebulaEventsLlmGraphOps:
         # `ORDER BY event_start_epoch IS NULL, event_start_epoch DESC`.
         out.sort(key=lambda r: (int(r["event_start_epoch"] or 0) == 0,
                                 -int(r["event_start_epoch"] or 0)))
+        return out[:top_n]
+
+    @_nebula_fail_soft
+    def trending_events(
+        self,
+        since_recent: int,
+        since_baseline: int,
+        baseline_windows: int,
+        min_count: int,
+        ratio: float,
+        top_n: int,
+    ) -> list[dict]:
+        from src.graph.nebula_store import _q
+
+        # 1. All EventOrAction entities in the baseline window (vertex-property
+        #    filters on a label-anchored scan — no edge-property WHERE here).
+        ev_rows = self._exec(
+            "MATCH (e:`Entity`) WHERE e.`Entity`.label == 'EventOrAction' "
+            f"AND e.`Entity`.created_at >= {int(since_baseline)} "
+            "RETURN id(e) AS vid, e.`Entity`.event_type AS event_type, "
+            "e.`Entity`.created_at AS created_at;"
+        )
+        ev_meta = {
+            r["vid"]: (r.get("event_type") or "", int(r.get("created_at") or 0))
+            for r in ev_rows if r.get("vid")
+        }
+        if not ev_meta:
+            return []
+        # 2. PARTICIPATED_IN edges from those events → participants (GO from known
+        #    VIDs, so the edge-property WHERE is anchored — no IndexNotFound).
+        vid_list = ", ".join(_q(v) for v in ev_meta)
+        pairs = self._exec(
+            f"GO FROM {vid_list} OVER `RELATED` "
+            "WHERE `RELATED`.rel_type == 'PARTICIPATED_IN' "
+            "AND `RELATED`.polarity != 'negated' "
+            "YIELD src(edge) AS ev, dst(edge) AS p;"
+        )
+        part_vids = [r["p"] for r in pairs if r.get("p")]
+        names = self._fetch_names(part_vids)
+        # 3. Group by (participant_name, event_type); count DISTINCT events in the
+        #    recent vs baseline buckets (sets dedup a doubled PARTICIPATED_IN edge).
+        recent: dict[tuple, set] = {}
+        baseline: dict[tuple, set] = {}
+        for row in pairs:
+            ev, p = row.get("ev"), row.get("p")
+            if ev not in ev_meta or p not in names:
+                continue
+            event_type, created_at = ev_meta[ev]
+            key = (names[p], event_type)
+            bucket = recent if created_at >= since_recent else baseline
+            bucket.setdefault(key, set()).add(ev)
+        out = []
+        for key in set(recent) | set(baseline):
+            n_recent = len(recent.get(key, set()))
+            baseline_rate = len(baseline.get(key, set())) / max(int(baseline_windows), 1)
+            burst_score = n_recent / (baseline_rate if baseline_rate >= 1 else 1)
+            if n_recent >= min_count and burst_score >= ratio:
+                out.append({
+                    "entity": key[0], "event_type": key[1], "recent": n_recent,
+                    "baseline_rate": baseline_rate, "burst_score": burst_score,
+                })
+        out.sort(key=lambda r: (-r["burst_score"], -r["recent"]))
         return out[:top_n]
 
 

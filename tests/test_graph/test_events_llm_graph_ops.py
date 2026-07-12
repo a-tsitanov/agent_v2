@@ -144,6 +144,62 @@ def test_nebula_fail_soft():
     assert ego.NebulaEventsLlmGraphOps(_NebulaRaisingStore()).event_core("E") == []
 
 
+# --- trending_events -----------------------------------------------------
+
+
+def test_neo4j_trending_issues_burst_cypher():
+    store = _RecStore(rows=[[{"entity": "Acme", "event_type": "lawsuit", "recent": 6,
+                              "baseline_rate": 1.0, "burst_score": 6.0}]])
+    result = ego.Neo4jEventsLlmGraphOps(store).trending_events(19893, 19865, 4, 2, 1.0, 20)
+    assert result[0]["event_type"] == "lawsuit"
+    assert store.calls == [(ego._TRENDING, {
+        "since_recent": 19893, "since_baseline": 19865, "baseline_windows": 4,
+        "min_count": 2, "ratio": 1.0, "top_n": 20,
+    })]
+    assert "burst_score" in ego._TRENDING and "PARTICIPATED_IN" in ego._TRENDING
+
+
+def test_nebula_trending_computes_burst_in_python():
+    p = entity_vid("Acme")
+    e_recent, e_recent2, e_old = entity_vid("E1"), entity_vid("E2"), entity_vid("E0")
+    store = _NebulaRecStore(canned=[
+        # event scan (label + created_at >= since_baseline)
+        ("label == 'EventOrAction'", [
+            {"vid": e_recent, "event_type": "lawsuit", "created_at": 100},
+            {"vid": e_recent2, "event_type": "lawsuit", "created_at": 100},
+            {"vid": e_old, "event_type": "lawsuit", "created_at": 50},
+        ]),
+        # PARTICIPATED_IN pairs (event -> participant)
+        ("rel_type == 'PARTICIPATED_IN'", [
+            {"ev": e_recent, "p": p}, {"ev": e_recent2, "p": p}, {"ev": e_old, "p": p},
+        ]),
+        # participant name fetch
+        ("`Entity`.name AS name;", [{"vid": p, "name": "Acme"}]),
+    ])
+    # since_recent=90 -> E1,E2 recent (2), E0 baseline (1); baseline_windows=1 ->
+    # baseline_rate=1.0; burst=2/1=2.0; min_count=2, ratio=1.0 -> passes.
+    result = ego.NebulaEventsLlmGraphOps(store).trending_events(90, 0, 1, 2, 1.0, 20)
+    assert result == [{"entity": "Acme", "event_type": "lawsuit", "recent": 2,
+                       "baseline_rate": 1.0, "burst_score": 2.0}]
+
+
+def test_nebula_trending_filters_below_min_count():
+    p = entity_vid("Acme")
+    e1 = entity_vid("E1")
+    store = _NebulaRecStore(canned=[
+        ("label == 'EventOrAction'", [{"vid": e1, "event_type": "lawsuit", "created_at": 100}]),
+        ("rel_type == 'PARTICIPATED_IN'", [{"ev": e1, "p": p}]),
+        ("`Entity`.name AS name;", [{"vid": p, "name": "Acme"}]),
+    ])
+    # 1 recent event but min_count=2 -> filtered out
+    assert ego.NebulaEventsLlmGraphOps(store).trending_events(90, 0, 1, 2, 1.0, 20) == []
+
+
+def test_nebula_trending_empty_when_no_events():
+    store = _NebulaRecStore()  # scan returns []
+    assert ego.NebulaEventsLlmGraphOps(store).trending_events(90, 0, 1, 2, 1.0, 20) == []
+
+
 # --- Dispatch ------------------------------------------------------------
 
 
