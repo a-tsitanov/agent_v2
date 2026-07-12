@@ -2,32 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.ids import clamp_top_n
-from src.analytics.store_query import run_rows
 from src.config import settings
+from src.graph.events_graph_ops import build_events_graph_ops
 from src.retrieval.date_filters import today_epoch_days
 
 
 class _Params(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
-
-_NEW_ENTITIES = (
-    "MATCH (e:__Entity__) WHERE e.created_at >= $since "
-    "RETURN e.name AS name, [l IN labels(e) WHERE l<>'__Entity__' AND l<>'__Node__'][0] AS type, "
-    "e.created_at AS created_at, e.first_doc_id AS first_doc_id "
-    "ORDER BY e.created_at DESC LIMIT $top_n"
-)
-_NEW_EDGES = (
-    "MATCH (a:__Entity__)-[r]->(b:__Entity__) WHERE r.created_at >= $since "
-    "RETURN a.name AS src, type(r) AS rel, b.name AS tgt, r.created_at AS created_at, "
-    "r.first_doc_id AS first_doc_id ORDER BY r.created_at DESC LIMIT $top_n"
-)
 
 
 class NewEventsParams(_Params):
@@ -46,15 +34,17 @@ async def new_events(
     top_n = clamp_top_n(top_n, default=25)
     wd = window_days if window_days is not None else settings.events.new_window_days
     since = today_epoch_days() - int(wd)
-    cypher_params = {"since": since, "top_n": top_n}
-    ents = await run_rows(store, _NEW_ENTITIES, cypher_params)
-    edges = await run_rows(store, _NEW_EDGES, cypher_params)
+    cypher = "events_graph_ops.new_entities ;; events_graph_ops.new_edges"
+    params = {"since": since, "top_n": top_n, "type": type}
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    ops = build_events_graph_ops(store)
+    ents = await asyncio.to_thread(ops.new_entities, since, top_n)
+    edges = await asyncio.to_thread(ops.new_edges, since, top_n)
     if type:
         ents = [e for e in ents if e.get("type") == type]
     rows = [{"kind": "entity", **e} for e in ents] + [{"kind": "edge", **e} for e in edges]
     rows.sort(key=lambda r: r.get("created_at", 0), reverse=True)
-    cypher = _NEW_ENTITIES + " ;; " + _NEW_EDGES
-    params = {"since": since, "top_n": top_n, "type": type}
     return PrimitiveResult(cypher=cypher, params=params, rows=rows[:top_n])
 
 
@@ -74,19 +64,14 @@ async def entity_new_connections(
     top_n = clamp_top_n(top_n, default=25)
     wd = window_days if window_days is not None else settings.events.new_window_days
     since = today_epoch_days() - int(wd)
-    cypher = (
-        "MATCH (e:__Entity__ {name:$name})-[r]-(n:__Entity__) WHERE "
-        "r.created_at >= $since "
-        "RETURN type(r) AS rel, n.name AS other, r.created_at AS created_at, "
-        "r.first_doc_id AS first_doc_id "
-        "ORDER BY r.created_at DESC LIMIT $top_n"
-    )
+    cypher = "events_graph_ops.entity_new_connections"
     params = {"name": name, "since": since, "top_n": top_n}
-    return PrimitiveResult(
-        cypher=cypher,
-        params=params,
-        rows=await run_rows(store, cypher, params),
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_events_graph_ops(store).entity_new_connections, name, since, top_n
     )
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 register(
