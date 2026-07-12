@@ -1,11 +1,13 @@
 # kb-llamaindex — one-command dev/prod operations.
 COMPOSE      ?= docker compose
 PROD_COMPOSE ?= docker compose -f docker-compose.prod.yml
+# Full prod stack + litellm proxy + tg-ingest, in one invocation.
+PROD_ALL_COMPOSE ?= docker compose -f docker-compose.prod.yml -f docker-compose.litellm.yml -f docker-compose.tg-ingest.yml
 PY           ?= uv run python
 
 .DEFAULT_GOAL := help
 
-.PHONY: help env-check up init models down logs ps up-prod wiki-setup
+.PHONY: help env-check up init models down logs ps up-prod up-prod-all down-prod-all wiki-setup
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -37,6 +39,14 @@ wiki-setup:  ## Bootstrap Wikibase: create bot (in running container) + schema o
 
 up-prod: env-check  ## Prod: build + up the full app stack (init runs automatically)
 	$(PROD_COMPOSE) up -d --build --wait
+
+up-prod-all: env-check  ## Prod EVERYTHING in one command: app+nebula + litellm + tg-ingest
+	@command -v ollama >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 \
+	  && echo "⚠ host ollama not reachable on :11434 — start it: OLLAMA_HOST=0.0.0.0 ollama serve" || true
+	$(PROD_ALL_COMPOSE) up -d --build --wait
+
+down-prod-all:  ## Stop the full prod+litellm+tg-ingest stack
+	$(PROD_ALL_COMPOSE) down
 
 down:  ## Stop the dev stack
 	$(COMPOSE) down
