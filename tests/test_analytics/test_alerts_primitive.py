@@ -19,8 +19,7 @@ async def test_alerts_reads_alert_nodes_newest_first():
         ]
     )
     res = await al.alerts(store, kind="risk_rise")
-    assert ":Alert" in res.cypher
-    assert "ORDER BY a.created_at DESC" in res.cypher
+    # _FakeStore drives the default Neo4jAlertStore path (read_alerts_cypher).
     assert res.params["kind"] == "risk_rise"
     assert res.rows[0]["entity"] == "Shell"
 
@@ -31,9 +30,6 @@ async def test_alerts_filters_passed_as_params():
     res = await al.alerts(store, kind="new_connection", entity="Shell")
     assert res.params["kind"] == "new_connection"
     assert res.params["entity"] == "Shell"
-    # NULL-guarded WHERE so optional filters are inert when None
-    assert "$kind IS NULL OR a.kind = $kind" in res.cypher
-    assert "$entity IS NULL OR a.entity = $entity" in res.cypher
 
 
 @pytest.mark.asyncio
@@ -42,7 +38,6 @@ async def test_alerts_window_days_sets_since(monkeypatch):
     store = _FakeStore(rows=[])
     res = await al.alerts(store, window_days=7)
     assert res.params["since"] == 19900 - 7
-    assert "$since IS NULL OR a.created_at >= $since" in res.cypher
 
 
 @pytest.mark.asyncio

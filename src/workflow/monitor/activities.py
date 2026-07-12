@@ -49,6 +49,97 @@ def _get_store() -> Any:
     return build_graph_store()
 
 
+# ── Backend-dispatched detection reads ────────────────────────────────────────
+# Under nebula, structured_query binds no param_map, and an edge-property WHERE
+# on an unanchored scan IndexNotFounds — so the detection reads anchor on the
+# (indexed) watched entities and aggregate in Python.
+
+
+def _read_watched_edges(store: Any, since: int, top_n: int) -> list[dict]:
+    if settings.graph.backend != "nebula":
+        return list(store.structured_query(
+            _WATCHED_EDGES_CYPHER, param_map={"since": since, "top_n": top_n}
+        ) or [])
+    from src.graph.nebula_store import _q
+
+    watched = store.structured_query(
+        "LOOKUP ON `Entity` WHERE `Entity`.watched == true "
+        "YIELD id(vertex) AS vid, `Entity`.name AS name"
+    ) or []
+    names_by_vid = {r["vid"]: r.get("name") for r in watched}
+    if not names_by_vid:
+        return []
+    rows: list[dict] = []
+    nbr_vids: set[str] = set()
+    pending: list[tuple[str, str, str, int, bool, bool]] = []  # src_vid,rel,tgt_vid,ca,a_w,b_w
+    for vid in names_by_vid:
+        for direction, is_out in (("", True), ("REVERSELY", False)):
+            edges = store.structured_query(
+                f"GO FROM {_q(vid)} OVER `RELATED` {direction} YIELD "
+                f"{'dst' if is_out else 'src'}(edge) AS other, "
+                "`RELATED`.rel_type AS rel, `RELATED`.created_at AS ca"
+            ) or []
+            for e in edges:
+                ca = int(e.get("ca") or 0)
+                if ca < since:
+                    continue
+                other = e.get("other")
+                if not other:
+                    continue
+                nbr_vids.add(other)
+                if is_out:  # vid -> other : src watched, tgt = other
+                    pending.append((vid, e.get("rel"), other, ca, True, other in names_by_vid))
+                else:  # other -> vid : tgt watched, src = other
+                    pending.append((other, e.get("rel"), vid, ca, other in names_by_vid, True))
+    # resolve neighbour names (watched names already known)
+    unknown = [v for v in nbr_vids if v not in names_by_vid]
+    if unknown:
+        fetched = store.structured_query(
+            f"FETCH PROP ON `Entity` {', '.join(_q(v) for v in unknown)} "
+            "YIELD id(vertex) AS vid, `Entity`.name AS name"
+        ) or []
+        for r in fetched:
+            names_by_vid[r["vid"]] = r.get("name")
+    for src_vid, rel, tgt_vid, ca, a_w, b_w in pending:
+        rows.append({
+            "src": names_by_vid.get(src_vid), "rel": rel,
+            "tgt": names_by_vid.get(tgt_vid), "created_at": ca,
+            "a_watched": a_w, "b_watched": b_w,
+        })
+    rows.sort(key=lambda r: int(r.get("created_at") or 0), reverse=True)
+    return rows[:top_n]
+
+
+def _read_risk_rise(store: Any, delta: float, top_n: int) -> list[dict]:
+    if settings.graph.backend != "nebula":
+        return list(store.structured_query(
+            _RISK_RISE_CYPHER, param_map={"delta": delta, "top_n": top_n}
+        ) or [])
+    watched = store.structured_query(
+        "LOOKUP ON `Entity` WHERE `Entity`.watched == true "
+        "YIELD `Entity`.name AS name, `Entity`.risk_score AS score, "
+        "`Entity`.risk_score_prev AS prev"
+    ) or []
+    rows = [
+        {"name": r.get("name"), "score": float(r.get("score") or 0.0)}
+        for r in watched
+        if float(r.get("score") or 0.0) - float(r.get("prev") or 0.0) >= delta
+    ]
+    rows.sort(key=lambda r: r["score"], reverse=True)
+    return rows[:top_n]
+
+
+def _read_burst(store: Any, params: dict) -> list[dict]:
+    if settings.graph.backend != "nebula":
+        return list(store.structured_query(
+            build_burst_cypher(watched_only=True), param_map=params
+        ) or [])
+    # watched_only burst is not ported to nebula (follow-up); burst_enabled is
+    # off by default, so the sweep simply skips this sub-check under nebula.
+    logger.debug("monitor burst detection skipped under nebula (watched_only burst unported)")
+    return []
+
+
 @activity.defn
 async def detect_alerts(p: MonitorIn) -> MonitorResult:
     """Detect new-connection and risk-rise alerts for watched entities.
@@ -67,9 +158,7 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
         async with heartbeat_every(30.0, {"stage": "monitor"}):
             # ── (a) new-connection alerts ────────────────────────────────
             edge_rows = await asyncio.to_thread(
-                store.structured_query,
-                _WATCHED_EDGES_CYPHER,
-                param_map={"since": since, "top_n": _TOP_N},
+                _read_watched_edges, store, since, _TOP_N,
             )
             for row in edge_rows:
                 if row.get("a_watched"):
@@ -95,9 +184,7 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
 
             # ── (b) risk-rise alerts ─────────────────────────────────────
             risk_rows = await asyncio.to_thread(
-                store.structured_query,
-                _RISK_RISE_CYPHER,
-                param_map={"delta": p.risk_rise_delta, "top_n": _TOP_N},
+                _read_risk_rise, store, p.risk_rise_delta, _TOP_N,
             )
             for row in risk_rows:
                 await asyncio.to_thread(
@@ -116,9 +203,8 @@ async def detect_alerts(p: MonitorIn) -> MonitorResult:
                 m = settings.monitor
                 bw = max(m.burst_baseline_windows, 1)
                 burst_rows = await asyncio.to_thread(
-                    store.structured_query,
-                    build_burst_cypher(watched_only=True),
-                    param_map={
+                    _read_burst, store,
+                    {
                         "since_recent": today - m.burst_window_days,
                         "since_baseline": today - m.burst_window_days * (bw + 1),
                         "baseline_windows": bw,

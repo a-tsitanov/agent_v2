@@ -167,10 +167,13 @@ def _write_risk_nebula(store: Any, rows: list[dict]) -> int:
 
     written = 0
     for r in rows:
+        # risk_score_prev = the OLD risk_score (nebula evaluates SET RHS against
+        # pre-update values), mirroring the neo4j `SET e.risk_score_prev =
+        # e.risk_score` before overwriting — backs the risk-rise monitor delta.
         stmt = (
             f'UPDATE VERTEX ON `Entity` "{entity_vid(r["name"])}" '
-            f"SET risk_score = {float(r['score'])}, risk_band = {_q(r['band'])}, "
-            f"risk_components = {_q(r['components'])};"
+            f"SET risk_score_prev = risk_score, risk_score = {float(r['score'])}, "
+            f"risk_band = {_q(r['band'])}, risk_components = {_q(r['components'])};"
         )
         try:
             store.structured_query(stmt)

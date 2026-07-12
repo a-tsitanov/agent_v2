@@ -122,7 +122,7 @@ def test_ensure_schema_probes_both_entity_and_community():
     assert "INSERT VERTEX `Entity` " in joined, "Entity write-readiness probe missing"
     assert "INSERT VERTEX `Community` " in joined, "Community write-readiness probe missing"
     # each successful probe removes its sentinel vertex
-    assert fake.statements.count('DELETE VERTEX "__kb_schema_probe__";') == 2
+    assert fake.statements.count('DELETE VERTEX "__kb_schema_probe__";') == 3
 
 
 def test_schema_has_community_tag_with_report_columns():
@@ -274,6 +274,6 @@ def test_ensure_schema_entity_probe_includes_wiki_columns():
         "wiki_synced_at, wiki_page_title, wikibase_qid, "
         "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision, "
         "pagerank, betweenness, eigenvector, risk_score, risk_band, risk_components, "
-        "completeness_score)"
+        "completeness_score, watched, risk_score_prev)"
         in joined
     )

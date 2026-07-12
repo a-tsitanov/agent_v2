@@ -62,7 +62,11 @@ SCHEMA_DDL: list[str] = [
     "pagerank double DEFAULT 0.0, betweenness double DEFAULT 0.0, "
     "eigenvector double DEFAULT 0.0, risk_score double DEFAULT 0.0, "
     "risk_band string DEFAULT '', risk_components string DEFAULT '', "
-    "completeness_score double DEFAULT 0.0);",
+    "completeness_score double DEFAULT 0.0, "
+    # Arc-2 monitor: watchlist flag (mark_watched, user-set) + prior risk_score
+    # for the risk-rise delta (written by the risk materialize before it
+    # overwrites risk_score).
+    "watched bool DEFAULT false, risk_score_prev double DEFAULT 0.0);",
     # valid_from/valid_to are OPAQUE ISO date strings (or '') — matching the
     # neo4j representation and what src/graph/merge.py emits. They were
     # originally (mistakenly) declared int, which crashed the write path on the
@@ -100,6 +104,13 @@ SCHEMA_DDL: list[str] = [
     "CREATE TAG IF NOT EXISTS `ERVerdict` ("
     "er_key string, same bool DEFAULT false, updated int DEFAULT 0);",
     "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256));",
+    # Arc-2 monitor findings (mirrors the neo4j `:Alert {key,...}` node). VID =
+    # alert_vid(key). score/updated_at are 0 for unscored (new_connection) alerts.
+    "CREATE TAG IF NOT EXISTS `Alert` ("
+    "alert_key string, kind string DEFAULT '', entity string DEFAULT '', "
+    "detail string DEFAULT '', created_at int DEFAULT 0, "
+    "score double DEFAULT 0.0, updated_at int DEFAULT 0);",
+    "CREATE TAG INDEX IF NOT EXISTS `alert_key_idx` ON `Alert`(alert_key(256));",
     # NOTE: `entity_wiki_dirty_idx` (on the ALTER-added `wiki_dirty` column) is
     # NOT here — an index on an ALTERed column must be created AFTER the ALTER
     # has propagated, else on an EXISTING space this CREATE runs before the
@@ -328,6 +339,15 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3h. Same for EXISTING spaces created before the Arc-2 monitor columns
+    # (watched flag + risk_score_prev for the risk-rise delta).
+    _execute_with_retry(
+        session,
+        "ALTER TAG `Entity` ADD (watched bool DEFAULT false, "
+        "risk_score_prev double DEFAULT 0.0);",
+        attempts=1, delay_s=0,
+    )
+
     # 4. Storage-side schema propagation lags meta by ~one heartbeat: a
     # `CREATE TAG`/`CREATE EDGE` — and even `DESCRIBE TAG` — succeeds BEFORE
     # an `INSERT` against that tag works ("No schema found"). So `DESCRIBE`
@@ -345,9 +365,9 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         "wiki_synced_at, wiki_page_title, wikibase_qid, "
         "event_type, event_ts_raw, event_start_epoch, event_end_epoch, event_ts_precision, "
         "pagerank, betweenness, eigenvector, risk_score, risk_band, risk_components, "
-        "completeness_score) "
+        "completeness_score, watched, risk_score_prev) "
         f'VALUES "{probe}":("", "", 0, 0, "", "", "", false, 0, "", 0, "", "", '
-        '"", "", 0, 0, "", 0.0, 0.0, 0.0, 0.0, "", "", 0.0);',
+        '"", "", 0, 0, "", 0.0, 0.0, 0.0, 0.0, "", "", 0.0, false, 0.0);',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
 
@@ -363,12 +383,28 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         "CREATE TAG INDEX IF NOT EXISTS `entity_wiki_dirty_idx` ON `Entity`(wiki_dirty);",
         attempts=3, delay_s=1.0,
     )
+    # entity_watched_idx (on the ALTER-added `watched` column) backs the Arc-2
+    # monitor's LOOKUP of watched entities — created post-probe for the same
+    # reason as entity_wiki_dirty_idx (an index on an ALTERed column).
+    _execute_with_retry(
+        session,
+        "CREATE TAG INDEX IF NOT EXISTS `entity_watched_idx` ON `Entity`(watched);",
+        attempts=3, delay_s=1.0,
+    )
 
     _probe_tag_write_ready(
         session, "Community",
         "INSERT VERTEX `Community` (id, level, member_count, members_hash, updated, "
         "report, title, summary, summarized_at) "
         f'VALUES "{probe}":("", 0, 0, "", 0, "", "", "", 0);',
+        probe, attempts=use_attempts, delay_s=use_delay_s,
+    )
+
+    _probe_tag_write_ready(
+        session, "Alert",
+        "INSERT VERTEX `Alert` (alert_key, kind, entity, detail, created_at, "
+        "score, updated_at) "
+        f'VALUES "{probe}":("", "", "", "", 0, 0.0, 0);',
         probe, attempts=use_attempts, delay_s=use_delay_s,
     )
 

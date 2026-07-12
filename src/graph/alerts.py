@@ -10,6 +10,8 @@ from typing import Any
 
 from loguru import logger
 
+from src.graph.alert_store import build_alert_store
+
 # ── Key construction ──────────────────────────────────────────────────────────
 
 _UPSERT_ALERT = """
@@ -87,21 +89,29 @@ def upsert_alert(
     no churn as the score drifts. The score is never part of the dedup key.
     """
     key = alert_key(kind, entity, detail)
-    params: dict[str, Any] = {
-        "key": key,
-        "kind": kind,
-        "entity": entity,
-        "detail": detail,
-        "created_at": created_at,
-    }
-    cypher = _UPSERT_ALERT
-    if score is not None:
-        params["score"] = score
-        cypher = _UPSERT_ALERT_SCORED
     try:
-        store.structured_query(cypher, param_map=params)
+        build_alert_store(store).upsert_alert(
+            key=key, kind=kind, entity=entity, detail=detail,
+            created_at=created_at, score=score,
+        )
     except Exception as exc:
         logger.warning("upsert_alert failed (non-fatal): {e}", e=exc)
+
+
+def read_alerts(
+    store: Any,
+    *,
+    kind: str | None = None,
+    entity: str | None = None,
+    since: int | None = None,
+    top_n: int = 50,
+) -> list[dict]:
+    """Read persisted :Alert rows (backend-dispatched); fail-soft → []."""
+    try:
+        return build_alert_store(store).read_alerts(kind, entity, since, top_n)
+    except Exception as exc:
+        logger.warning("read_alerts failed (non-fatal): {e}", e=exc)
+        return []
 
 
 def mark_watched(store: Any, names: list[str], watched: bool = True) -> None:
@@ -109,12 +119,9 @@ def mark_watched(store: Any, names: list[str], watched: bool = True) -> None:
     if not names:
         return
     try:
-        store.structured_query(
-            _MARK_WATCHED,
-            param_map={"names": names, "watched": watched},
-        )
+        build_alert_store(store).mark_watched(names, watched)
     except Exception as exc:
         logger.warning("mark_watched failed (non-fatal): {e}", e=exc)
 
 
-__all__ = ["alert_key", "mark_watched", "read_alerts_cypher", "upsert_alert"]
+__all__ = ["alert_key", "mark_watched", "read_alerts", "read_alerts_cypher", "upsert_alert"]
