@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
-from src.analytics.ids import ID_TYPES, clamp_top_n
-from src.analytics.store_query import run_rows
+from src.analytics.ids import clamp_top_n
 from src.config import settings
+from src.graph.quality_graph_ops import build_quality_graph_ops
 
 
 class _Params(BaseModel):
@@ -24,20 +25,12 @@ async def contradictions(store: Any | None, *, top_n: int = 50) -> PrimitiveResu
     top_n = clamp_top_n(top_n, default=50)
     # Flag affirmed+negated of the SAME (a,type,b) only when their validity windows
     # overlap (contemporaneous). A null window is treated as open/overlapping.
-    cypher = (
-        "MATCH (a:__Entity__)-[r1]->(b:__Entity__), (a)-[r2]->(b) "
-        "WHERE type(r1)=type(r2) AND r1.polarity='affirmed' AND r2.polarity='negated' "
-        "AND id(r1)<id(r2) "
-        "AND (r1.valid_from IS NULL OR r2.valid_to IS NULL OR "
-        "r1.valid_from <= r2.valid_to) "
-        "AND (r2.valid_from IS NULL OR r1.valid_to IS NULL OR "
-        "r2.valid_from <= r1.valid_to) "
-        "RETURN a.name AS a, type(r1) AS rel, b.name AS b, "
-        "r1.source_chunks AS affirmed_chunks, r2.source_chunks AS negated_chunks "
-        "LIMIT $top_n"
-    )
+    cypher = "quality_graph_ops.contradictions"
     params = {"top_n": top_n}
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(build_quality_graph_ops(store).contradictions, top_n)
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 class OrphansParams(_Params):
@@ -50,16 +43,12 @@ async def orphans(
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n, default=50)
     floor = settings.signals.orphan_min_degree if min_degree is None else int(min_degree)
-    cypher = (
-        "MATCH (e:__Entity__) WHERE NONE(l IN labels(e) WHERE l IN $id_types) "
-        "OPTIONAL MATCH (e)-[r]-(:__Entity__) "
-        "WITH e, count(r) AS degree WHERE degree < $min_degree "
-        "RETURN e.name AS name, degree, "
-        "[l IN labels(e) WHERE l<>'__Entity__' AND l<>'__Node__'][0] AS type "
-        "ORDER BY degree ASC LIMIT $top_n"
-    )
-    params = {"min_degree": floor, "top_n": top_n, "id_types": ID_TYPES}
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    cypher = "quality_graph_ops.orphans"
+    params = {"min_degree": floor, "top_n": top_n}
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(build_quality_graph_ops(store).orphans, floor, top_n)
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 register(
@@ -93,15 +82,14 @@ async def incomplete_entities(
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n, default=50)
     expected = settings.signals.expected_attrs.get(type, [])
-    cypher = (
-        "MATCH (e:__Entity__) WHERE $type IN labels(e) "
-        "OPTIONAL MATCH (e)-[]-(id:__Entity__) WHERE any(l IN labels(id) WHERE l IN $expected) "
-        "WITH e, collect(DISTINCT [l IN labels(id) WHERE l IN $expected][0]) AS have "
-        "RETURN e.name AS name, [x IN $expected WHERE NOT x IN have] AS missing, have "
-        "ORDER BY size([x IN $expected WHERE NOT x IN have]) DESC LIMIT $top_n"
-    )
+    cypher = "quality_graph_ops.incomplete_entities"
     params = {"type": type, "expected": expected, "top_n": top_n}
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_quality_graph_ops(store).incomplete_entities, type, expected, top_n
+    )
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 class MergeCandidatesParams(_Params):
@@ -112,14 +100,12 @@ async def merge_candidates(store: Any | None, *, top_n: int = 50) -> PrimitiveRe
     top_n = clamp_top_n(top_n, default=50)
     # Duplicate display-name groups (case/space-insensitive). ER-similarity upgrade
     # deferred to Wave 1 (P2). Identifier-keys are excluded.
-    cypher = (
-        "MATCH (e:__Entity__) WHERE NONE(l IN labels(e) WHERE l IN $id_types) "
-        "WITH toLower(trim(e.name)) AS key, count(e) AS count, collect(e.name) AS names "
-        "WHERE count > 1 "
-        "RETURN key, names, count ORDER BY count DESC LIMIT $top_n"
-    )
-    params = {"top_n": top_n, "id_types": ID_TYPES}
-    return PrimitiveResult(cypher=cypher, params=params, rows=await run_rows(store, cypher, params))
+    cypher = "quality_graph_ops.merge_candidates"
+    params = {"top_n": top_n}
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(build_quality_graph_ops(store).merge_candidates, top_n)
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
 register(
