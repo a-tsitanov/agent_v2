@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
 from src.analytics.ids import ID_TYPES, clamp_top_n
-from src.analytics.store_query import run_rows
+from src.graph.aggregations_graph_ops import build_aggregations_graph_ops
 
 
 class _Params(BaseModel):
@@ -26,14 +27,13 @@ async def count_entities(
     type: str | None = None,
     exclude_identifiers: bool = True,
 ) -> PrimitiveResult:
-    cypher = (
-        "MATCH (e:__Entity__) "
-        "WHERE ($type IS NULL OR $type IN labels(e)) "
-        "AND ($exclude_ids = false OR NONE(l IN labels(e) WHERE l IN $id_types)) "
-        "RETURN count(e) AS n"
-    )
+    cypher = "aggregations_graph_ops.count_entities"
     params = {"type": type, "exclude_ids": exclude_identifiers, "id_types": ID_TYPES}
-    rows = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).count_entities, type, exclude_identifiers
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -48,14 +48,13 @@ async def count_relationships(
     rel_type: str | None = None,
     polarity: str | None = None,
 ) -> PrimitiveResult:
-    cypher = (
-        "MATCH (:__Entity__)-[r]->(:__Entity__) "
-        "WHERE ($rel_type IS NULL OR type(r) = $rel_type) "
-        "AND ($polarity IS NULL OR r.polarity = $polarity) "
-        "RETURN count(r) AS n"
-    )
+    cypher = "aggregations_graph_ops.count_relationships"
     params = {"rel_type": rel_type, "polarity": polarity}
-    rows = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).count_relationships, rel_type, polarity
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -66,14 +65,13 @@ class DistributionByTypeParams(_Params):
 async def distribution_by_type(
     store: Any | None, *, exclude_identifiers: bool = False
 ) -> PrimitiveResult:
-    cypher = (
-        "MATCH (e:__Entity__) "
-        "WHERE ($exclude_ids = false OR NONE(l IN labels(e) WHERE l IN $id_types)) "
-        "WITH [l IN labels(e) WHERE l <> '__Entity__' AND l <> '__Node__'][0] AS type "
-        "RETURN type, count(*) AS n ORDER BY n DESC"
-    )
+    cypher = "aggregations_graph_ops.distribution_by_type"
     params = {"exclude_ids": exclude_identifiers, "id_types": ID_TYPES}
-    rows = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).distribution_by_type, exclude_identifiers
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -82,8 +80,12 @@ class _NoParams(_Params):
 
 
 async def distribution_by_relation_type(store: Any | None) -> PrimitiveResult:
-    cypher = "MATCH (:__Entity__)-[r]->(:__Entity__) RETURN type(r) AS rel, count(*) AS n ORDER BY n DESC"
-    rows = await run_rows(store, cypher, {})
+    cypher = "aggregations_graph_ops.distribution_by_relation_type"
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params={}, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).distribution_by_relation_type
+    )
     return PrimitiveResult(cypher=cypher, params={}, rows=rows)
 
 
@@ -94,12 +96,13 @@ class DistributionByPolarityParams(_Params):
 async def distribution_by_polarity(
     store: Any | None, *, rel_type: str | None = None
 ) -> PrimitiveResult:
-    cypher = (
-        "MATCH (:__Entity__)-[r]->(:__Entity__) WHERE ($rel_type IS NULL OR type(r) = $rel_type) "
-        "RETURN r.polarity AS polarity, count(*) AS n ORDER BY n DESC"
-    )
+    cypher = "aggregations_graph_ops.distribution_by_polarity"
     params = {"rel_type": rel_type}
-    rows = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).distribution_by_polarity, rel_type
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows)
 
 
@@ -117,21 +120,19 @@ async def top_entities_by_mentions(
     exclude_identifiers: bool = True,
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n)
-    cypher = (
-        "MATCH (e:__Entity__) "
-        "WHERE ($type IS NULL OR $type IN labels(e)) "
-        "AND ($exclude_ids = false OR NONE(l IN labels(e) WHERE l IN $id_types)) "
-        "AND e.mention_count IS NOT NULL "
-        "RETURN e.name AS name, e.mention_count AS mentions "
-        "ORDER BY e.mention_count DESC LIMIT $top_n"
-    )
+    cypher = "aggregations_graph_ops.top_entities_by_mentions"
     params = {
         "type": type,
         "exclude_ids": exclude_identifiers,
         "id_types": ID_TYPES,
         "top_n": top_n,
     }
-    rows = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).top_entities_by_mentions,
+        type, top_n, exclude_identifiers,
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows, truncated=len(rows) >= top_n)
 
 
@@ -144,14 +145,13 @@ async def top_entities_by_degree(
     store: Any | None, *, type: str | None = None, top_n: int = 20
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n)
-    cypher = (
-        "MATCH (e:__Entity__) WHERE ($type IS NULL OR $type IN labels(e)) "
-        "OPTIONAL MATCH (e)-[r]-(:__Entity__) WHERE (r.polarity IS NULL OR r.polarity <> 'negated') "
-        "WITH e, count(r) AS degree "
-        "RETURN e.name AS name, degree ORDER BY degree DESC LIMIT $top_n"
-    )
+    cypher = "aggregations_graph_ops.top_entities_by_degree"
     params = {"type": type, "top_n": top_n}
-    rows = await run_rows(store, cypher, params)
+    if store is None:
+        return PrimitiveResult(cypher=cypher, params=params, rows=[])
+    rows = await asyncio.to_thread(
+        build_aggregations_graph_ops(store).top_entities_by_degree, type, top_n
+    )
     return PrimitiveResult(cypher=cypher, params=params, rows=rows, truncated=len(rows) >= top_n)
 
 
