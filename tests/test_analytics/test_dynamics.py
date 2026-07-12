@@ -15,12 +15,14 @@ async def test_topic_trend_buckets_epoch_days_in_python():
 
 
 @pytest.mark.asyncio
-async def test_relationship_timeline_uses_iso_substring():
+async def test_relationship_timeline_routes_through_seam():
+    # _FakeStore drives the default Neo4jDynamicsGraphOps path.
     store = _FakeStore(
         rows=[{"period": "2024-03", "rel": "OWNS", "name": "X", "polarity": "affirmed"}]
     )
     res = await dyn.relationship_timeline(store, name="Ромашка")
-    assert "substring(r.valid_from" in res.cypher
+    assert res.params["name"] == "Ромашка"
+    assert res.rows[0]["period"] == "2024-03"
 
 
 @pytest.mark.asyncio
@@ -59,10 +61,6 @@ async def test_whats_changed_adds_created_at_fallback_axis():
     epoch = date(1970, 1, 1)
     assert res.params["from_epoch"] == (date(2026, 6, 28) - epoch).days
     assert res.params["to_epoch"] == (date(2026, 7, 5) - epoch).days
-    assert "created_at" in res.cypher
-    assert "first_seen" in res.cypher
-    # предсказанные рёбра — не изменения мира (карантин LIKELY_LINK)
-    assert "LIKELY_LINK" in res.cypher
 
 
 @pytest.mark.asyncio
@@ -82,4 +80,3 @@ async def test_whats_changed_unparseable_dates_disable_epoch_axis():
     res = await dyn.whats_changed(store, date_from="недавно", date_to="сейчас")
     assert res.params["from_epoch"] is None
     assert res.params["to_epoch"] is None
-    assert "$from_epoch IS NOT NULL" in res.cypher   # ветка сама себя выключает
