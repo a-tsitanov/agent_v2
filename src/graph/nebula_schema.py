@@ -47,9 +47,14 @@ SCHEMA_DDL: list[str] = [
     "wiki_dirty bool DEFAULT false, wiki_dirty_at int DEFAULT 0, "
     "wiki_hash string DEFAULT '', wiki_synced_at int DEFAULT 0, "
     "wiki_page_title string DEFAULT '', wikibase_qid string DEFAULT '');",
+    # valid_from/valid_to are OPAQUE ISO date strings (or '') — matching the
+    # neo4j representation and what src/graph/merge.py emits. They were
+    # originally (mistakenly) declared int, which crashed the write path on the
+    # first relation carrying a real validity window (int('2026-01-15')); an
+    # existing space is migrated int→string in ensure_schema.
     "CREATE EDGE IF NOT EXISTS `RELATED` ("
     "rel_type string DEFAULT '', polarity string DEFAULT '', "
-    "valid_from int DEFAULT 0, valid_to int DEFAULT 0, weight double DEFAULT 1.0);",
+    "valid_from string DEFAULT '', valid_to string DEFAULT '', weight double DEFAULT 1.0);",
     "CREATE EDGE IF NOT EXISTS `MENTIONS` (doc_id string DEFAULT '');",
     "CREATE EDGE IF NOT EXISTS `IN_COMMUNITY` (level int DEFAULT 0);",
     "CREATE EDGE IF NOT EXISTS `PARENT_OF` ();",
@@ -103,6 +108,40 @@ def _execute_with_retry(session: Any, stmt: str, *, attempts: int, delay_s: floa
         n=attempts,
     )
     return False
+
+
+def _migrate_related_validity_to_string(session: Any) -> None:
+    """Warn if an EXISTING space still has RELATED.valid_from as int.
+
+    valid_from/valid_to hold opaque ISO date STRINGS; the original int
+    declaration crashed the write path (int('2026-01-15')). We do NOT auto-fix
+    in place: nebula's ALTER can't change a column type, an in-place DROP+ADD of
+    the same column name races against nebula's async DROP GC (leaving the
+    column missing), and DROP-EDGE-and-recreate would destroy every existing
+    relation. Since a fresh space (SCHEMA_DDL) already creates these as string
+    and cutover re-ingests from scratch anyway, an int space simply needs to be
+    recreated. Detect-and-warn (never mutate); fail-open on any probe error.
+    """
+    from loguru import logger
+
+    try:
+        resp = session.execute("DESCRIBE EDGE `RELATED`;")
+        if not resp.is_succeeded():
+            return
+        for i in range(resp.row_size()):
+            vals = [v.cast() if hasattr(v, "cast") else str(v) for v in resp.row_values(i)]
+            field = str(vals[0]) if vals else ""
+            ftype = str(vals[1]).lower() if len(vals) > 1 else ""
+            if field == "valid_from" and "int" in ftype:
+                logger.warning(
+                    "nebula: RELATED.valid_from is int on this space, but validity "
+                    "windows are ISO strings — writes with a real valid_from will be "
+                    "dropped by the fail-open path. Recreate the space (cutover "
+                    "re-ingests) so RELATED is created with string valid_from/valid_to."
+                )
+                return
+    except Exception as exc:  # never block schema setup
+        logger.warning("nebula RELATED validity check failed (non-fatal): {e}", e=exc)
 
 
 def _probe_tag_write_ready(
@@ -201,6 +240,11 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
         attempts=1, delay_s=0,
     )
 
+    # 3b-2. Warn (never mutate) if an EXISTING space still has RELATED.valid_from
+    # as int (the original mistake — they hold ISO strings). Fresh spaces are
+    # string via SCHEMA_DDL; an int space must be recreated (cutover re-ingests).
+    _migrate_related_validity_to_string(session)
+
     # 3c. Same schema-evolution story for EXISTING spaces created before
     # `Entity` had `er_canonical_name` (entity-resolution canonical stamp).
     # Best-effort/fail-open, same as the RELATED.weight ALTER above.
@@ -286,7 +330,7 @@ def ensure_schema(session: Any, *, use_attempts: int = 30, use_delay_s: float = 
     _probe_edge_write_ready(
         session, "RELATED",
         "INSERT EDGE `RELATED` (rel_type, polarity, valid_from, valid_to, weight) "
-        f'VALUES "{probe}" -> "{probe_b}":("", "", 0, 0, 1.0);',
+        f'VALUES "{probe}" -> "{probe_b}":("", "", "", "", 1.0);',
         [f'DELETE VERTEX "{probe}" WITH EDGE;', f'DELETE VERTEX "{probe_b}" WITH EDGE;'],
         attempts=use_attempts, delay_s=use_delay_s,
     )

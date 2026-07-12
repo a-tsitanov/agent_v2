@@ -191,8 +191,10 @@ class NebulaERGraphOps:
             vf = row.get("vf")
             vt = row.get("vt")
             w = row.get("w")
+            # valid_from/valid_to are opaque ISO date strings (or '') — carry
+            # them through as strings (they were read from RELATED as strings).
             return (
-                f"({_q(rt)}, {_q(pol)}, {int(vf or 0)}, {int(vt or 0)}, "
+                f"({_q(rt)}, {_q(pol)}, {_q(vf or '')}, {_q(vt or '')}, "
                 f"{float(w if w is not None else 1.0)})"
             )
 

@@ -132,8 +132,10 @@ class NebulaGraphStore:
                 f"{_q(src)} -> {_q(tgt)}:("
                 f"{_q(rel_type)}, "
                 f"{_q(props.get('polarity', ''))}, "
-                f"{int(props.get('valid_from', 0) or 0)}, "
-                f"{int(props.get('valid_to', 0) or 0)}, "
+                # valid_from/valid_to are opaque ISO date strings (or None) —
+                # store as strings (int() here crashed on a real ISO window).
+                f"{_q(props.get('valid_from') or '')}, "
+                f"{_q(props.get('valid_to') or '')}, "
                 f"{float(props.get('weight', 1.0) or 1.0)})"
             )
 
