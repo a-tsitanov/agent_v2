@@ -144,8 +144,12 @@ class NebulaQualityGraphOps:
     def contradictions(self, top_n: int) -> list[dict]:
         # Two-MATCH detection of affirmed+negated same-(a,rel,b) with overlapping
         # validity windows. `source_chunks` is absent on nebula RELATED → chunks
-        # come back empty; `IS NULL` (open window) → `== 0`; `id(r1)<id(r2)`
-        # dropped (polarity asymmetry already prevents self/duplicate pairing).
+        # come back empty; `IS NULL` (open window) → `== 0`. The `id(r1)<id(r2)`
+        # guard is dropped: the affirmed/negated asymmetry already prevents self-
+        # and swap-pairing; with multiple affirmed+negated edges on one (a,rel,b)
+        # the affirmed×negated cross-product can emit duplicate identical rows
+        # (chunks empty), bounded by LIMIT — acceptable for this best-effort flag
+        # (post-merge ingest collapses to one edge/pair, so it rarely fires).
         stmt = (
             "MATCH (a:`Entity`)-[r1:`RELATED`]->(b:`Entity`) "
             "MATCH (a)-[r2:`RELATED`]->(b) "

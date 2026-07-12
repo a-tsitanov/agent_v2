@@ -242,14 +242,28 @@ class NebulaAggregationsGraphOps:
 
     @_nebula_fail_soft
     def distribution_by_polarity(self, rel_type: str | None) -> list[dict]:
-        from src.graph.nebula_store import _q
-
-        where = f" WHERE r.rel_type == {_q(rel_type)}" if rel_type else ""
-        stmt = (
-            f"MATCH (:`Entity`)-[r:`RELATED`]->(:`Entity`){where} "
-            "RETURN r.polarity AS polarity, count(*) AS n ORDER BY n DESC;"
+        # Unfiltered: group-by-polarity works on the anonymous-endpoint scan.
+        if not rel_type:
+            stmt = (
+                "MATCH (:`Entity`)-[r:`RELATED`]->(:`Entity`) "
+                "RETURN r.polarity AS polarity, count(*) AS n ORDER BY n DESC;"
+            )
+            return self._exec(stmt)
+        # Filtered: an edge-property WHERE on the anonymous-endpoint scan
+        # IndexNotFounds (same as count_relationships) — scan rel_type/polarity
+        # and group client-side. O(E), Tier-B index deferred.
+        rows = self._exec(
+            "MATCH (:`Entity`)-[r:`RELATED`]->(:`Entity`) "
+            "RETURN r.rel_type AS rel_type, r.polarity AS polarity;"
         )
-        return self._exec(stmt)
+        counts: dict[Any, int] = {}
+        for row in rows:
+            if row.get("rel_type") == rel_type:
+                pol = row.get("polarity")
+                counts[pol] = counts.get(pol, 0) + 1
+        out = [{"polarity": pol, "n": n} for pol, n in counts.items()]
+        out.sort(key=lambda r: r["n"], reverse=True)
+        return out
 
     @_nebula_fail_soft
     def top_entities_by_mentions(

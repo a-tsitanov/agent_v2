@@ -186,13 +186,26 @@ def test_nebula_distribution_by_relation_type_shape():
     assert "RETURN r.rel_type AS rel, count(*) AS n ORDER BY n DESC" in stmt
 
 
-def test_nebula_distribution_by_polarity_optional_rel_filter():
+def test_nebula_distribution_by_polarity_unfiltered_group_by():
     store = _NebulaRecStore()
     ago.NebulaAggregationsGraphOps(store).distribution_by_polarity(None)
-    assert "WHERE" not in store.calls[0][0]
-    store2 = _NebulaRecStore()
-    ago.NebulaAggregationsGraphOps(store2).distribution_by_polarity("OWNS")
-    assert "WHERE r.rel_type == \"OWNS\"" in store2.calls[0][0]
+    stmt = store.calls[0][0]
+    assert "WHERE" not in stmt
+    assert "RETURN r.polarity AS polarity, count(*) AS n ORDER BY n DESC" in stmt
+
+
+def test_nebula_distribution_by_polarity_filtered_counts_client_side():
+    # filtered edge-property WHERE would IndexNotFound, so scan + group in Python
+    rows = [
+        {"rel_type": "OWNS", "polarity": "affirmed"},
+        {"rel_type": "OWNS", "polarity": "affirmed"},
+        {"rel_type": "OWNS", "polarity": "negated"},
+        {"rel_type": "CONTACT", "polarity": "affirmed"},
+    ]
+    store = _NebulaRecStore(canned=[("RETURN r.rel_type AS rel_type", rows)])
+    result = ago.NebulaAggregationsGraphOps(store).distribution_by_polarity("OWNS")
+    assert result == [{"polarity": "affirmed", "n": 2}, {"polarity": "negated", "n": 1}]
+    assert "WHERE" not in store.calls[0][0]  # no edge-property WHERE
 
 
 def test_nebula_top_entities_by_mentions_orders_by_alias():
