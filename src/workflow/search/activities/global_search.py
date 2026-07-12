@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 from temporalio import activity
 
+from src.config import settings
 from src.graph.community_read import build_community_read
 from src.graph.community_vector_store import build_community_report_vector_store
 from src.workflow.contracts import (
@@ -161,6 +162,62 @@ def _cosine(a: list[float] | None, b: list[float] | None) -> float:
     return float(np.dot(va, vb) / (denom + 1e-12))
 
 
+def _attach_report_vecs_nebula(store: Any, rows: list[dict]) -> list[dict]:
+    """Attach each community's report_vec (from the Milvus store — it is NOT on
+    the nebula vertex) and DROP communities with no vector (mirrors neo4j's
+    ``WHERE c.report_vec IS NOT NULL``). Empty when the store can't fetch vectors."""
+    from src.graph.community_vector_store import build_community_report_vector_store
+
+    fetch = getattr(build_community_report_vector_store(store), "fetch_vectors", None)
+    if not callable(fetch):
+        return []
+    refs = [(str(r["community_id"]), int(r.get("level") or 0)) for r in rows]
+    vecs = fetch(refs)
+    out = []
+    for r in rows:
+        v = vecs.get((str(r["community_id"]), int(r.get("level") or 0)))
+        if v:
+            out.append({**r, "report_vec": v})
+    return out
+
+
+def _descent_root(store: Any) -> list[dict]:
+    """Level-0 communities with report_vec. neo4j reads the vec off the vertex;
+    nebula reads the tree from the graph + the vec from Milvus."""
+    if settings.graph.backend == "nebula":
+        rows = store.structured_query(
+            "MATCH (c:`Community`) WHERE c.`Community`.level == 0 "
+            "RETURN c.`Community`.id AS community_id, c.`Community`.level AS level, "
+            "c.`Community`.summary AS summary"
+        )
+        rows = [r for r in (rows or []) if isinstance(r, dict) and r.get("community_id") is not None]
+        return _attach_report_vecs_nebula(store, rows)
+    return store.structured_query(_DESCENT_ROOT_CYPHER, {})
+
+
+def _descent_children(store: Any, community_id: Any, level: Any) -> list[dict]:
+    """PARENT_OF children of one community, with report_vec (see _descent_root)."""
+    if settings.graph.backend == "nebula":
+        from src.graph.community_writeback import community_vid
+
+        vid = community_vid(str(community_id), int(level or 0))
+        edges = store.structured_query(f'GO FROM "{vid}" OVER `PARENT_OF` YIELD dst(edge) AS child')
+        child_vids = [e.get("child") for e in (edges or []) if isinstance(e, dict) and e.get("child")]
+        if not child_vids:
+            return []
+        quoted = ", ".join('"' + v + '"' for v in child_vids)
+        rows = store.structured_query(
+            f"FETCH PROP ON `Community` {quoted} YIELD "
+            "`Community`.id AS community_id, `Community`.level AS level, "
+            "`Community`.summary AS summary"
+        )
+        rows = [r for r in (rows or []) if isinstance(r, dict) and r.get("community_id") is not None]
+        return _attach_report_vecs_nebula(store, rows)
+    return store.structured_query(
+        _DESCENT_CHILDREN_CYPHER, {"community_id": community_id, "level": level},
+    )
+
+
 async def select_communities_descent(
     store: Any, query_vec: list[float], *, budget: int,
 ) -> list[CommunitySummaryRef]:
@@ -176,9 +233,7 @@ async def select_communities_descent(
     against cycles via a visited set.  Fail-open: returns ``[]`` on ANY
     store error so the caller can fall back to the lexical path."""
     try:
-        root = await asyncio.to_thread(
-            store.structured_query, _DESCENT_ROOT_CYPHER, {},
-        )
+        root = await asyncio.to_thread(_descent_root, store)
         root = [r for r in (root or []) if isinstance(r, dict)]
 
         selected: list[dict] = []     # finest relevant communities
@@ -197,9 +252,7 @@ async def select_communities_descent(
                     continue
                 visited.add(cid)
                 children = await asyncio.to_thread(
-                    store.structured_query,
-                    _DESCENT_CHILDREN_CYPHER,
-                    {"community_id": cid, "level": r.get("level")},
+                    _descent_children, store, cid, r.get("level"),
                 )
                 children = [c for c in (children or []) if isinstance(c, dict)]
                 if children:

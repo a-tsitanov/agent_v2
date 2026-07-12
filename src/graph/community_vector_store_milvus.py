@@ -71,6 +71,34 @@ class MilvusCommunityReportVectorStore:
         if data:
             self._client.upsert(collection_name=self._collection, data=data)
 
+    def fetch_vectors(self, refs: list[tuple[str, int]]) -> dict[tuple[str, int], list[float]]:
+        """Report vectors for the given ``(community_id, level)`` pairs, keyed by
+        that pair. Backs the nebula hierarchy-descent selection, which reads the
+        community tree from the graph but needs each report_vec from Milvus (the
+        vectors do not live on the nebula vertex). Missing / errored → omitted."""
+        if not refs:
+            return {}
+        self._ensure()
+        pks = [f"{cid}:{int(lvl)}"[:_PK_MAX] for cid, lvl in refs]
+        quoted = ", ".join('"' + p.replace('"', '\\"') + '"' for p in pks)
+        try:
+            rows = self._client.query(
+                collection_name=self._collection,
+                filter=f"pk in [{quoted}]",
+                output_fields=["community_id", "level", "report_vec"],
+            )
+        except Exception as exc:
+            logger.warning("community_report_vec fetch_vectors failed: {e}", e=exc)
+            return {}
+        out: dict[tuple[str, int], list[float]] = {}
+        for e in rows or []:
+            cid = e.get("community_id")
+            vec = e.get("report_vec")
+            if cid is None or not vec:
+                continue
+            out[(str(cid), int(e.get("level") or 0))] = list(vec)
+        return out
+
     def knn(self, query_vec: list[float], *, level: int, limit: int) -> list[CommunityRef]:
         self._ensure()
         try:

@@ -63,3 +63,37 @@ def test_docs_for_communities_cypher_scoped_to_level0():
     cy = documents._DOCS_FOR_COMMUNITIES_CYPHER
     assert "-[:IN_COMMUNITY]->(comm:Community {level: 0})" in cy
     assert "comm.id IN $ids" in cy
+
+
+# ── nebula doc↔community: member first_doc_id approximation ───────────
+
+
+class _FakeNebulaStore:
+    def __init__(self, canned):
+        self.calls = []
+        self._canned = list(canned)
+
+    def structured_query(self, stmt, param_map=None):
+        self.calls.append(stmt)
+        for sub, rows in self._canned:
+            if sub in stmt:
+                return rows
+        return []
+
+
+@pytest.mark.asyncio
+async def test_documents_for_communities_nebula_member_first_doc(monkeypatch):
+    import src.workflow.search.activities.documents as mod
+    from src.config import settings
+
+    monkeypatch.setattr(settings.graph, "backend", "nebula")
+    store = _FakeNebulaStore(canned=[
+        ("OVER `IN_COMMUNITY` REVERSELY", [{"ent": "e1"}, {"ent": "e2"}]),
+        ("FETCH PROP ON `Entity`", [{"doc_id": "dA"}, {"doc_id": "dB"}, {"doc_id": None}]),
+    ])
+    monkeypatch.setattr(mod, "_get_store", lambda: store)
+    res = await mod.documents_for_communities(
+        DocumentsForCommunitiesParams(community_ids=["1"]))
+    # member first_doc_ids surfaced (None dropped by the downstream de-dup)
+    assert set(res.doc_ids) == {"dA", "dB"}
+    assert "IN_COMMUNITY` REVERSELY" in store.calls[0]

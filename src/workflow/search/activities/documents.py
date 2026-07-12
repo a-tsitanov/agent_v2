@@ -32,6 +32,40 @@ RETURN DISTINCT c.doc_id AS doc_id
 """
 
 
+def _docs_for_communities_nebula(store: Any, ids: list[str]) -> list[dict]:
+    """Nebula source-doc attribution for level-0 communities. Chunks are NOT
+    nebula graph nodes, so the neo4j ``(:Chunk)-[:MENTIONS]->(entity)`` hop is
+    unavailable. APPROXIMATION: community → member entities (IN_COMMUNITY,
+    reverse) → each member's ``first_doc_id`` (the E1 first-seen doc). This is
+    coarser than the neo4j all-chunk-docs result — it captures the doc each
+    member was FIRST seen in, not every doc that mentions it — but gives real
+    provenance under nebula. Returns rows shaped like the Cypher (``{doc_id}``);
+    the caller de-dups."""
+    from src.graph.community_writeback import community_vid
+    from src.graph.nebula_store import _chunks
+
+    member_vids: list[str] = []
+    for cid in ids:
+        vid = community_vid(str(cid), 0)
+        edges = store.structured_query(
+            f'GO FROM "{vid}" OVER `IN_COMMUNITY` REVERSELY YIELD src(edge) AS ent'
+        )
+        member_vids.extend(
+            e.get("ent") for e in (edges or []) if isinstance(e, dict) and e.get("ent")
+        )
+    member_vids = list(dict.fromkeys(member_vids))
+    if not member_vids:
+        return []
+    out: list[dict] = []
+    for chunk in _chunks(member_vids, 256):
+        quoted = ", ".join('"' + v + '"' for v in chunk)
+        rows = store.structured_query(
+            f"FETCH PROP ON `Entity` {quoted} YIELD `Entity`.first_doc_id AS doc_id"
+        )
+        out.extend({"doc_id": (r or {}).get("doc_id")} for r in (rows or []))
+    return out
+
+
 def _get_store() -> Any | None:
     """Neo4j store or None when unreachable (indirected for monkeypatch)."""
     try:
@@ -55,11 +89,18 @@ async def documents_for_communities(
     if store is None:
         return DocumentsForCommunitiesResult(doc_ids=[])
     try:
-        rows = await asyncio.to_thread(
-            store.structured_query,
-            _DOCS_FOR_COMMUNITIES_CYPHER,
-            {"ids": list(params.community_ids)},
-        )
+        from src.config import settings
+
+        if settings.graph.backend == "nebula":
+            rows = await asyncio.to_thread(
+                _docs_for_communities_nebula, store, list(params.community_ids),
+            )
+        else:
+            rows = await asyncio.to_thread(
+                store.structured_query,
+                _DOCS_FOR_COMMUNITIES_CYPHER,
+                {"ids": list(params.community_ids)},
+            )
     except Exception as exc:  # fail-open
         activity.logger.warning("documents_for_communities  err=%s", exc)
         return DocumentsForCommunitiesResult(doc_ids=[])

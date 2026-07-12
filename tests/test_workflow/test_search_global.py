@@ -540,3 +540,97 @@ def test_coerce_params_accepts_dict():
     # passthrough for already-typed input
     typed = GlobalSearchParams(query="q")
     assert _coerce_global_params(typed) is typed
+
+
+# ── nebula descent: tree from graph + report_vec from Milvus ──────────
+
+
+class _FakeNebulaStore:
+    """Returns canned rows keyed by first matching substring of the nGQL."""
+
+    def __init__(self, canned):
+        self.calls: list[str] = []
+        self._canned = list(canned)
+
+    def structured_query(self, stmt, param_map=None):
+        self.calls.append(stmt)
+        for sub, rows in self._canned:
+            if sub in stmt:
+                return rows
+        return []
+
+
+class _FakeReportVecStore:
+    def __init__(self, vecs):
+        self._vecs = vecs
+
+    def fetch_vectors(self, refs):
+        return {ref: self._vecs[ref] for ref in refs if ref in self._vecs}
+
+
+class _RecFakeStore:
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls = []
+
+    def structured_query(self, cypher, param_map=None):
+        self.calls.append((cypher, param_map))
+        return self._rows
+
+
+def test_descent_root_neo4j_path_unchanged(monkeypatch):
+    monkeypatch.setattr(settings.graph, "backend", "neo4j")
+    row = {"community_id": "1", "level": 0, "summary": "s", "report_vec": [1.0]}
+    store = _RecFakeStore(rows=[row])
+    rows = gs_mod._descent_root(store)
+    assert rows == [row]
+    # neo4j path issues the verbatim descent-root cypher (no nebula MATCH)
+    assert store.calls == [(gs_mod._DESCENT_ROOT_CYPHER, {})]
+
+
+def test_descent_root_nebula_reads_tree_and_attaches_milvus_vecs(monkeypatch):
+    monkeypatch.setattr(settings.graph, "backend", "nebula")
+    store = _FakeNebulaStore(canned=[
+        ("MATCH (c:`Community`)", [
+            {"community_id": "1", "level": 0, "summary": "with-vec"},
+            {"community_id": "2", "level": 0, "summary": "no-vec"},
+        ]),
+    ])
+    report_store = _FakeReportVecStore({("1", 0): [0.5, 0.5]})
+    monkeypatch.setattr(
+        "src.graph.community_vector_store.build_community_report_vector_store",
+        lambda s: report_store,
+    )
+    rows = gs_mod._descent_root(store)
+    # only community 1 (has a Milvus vector) survives; 2 is dropped
+    assert rows == [{"community_id": "1", "level": 0, "summary": "with-vec", "report_vec": [0.5, 0.5]}]
+    assert "c.`Community`.level == 0" in store.calls[0]
+
+
+def test_descent_children_nebula_go_parent_of(monkeypatch):
+    monkeypatch.setattr(settings.graph, "backend", "nebula")
+    store = _FakeNebulaStore(canned=[
+        ("OVER `PARENT_OF`", [{"child": "childvid"}]),
+        ("FETCH PROP ON `Community`", [{"community_id": "9", "level": 1, "summary": "child"}]),
+    ])
+    report_store = _FakeReportVecStore({("9", 1): [0.1]})
+    monkeypatch.setattr(
+        "src.graph.community_vector_store.build_community_report_vector_store",
+        lambda s: report_store,
+    )
+    rows = gs_mod._descent_children(store, "1", 0)
+    assert rows == [{"community_id": "9", "level": 1, "summary": "child", "report_vec": [0.1]}]
+    assert '"childvid"' in store.calls[1]  # FETCH the GO'd child vid
+
+
+def test_attach_report_vecs_nebula_empty_when_no_fetch(monkeypatch):
+    monkeypatch.setattr(settings.graph, "backend", "nebula")
+
+    class _NoFetch:
+        pass
+
+    monkeypatch.setattr(
+        "src.graph.community_vector_store.build_community_report_vector_store",
+        lambda s: _NoFetch(),
+    )
+    assert gs_mod._attach_report_vecs_nebula(object(), [{"community_id": "1", "level": 0}]) == []
