@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.bot.pipeline import DENIED_MESSAGE, answer_question
+from src.bot.pipeline import DENIED_MESSAGE, NO_RESULT_MESSAGE, answer_question
 from src.bot.session import InMemorySessionStore, Turn
 
 
@@ -76,6 +76,24 @@ async def test_rewritten_query_is_what_search_receives():
     assert seen == ["Какие удары были по Киеву?"]
     # the ORIGINAL question is stored, not the rewrite
     assert store.load(7)[-2] == Turn(role="user", text="а что с ударами?")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", ["", "   ", "Empty Response", "empty response"])
+async def test_empty_answer_becomes_friendly_message_and_not_persisted(empty):
+    store = InMemorySessionStore(max_messages=8)
+
+    async def search(q):
+        return empty
+
+    out = await answer_question(
+        chat_id=7, user_id=5, question="про марсиан?",
+        session=store, allowed=frozenset({5}),
+        rewrite=_passthrough_rewrite(), search=search,
+    )
+    assert out == NO_RESULT_MESSAGE
+    assert "Empty Response" not in out          # never leak the internal marker
+    assert store.load(7) == []                  # no junk turn persisted
 
 
 @pytest.mark.asyncio

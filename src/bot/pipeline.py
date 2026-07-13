@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from loguru import logger
 
 from src.bot.access import is_allowed
+from src.bot.answers import NO_RESULT_MESSAGE, is_empty_answer
 from src.bot.session import Turn
 
 DENIED_MESSAGE = "Доступ запрещён. Этот бот отвечает только доверенным пользователям."
@@ -46,6 +47,11 @@ async def answer_question(
     except Exception as exc:  # fail-soft — don't crash the bot on a search error
         logger.warning("bot search failed for chat={c}: {e}", c=chat_id, e=exc)
         return _SEARCH_ERROR
+
+    if is_empty_answer(answer):
+        # No hit / empty synthesis — friendly message, and DON'T persist (a junk
+        # turn would poison later follow-up rewrites).
+        return NO_RESULT_MESSAGE
 
     # Persist the ORIGINAL question (what the user actually typed) + the answer,
     # so later rewrites see the real conversation, not the rewritten queries.

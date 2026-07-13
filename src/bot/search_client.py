@@ -7,7 +7,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 import httpx
+from loguru import logger
 
+from src.bot.answers import is_empty_answer
+
+SearchFn = Callable[[str], Awaitable[str]]
 _VALID_MODES = frozenset({"auto", "local", "global", "drift"})
 
 
@@ -30,5 +34,24 @@ def make_search(
             )
             resp.raise_for_status()
             return (resp.json() or {}).get("answer") or ""
+
+    return search
+
+
+def with_fallback(primary: SearchFn, fallback: SearchFn) -> SearchFn:
+    """Return a search that tries ``primary`` first and only falls back to
+    ``fallback`` when primary yields nothing — an empty/marker answer OR an
+    error. Keeps the common (fast) path fast; the slower fallback runs only on
+    a miss."""
+
+    async def search(query: str) -> str:
+        try:
+            answer = await primary(query)
+            if not is_empty_answer(answer):
+                return answer
+            logger.info("bot search: primary empty, falling back")
+        except Exception as exc:
+            logger.warning("bot search: primary errored, falling back: {e}", e=exc)
+        return await fallback(query)
 
     return search

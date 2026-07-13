@@ -16,7 +16,7 @@ from loguru import logger
 from src.bot.access import parse_allowed_users
 from src.bot.llm_rewrite import make_rewrite
 from src.bot.pipeline import answer_question
-from src.bot.search_client import make_search
+from src.bot.search_client import make_search, with_fallback
 from src.bot.session import InMemorySessionStore
 from src.config import settings
 
@@ -49,10 +49,19 @@ async def main() -> None:
 
     session = InMemorySessionStore(max_messages=cfg.max_messages)
     rewrite = make_rewrite()
+    api_key = _api_key()
     search = make_search(
-        api_base=cfg.api_base, api_key=_api_key(),
+        api_base=cfg.api_base, api_key=api_key,
         mode=cfg.search_mode, timeout_s=cfg.search_timeout_s,
     )
+    # Fast primary (e.g. auto→global) can return empty for niche queries; fall
+    # back to a richer mode (drift) only on a miss so the common path stays fast.
+    if cfg.fallback_mode and cfg.fallback_mode != cfg.search_mode:
+        fallback = make_search(
+            api_base=cfg.api_base, api_key=api_key,
+            mode=cfg.fallback_mode, timeout_s=cfg.search_timeout_s,
+        )
+        search = with_fallback(search, fallback)
 
     bot = Bot(token=cfg.token)
     dp = Dispatcher()
@@ -84,8 +93,8 @@ async def main() -> None:
             await message.answer(chunk)
 
     logger.info(
-        "kb-bot starting: {n} whitelisted user(s), search mode={m}, api={a}",
-        n=len(allowed), m=cfg.search_mode, a=cfg.api_base,
+        "kb-bot starting: {n} whitelisted user(s), mode={m} fallback={f}, api={a}",
+        n=len(allowed), m=cfg.search_mode, f=cfg.fallback_mode or "off", a=cfg.api_base,
     )
     await dp.start_polling(bot)
 

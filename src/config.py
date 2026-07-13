@@ -1099,12 +1099,19 @@ class BotSettings(BaseSettings):
         default="", description="X-API-Key for the search API. Empty → falls back to API_KEYS[0].",
     )
     search_mode: str = Field(
-        default="auto", description="Search mode: auto | local | global | drift.",
+        default="auto", description="Primary search mode: auto | local | global | drift.",
+    )
+    fallback_mode: str = Field(
+        default="drift",
+        description="Fallback mode when the primary returns empty/errors "
+        "(auto|local|global|drift). Empty string = no fallback.",
     )
     max_messages: int = Field(
         default=8, ge=1, description="Rolling conversation window kept per chat.",
     )
-    search_timeout_s: float = Field(default=120.0, description="Per-search HTTP timeout.")
+    search_timeout_s: float = Field(
+        default=180.0, description="Per-search HTTP timeout (fallback modes are slower).",
+    )
 
 
 class Settings(BaseSettings):

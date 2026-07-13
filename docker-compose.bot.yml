@@ -37,6 +37,7 @@ services:
       BOT_ALLOWED_USERS: ${BOT_ALLOWED_USERS:-}
       BOT_API_BASE: ${BOT_API_BASE:-http://api:8000}
       BOT_SEARCH_MODE: ${BOT_SEARCH_MODE:-auto}
+      BOT_FALLBACK_MODE: ${BOT_FALLBACK_MODE:-drift}
       BOT_MAX_MESSAGES: ${BOT_MAX_MESSAGES:-8}
       # Search API auth: the bot falls back to the first of API_KEYS.
       API_KEYS: ${API_KEYS:-changeme-key}
