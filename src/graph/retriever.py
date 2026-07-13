@@ -155,10 +155,21 @@ LIMIT $limit
 """
 
 
-def _find_by_name_ngql(name: str) -> str:
+def _find_by_name_ngql(query: str, *, limit: int) -> str:
+    """FUZZY (partial) name lookup under nebula — mirrors the neo4j full-text
+    index's OR-of-tokens behaviour ("Киев" → "Область Киева", "Ромаш" → "ООО
+    Ромашка").  Whitespace-split the input and OR a ``CONTAINS`` per token over a
+    ``MATCH`` scan (nebula has no full-text index; `LOOKUP ... ==` was exact-only,
+    which silently broke every partial-name lookup after cutover).  Returns ``""``
+    for blank input so the caller short-circuits.  Case-sensitive (nebula CONTAINS
+    has no analyzer) — a minor divergence from neo4j's lowercased full-text."""
+    tokens = [t for t in (query or "").split() if t.strip()]
+    if not tokens:
+        return ""
+    clauses = " OR ".join(f"e.`Entity`.name CONTAINS {_nebula_q(t)}" for t in tokens)
     return (
-        "LOOKUP ON `Entity` WHERE `Entity`.name == "
-        f"{_nebula_q(name)} YIELD id(vertex) AS vid, properties(vertex) AS p;"
+        f"MATCH (e:`Entity`) WHERE {clauses} "
+        f"RETURN id(e) AS vid, properties(e) AS p LIMIT {int(limit)};"
     )
 
 
@@ -433,9 +444,12 @@ class GraphRetriever:
             return RoundGraphData()
         if settings.graph.backend == "nebula":
             cap = limit if limit is not None else self._similarity_top_k
+            ngql = _find_by_name_ngql(query, limit=int(cap))
+            if not ngql:  # blank query -> nothing to look up
+                return RoundGraphData()
             try:
                 rows = await asyncio.to_thread(
-                    self._graph_store.structured_query, _find_by_name_ngql(query),
+                    self._graph_store.structured_query, ngql,
                 )
             except Exception as exc:
                 logger.warning("find_entities_by_name (nebula) failed: {e}", e=exc)

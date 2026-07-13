@@ -53,8 +53,11 @@ async def test_find_by_name_nebula_lookup(monkeypatch):
     store = _FakeStore(rows=rows)
     r = GraphRetriever.for_store(store)
     out = await r.afind_entities_by_name("Иванов", limit=5)
-    assert "LOOKUP ON `Entity`" in store.last_query
-    assert '"Иванов"' in store.last_query
+    # FUZZY partial-name match: a MATCH scan with CONTAINS-per-token (mirrors the
+    # neo4j full-text index; `LOOKUP ... ==` was exact-only and broke partials).
+    assert "MATCH (e:`Entity`)" in store.last_query
+    assert 'e.`Entity`.name CONTAINS "Иванов"' in store.last_query
+    assert "LIMIT 5" in store.last_query
     assert out.entities == [{"entity_name": "Иванов Иван",
                              "entity_type": "PERSON", "description": "инженер"}]
 
