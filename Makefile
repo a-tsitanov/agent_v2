@@ -43,7 +43,11 @@ up-prod: env-check  ## Prod: build + up the full app stack (init runs automatica
 up-prod-all: env-check  ## Prod EVERYTHING in one command: app+nebula + litellm + tg-ingest
 	@command -v ollama >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 \
 	  && echo "⚠ host ollama not reachable on :11434 — start it: OLLAMA_HOST=0.0.0.0 ollama serve" || true
-	$(PROD_ALL_COMPOSE) up -d --build --wait
+	# Build the app image FIRST as an explicit step — a bundled `up --build`
+	# has silently served stale 6-day-old app images before, so rebuild
+	# unconditionally, then bring everything up.
+	$(PROD_ALL_COMPOSE) build
+	$(PROD_ALL_COMPOSE) up -d --wait
 
 down-prod-all:  ## Stop the full prod+litellm+tg-ingest stack
 	$(PROD_ALL_COMPOSE) down
