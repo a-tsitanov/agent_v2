@@ -40,12 +40,17 @@ interactive Telethon login (phone + code) and writes the session file.
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+# How many chars of each message body to echo in the per-message "sent" log
+# (visibility into WHAT news is ingested each round). Override via TG_LOG_PREVIEW_CHARS.
+_PREVIEW_CHARS = int(os.environ.get("TG_LOG_PREVIEW_CHARS", "200"))
 
 
 def _message_to_doc(msg: Any, channel: str) -> tuple[str, str, str] | None:
@@ -271,6 +276,15 @@ async def sync_round(
                 tally["failed"] += 1
                 break  # retry from this message next round
             tally["sent"] += 1
+            # Visibility into WHAT was ingested: channel · original post time ·
+            # message preview (newlines flattened, first _PREVIEW_CHARS chars).
+            logger.info(
+                "tg_ingest sent: channel={c!r} time={ts} msg_id={mid} text={p!r}",
+                c=entry.get("title") or slug,
+                ts=getattr(msg, "date", None),
+                mid=msg.id,
+                p=" ".join(text.split())[:_PREVIEW_CHARS],
+            )
             entry["last_id"] = max(int(entry["last_id"]), msg.id)
             save()
     return tally
