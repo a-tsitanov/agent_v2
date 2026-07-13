@@ -49,6 +49,14 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
         return RerankResult(sources=[])
 
     reranker = await get_reranker(params.top_n)
+    if reranker is None:
+        # Reranker unavailable (missing torch/sentence-transformers) — degrade
+        # gracefully: return the deduped pool truncated to top_n, un-reranked.
+        activity.logger.warning(
+            "rerank_sources: reranker unavailable, returning pool without rerank "
+            "(pool=%d top_n=%d)", len(pool), params.top_n,
+        )
+        return RerankResult(sources=pool[: params.top_n])
     nodes = [serialized_to_node(s) for s in pool]
     # Cross-encoder inference is sync CPU/GPU — off the loop so it can't
     # freeze concurrent search/ingest activities in the shared process.

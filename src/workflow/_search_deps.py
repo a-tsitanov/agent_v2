@@ -208,13 +208,28 @@ async def get_reranker(top_n: int | None = None):
     enforces top_n on its side too, so a config change between calls
     still truncates correctly)."""
     async with _lock:
+        # Fail-soft: the reranker pulls sentence-transformers + torch, which are
+        # heavy and may be absent from a lean deploy image (e.g. no linux-arm64
+        # torch wheel). Rerank is OPTIONAL — on a missing dep, cache the failure
+        # (so we don't re-attempt the import every call) and return None; the
+        # rerank activity then skips reranking and returns the pool as-is.
+        if _state.get("reranker_failed"):
+            return None
         if _state["reranker"] is None:
             from src.config import settings
             from src.retrieval.reranker import build_reranker
-            _state["reranker"] = build_reranker(
-                top_n=top_n if top_n is not None
-                else settings.temporal.rerank_top_n,
-            )
+            try:
+                _state["reranker"] = build_reranker(
+                    top_n=top_n if top_n is not None
+                    else settings.temporal.rerank_top_n,
+                )
+            except Exception as exc:  # ImportError (no torch) or model-load failure
+                from loguru import logger
+                logger.warning(
+                    "reranker unavailable — search continues WITHOUT rerank: {e}", e=exc,
+                )
+                _state["reranker_failed"] = True
+                return None
     return _state["reranker"]
 
 
@@ -227,5 +242,6 @@ def reset_for_tests() -> None:
             "reranker",
         ) else _state[k]
     _state.pop("graph_retriever_attempted", None)
+    _state.pop("reranker_failed", None)
     _state.pop("_embed_model", None)
     _state.pop("_vector_index", None)

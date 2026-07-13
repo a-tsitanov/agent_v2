@@ -59,6 +59,12 @@ async def materialize_centrality(p: CentralityIn) -> StageResult:
 async def materialize_link_prediction(p: LinkPredictionIn) -> StageResult:
     """Open one GDS projection, write LIKELY_LINK edges via nodeSimilarity, drop projection."""
     try:
+        # Under nebula there is no GDS and no in-worker nodeSimilarity port, so
+        # link-prediction is a documented no-op (0 links). Return cleanly instead
+        # of running the GDS projection, which fails and surfaces a spurious
+        # "projection/GDS failed" error. (centrality + risk DO run in-worker.)
+        if settings.graph.backend == "nebula":
+            return StageResult(written=0)
         store = _get_store()
         s = settings.signals
 
