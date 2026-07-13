@@ -19,6 +19,23 @@ model_list:
       num_ctx: 16384
       think: false
 
+  # Larger tiers for the LLM-heavy read paths (analyze planner + global
+  # map-reduce synthesis): the 2B tier plans/synthesises poorly. e4b (7.5B) as
+  # SMALL/router, 12b (11.9B) as LARGE/synthesis. Both on the host ollama.
+  - model_name: gemma4:e4b-it-qat
+    litellm_params:
+      model: ollama_chat/gemma4:e4b-it-qat
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
+      think: false
+
+  - model_name: gemma4:12b-it-qat
+    litellm_params:
+      model: ollama_chat/gemma4:12b-it-qat
+      api_base: http://host.docker.internal:11434
+      num_ctx: 16384
+      think: false
+
   # Embeddings — 768-dim; MUST match MILVUS_DIM=768.
   - model_name: nomic-embed-text:latest
     litellm_params:
