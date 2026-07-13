@@ -105,13 +105,23 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
             "build_property_graph building index  chunks=%d",
             len(nodes),
         )
-        await asyncio.to_thread(
-            build_property_graph_index,
-            graph_store=graph_store,
-            embed_model=embed_model,
-            extractor=NoOpKGExtractor(),
-            nodes=nodes,
-        )
+        # The LlamaIndex PropertyGraphIndex write persists Chunk nodes + their
+        # embeddings + MENTIONS edges INTO the graph store — a neo4j-managed
+        # concern. Under nebula, chunks are NOT graph nodes (their vectors live
+        # in Milvus, written by the separate vector-half of ingest), and the
+        # bare NebulaGraphStore isn't a LlamaIndex PropertyGraphStore (no
+        # `supports_vector_queries` etc.), so this step is skipped. The real
+        # entity/relation graph write happens via the explicit upsert_* below.
+        from src.config import settings
+
+        if settings.graph.backend != "nebula":
+            await asyncio.to_thread(
+                build_property_graph_index,
+                graph_store=graph_store,
+                embed_model=embed_model,
+                extractor=NoOpKGExtractor(),
+                nodes=nodes,
+            )
         activity.heartbeat({"stage": "index_built"})
 
         # Wrap in write_with_retry: concurrent MERGE into shared hub nodes can
@@ -153,7 +163,7 @@ async def build_property_graph(merged: Merged) -> GraphBuilt:
                     ingest_epoch=today_epoch_days(),
                     doc_id=merged.kg.parsed.ctx.doc_id,
                 )
-            except Exception as exc:  # noqa: BLE001 — enrichment, not the build
+            except Exception as exc:  # enrichment, not the build
                 logger.warning("first_seen stamping skipped (non-fatal): {e}", e=exc)
             activity.heartbeat({"stage": "first_seen_stamped"})
 
