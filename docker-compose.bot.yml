@@ -1,0 +1,52 @@
+# Telegram Q&A bot as ONE extra container, layered on the production stack.
+# Extension of docker-compose.prod.yml — adds only the `bot` service and reuses
+# the prod `api` (compose-internal DNS api:8000) + litellm. Always pass BOTH:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.bot.yml up -d bot
+#
+# The bot long-polls Telegram and answers ONLY from the KB (via the search API).
+# Sessions are in-memory (single instance) — a restart clears conversation
+# context, which is fine (24h-ish window anyway).
+#
+# ── Required env ─────────────────────────────────────────────────────────
+#   BOT_TOKEN            — Telegram bot token from @BotFather
+# ── Strongly recommended ─────────────────────────────────────────────────
+#   BOT_ALLOWED_USERS    — comma-separated Telegram user ids allowed to use it.
+#                          EMPTY = the bot denies EVERYONE (fail closed).
+#                          Send /start to the bot to see your user id.
+# ── Optional (defaults shown) ────────────────────────────────────────────
+#   BOT_API_BASE         — search API base; default http://api:8000
+#   BOT_SEARCH_MODE      — auto | local | global | drift; default auto
+#   BOT_MAX_MESSAGES     — rolling context window per chat; default 8
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Fold aiogram (the `bot` extra) into THIS image only — api/worker stay slim.
+      args:
+        APP_EXTRAS: bot
+    command:
+      - python
+      - -m
+      - src.bot
+    environment:
+      # Bot identity + access
+      BOT_TOKEN: ${BOT_TOKEN:?set BOT_TOKEN from @BotFather}
+      BOT_ALLOWED_USERS: ${BOT_ALLOWED_USERS:-}
+      BOT_API_BASE: ${BOT_API_BASE:-http://api:8000}
+      BOT_SEARCH_MODE: ${BOT_SEARCH_MODE:-auto}
+      BOT_MAX_MESSAGES: ${BOT_MAX_MESSAGES:-8}
+      # Search API auth: the bot falls back to the first of API_KEYS.
+      API_KEYS: ${API_KEYS:-changeme-key}
+      API_ENV: ${API_ENV:-development}
+      # LLM for the follow-up query rewrite (build_llm → litellm).
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-change-me}
+      LITELLM_MODEL_SMALL: ${LITELLM_MODEL_SMALL:-gemma4:12b}
+      LITELLM_MODEL_LARGE: ${LITELLM_MODEL_LARGE:-gemma4:12b}
+    depends_on:
+      - api
+    stop_signal: SIGINT
+    restart: unless-stopped

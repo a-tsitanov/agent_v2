@@ -92,6 +92,10 @@ gliner = ["gliner>=0.2.13"]
 # harness (TG -> ingest), not by core runtime. Kept optional.
 tg = ["telethon>=1.36,<2"]
 
+# aiogram — Telegram Bot API framework for the Q&A bot (src/bot). Only the
+# `bot` service image needs it; api/worker stay slim.
+bot = ["aiogram>=3,<4"]
+
 dev = [
     "pytest>=8,<10",
     "pytest-asyncio>=0.24,<2",

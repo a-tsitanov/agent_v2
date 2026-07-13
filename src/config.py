@@ -1080,6 +1080,33 @@ _PREFLIGHT_PLACEHOLDER_SECRETS: frozenset[str] = frozenset(
 )
 
 
+class BotSettings(BaseSettings):
+    """Telegram Q&A bot (src/bot). Answers ONLY from the KB via the search API."""
+
+    model_config = SettingsConfigDict(env_prefix="BOT_", env_file=".env", extra="ignore")
+
+    token: str = Field(default="", description="Telegram bot token from @BotFather (BOT_TOKEN).")
+    allowed_users: str = Field(
+        default="",
+        description="Comma-separated Telegram user ids allowed to use the bot. "
+        "EMPTY = deny everyone (fail closed).",
+    )
+    api_base: str = Field(
+        default="http://api:8000",
+        description="Base URL of the search API the bot calls (compose-internal by default).",
+    )
+    api_key: str = Field(
+        default="", description="X-API-Key for the search API. Empty → falls back to API_KEYS[0].",
+    )
+    search_mode: str = Field(
+        default="auto", description="Search mode: auto | local | global | drift.",
+    )
+    max_messages: int = Field(
+        default=8, ge=1, description="Rolling conversation window kept per chat.",
+    )
+    search_timeout_s: float = Field(default=120.0, description="Per-search HTTP timeout.")
+
+
 class Settings(BaseSettings):
     """Single import surface for the rest of the codebase.
 
@@ -1181,6 +1208,10 @@ class Settings(BaseSettings):
     @cached_property
     def monitor(self) -> MonitorSettings:
         return MonitorSettings()
+
+    @cached_property
+    def bot(self) -> BotSettings:
+        return BotSettings()
 
     @staticmethod
     def preflight(s: Settings) -> list[str]:
