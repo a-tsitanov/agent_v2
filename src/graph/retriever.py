@@ -298,6 +298,8 @@ class GraphRetriever:
         many triplet-hops of neighbours are pulled around each matched
         entity (None ⇒ the retriever's default, clamped ≤
         ``GRAPH_PATH_DEPTH_MAX``)."""
+        if settings.graph.backend == "nebula":
+            return await self._aretrieve_nebula(query, path_depth)
         if self._retriever is None:
             return RoundGraphData()
         retriever = (
@@ -430,6 +432,36 @@ class GraphRetriever:
                 return RoundGraphData()
 
         return self._map_walk_rows(rows)
+
+    async def _aretrieve_nebula(
+        self, query: str, path_depth: int | None,
+    ) -> RoundGraphData:
+        """graph_search under nebula: embed the query, kNN over ``er_vec``
+        (Milvus entity vectors), then subgraph-expand each matched entity via
+        ``awalk``. There is no LlamaIndex PropertyGraphIndex retriever here.
+        Fail-soft — any error yields empty."""
+        if self._graph_store is None or not (query or "").strip():
+            return RoundGraphData()
+        try:
+            from src.graph.entity_vector_store import build_entity_vector_store
+            from src.ingestion.embeddings import build_embedding_model
+
+            vec = await build_embedding_model().aget_text_embedding(query)
+            evs = build_entity_vector_store(self._graph_store)
+            cands = await asyncio.to_thread(evs.knn, vec, self._similarity_top_k)
+            names = [c.name for c in cands if getattr(c, "name", None)]
+        except Exception as exc:  # embed / vector-store / kNN failure
+            logger.warning("aretrieve (nebula) entity kNN failed: {e}", e=exc)
+            return RoundGraphData()
+
+        hops = path_depth if path_depth is not None else 1
+        out = RoundGraphData()
+        for name in names:
+            sub = await self.awalk(name, hops=hops)
+            out.entities.extend(sub.entities)
+            out.relations.extend(sub.relations)
+        out.entities = _dedupe_entities(out.entities)
+        return out
 
     async def afind_entities_by_name(
         self, query: str, *, limit: int | None = None,

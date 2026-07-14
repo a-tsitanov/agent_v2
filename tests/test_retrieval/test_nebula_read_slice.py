@@ -112,6 +112,48 @@ async def test_awalk_nebula_applies_rel_filter(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_aretrieve_nebula_knn_then_expands(monkeypatch):
+    """graph_search under nebula: er_vec kNN picks entities, then subgraph-expand."""
+    import collections
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+
+    class _Embed:
+        async def aget_text_embedding(self, q):
+            return [0.1, 0.2, 0.3]
+
+    Cand = collections.namedtuple("Cand", "name")
+
+    class _EVS:
+        def knn(self, vec, k):
+            return [Cand(name="Герань")]
+
+    monkeypatch.setattr(
+        "src.ingestion.embeddings.build_embedding_model", lambda: _Embed(), raising=False,
+    )
+    monkeypatch.setattr(
+        "src.graph.entity_vector_store.build_entity_vector_store",
+        lambda store: _EVS(), raising=False,
+    )
+    subgraph_rows = [{
+        "entities": [
+            {"name": "Герань", "label": "Product", "description": ""},
+            {"name": "Одесса", "label": "CITY", "description": ""},
+        ],
+        "relations": [
+            {"src": "Герань", "tgt": "Одесса", "label": "HIT",
+             "polarity": "pos", "valid_from": 0, "valid_to": 0},
+        ],
+    }]
+    store = _FakeStore(subgraph_rows=subgraph_rows)
+    r = GraphRetriever.for_store(store)
+    out = await r.aretrieve("удары по Украине", path_depth=1)
+    assert {e["entity_name"] for e in out.entities} == {"Герань", "Одесса"}
+    assert [rel["label"] for rel in out.relations] == ["HIT"]
+
+
+@pytest.mark.asyncio
 async def test_awalk_nebula_fails_open(monkeypatch):
     monkeypatch.setattr(
         "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
