@@ -1,0 +1,59 @@
+# OpenClaw agent gateway as ONE extra container, layered on the production stack.
+# Extension of docker-compose.prod.yml — replaces the self-written src/bot as the
+# Telegram-facing agentic layer. OpenClaw talks to the KB's two MCP servers
+# (kb-search :9001, kb-tools :9002) over streamable-http + Bearer, runs an agentic
+# tool-use loop on the local litellm LLM, and speaks Telegram natively.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.litellm.yml \
+#     -f docker-compose.openclaw.yml up -d openclaw
+#
+# Config-home lives IN the project at ./data/openclaw (openclaw.json, auth
+# profiles, agent workspace) — survives restarts, editable/inspectable. Secrets
+# (Telegram token, API/LLM keys) come from .env, never baked into the image.
+#
+# ── First-run config (once; persists in ./data/openclaw) ─────────────────
+# After `up -d`, wire the provider + MCP servers + Telegram channel:
+#   docker compose ... exec openclaw sh -lc '
+#     openclaw providers add litellm --base-url http://litellm:4000/v1
+#     openclaw config set models.providers.litellm.apiKey "$LITELLM_API_KEY"
+#     openclaw config set agents.defaults.model litellm/gemma4:12b
+#     openclaw mcp add kb-search --url http://mcp-search:9001/mcp --transport streamable-http --header "Authorization=Bearer $API_KEY"
+#     openclaw mcp add kb-tools  --url http://mcp-tools:9002/mcp  --transport streamable-http --header "Authorization=Bearer $API_KEY"
+#     openclaw channels add --channel telegram --token "$OPENCLAW_TELEGRAM_TOKEN"
+#   '
+# Verify: `openclaw mcp probe kb-tools --json` (should list the KB tools).
+#
+# ── Required env (from .env) ─────────────────────────────────────────────
+#   BOT_TOKEN (reused as OPENCLAW_TELEGRAM_TOKEN) — Telegram bot token
+#   API_KEYS  — KB MCP Bearer (first key used)
+#   LITELLM_API_KEY — litellm proxy key
+
+services:
+  openclaw:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    environment:
+      # Telegram token — reuse the existing BOT_TOKEN from .env by default.
+      OPENCLAW_TELEGRAM_TOKEN: ${OPENCLAW_TELEGRAM_TOKEN:-${BOT_TOKEN:?set BOT_TOKEN (or OPENCLAW_TELEGRAM_TOKEN) in .env}}
+      # KB MCP Bearer = first of API_KEYS; expanded by the config/SecretRef path.
+      API_KEY: ${API_KEYS:-changeme-key}
+      # litellm proxy key (the LLM provider apiKey).
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-change-me}
+      # Non-interactive: no onboarding prompt in a detached container.
+      OPENCLAW_SKIP_ONBOARDING: "1"
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      # The gateway binds 0.0.0.0 in a container and REFUSES to start without
+      # auth — protect the Control UI/API (:18789) with a token from .env.
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-${API_KEYS:-changeme-key}}
+    volumes:
+      # Config-home IN the project — openclaw.json, auth profiles, workspace.
+      - ./data/openclaw:/home/node/.openclaw
+      # Auth-profile encryption keys live under a separate path.
+      - ./data/openclaw/secret:/home/node/.config/openclaw
+    ports:
+      # Control UI + API + /healthz /readyz.
+      - "${OPENCLAW_PORT:-18789}:18789"
+    depends_on:
+      - litellm
+      - mcp-search
+      - mcp-tools
+    restart: unless-stopped
