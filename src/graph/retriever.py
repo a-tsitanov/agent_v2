@@ -449,7 +449,8 @@ class GraphRetriever:
             vec = await build_embedding_model().aget_text_embedding(query)
             evs = build_entity_vector_store(self._graph_store)
             cands = await asyncio.to_thread(evs.knn, vec, self._similarity_top_k)
-            names = [c.name for c in cands if getattr(c, "name", None)]
+            # EntityCandidate is a TypedDict (a dict), not an attr object.
+            names = [c.get("name") for c in cands if isinstance(c, dict) and c.get("name")]
         except Exception as exc:  # embed / vector-store / kNN failure
             logger.warning("aretrieve (nebula) entity kNN failed: {e}", e=exc)
             return RoundGraphData()

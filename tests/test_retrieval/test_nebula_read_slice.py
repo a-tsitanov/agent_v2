@@ -114,7 +114,6 @@ async def test_awalk_nebula_applies_rel_filter(monkeypatch):
 @pytest.mark.asyncio
 async def test_aretrieve_nebula_knn_then_expands(monkeypatch):
     """graph_search under nebula: er_vec kNN picks entities, then subgraph-expand."""
-    import collections
     monkeypatch.setattr(
         "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
     )
@@ -123,11 +122,11 @@ async def test_aretrieve_nebula_knn_then_expands(monkeypatch):
         async def aget_text_embedding(self, q):
             return [0.1, 0.2, 0.3]
 
-    Cand = collections.namedtuple("Cand", "name")
-
     class _EVS:
         def knn(self, vec, k):
-            return [Cand(name="Герань")]
+            # EntityVectorStore.knn returns EntityCandidate = TypedDict (a dict),
+            # NOT an object with a .name attribute.
+            return [{"name": "Герань", "label": "Product"}]
 
     monkeypatch.setattr(
         "src.ingestion.embeddings.build_embedding_model", lambda: _Embed(), raising=False,
