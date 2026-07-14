@@ -38,6 +38,25 @@ def make_search(
     return search
 
 
+def make_analyze(
+    *, api_base: str, api_key: str, timeout_s: float = 180.0,
+) -> SearchFn:
+    """Build an async ``analyze(query) -> answer`` over the analytical layer
+    (POST /api/v1/analyze — plan→compute→synthesize over the graph). Same
+    ``{query}``→``{answer}`` contract as search, so it composes identically."""
+    url = f"{api_base.rstrip('/')}/api/v1/analyze"
+
+    async def analyze(query: str) -> str:
+        async with httpx.AsyncClient(timeout=timeout_s) as http:
+            resp = await http.post(
+                url, headers={"X-API-Key": api_key}, json={"query": query},
+            )
+            resp.raise_for_status()
+            return (resp.json() or {}).get("answer") or ""
+
+    return analyze
+
+
 def with_fallback(primary: SearchFn, fallback: SearchFn) -> SearchFn:
     """Return a search that tries ``primary`` first and only falls back to
     ``fallback`` when primary yields nothing — an empty/marker answer OR an

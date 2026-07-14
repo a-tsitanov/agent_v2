@@ -14,9 +14,11 @@ from aiogram.types import Message
 from loguru import logger
 
 from src.bot.access import parse_allowed_users
+from src.bot.intent import classify_intent
 from src.bot.llm_rewrite import make_rewrite
 from src.bot.pipeline import answer_question
-from src.bot.search_client import make_search, with_fallback
+from src.bot.router import make_router
+from src.bot.search_client import make_analyze, make_search, with_fallback
 from src.bot.session import InMemorySessionStore
 from src.config import settings
 
@@ -62,6 +64,12 @@ async def main() -> None:
             mode=cfg.fallback_mode, timeout_s=cfg.search_timeout_s,
         )
         search = with_fallback(search, fallback)
+    # Route analytical questions (counts/distributions/trends/contradictions) to
+    # the graph analytics layer, everything else to retrieval search.
+    analyze = make_analyze(
+        api_base=cfg.api_base, api_key=api_key, timeout_s=cfg.search_timeout_s,
+    )
+    answer_source = make_router(classify_intent, analyze, search)
 
     bot = Bot(token=cfg.token)
     dp = Dispatcher()
@@ -87,7 +95,7 @@ async def main() -> None:
             session=session,
             allowed=allowed,
             rewrite=rewrite,
-            search=search,
+            search=answer_source,
         )
         for chunk in _split(reply):
             await message.answer(chunk)
