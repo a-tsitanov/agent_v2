@@ -237,6 +237,32 @@ def test_nebula_top_entities_by_degree_adds_type_filter():
     assert "e.`Entity`.label == \"Organization\"" in stmt
 
 
+def test_canonical_label_maps_case_insensitively():
+    # kb_analyze's planner emits lowercase types ('organization'); nebula labels
+    # are canonical-case ('Organization'). CamelCase types must survive too.
+    assert ago._canonical_label("organization") == "Organization"
+    assert ago._canonical_label("eventoraction") == "EventOrAction"
+    assert ago._canonical_label("PERSON") == "Person"
+    assert ago._canonical_label("Location") == "Location"
+    assert ago._canonical_label("unknowntype") == "unknowntype"  # fallback unchanged
+
+
+def test_nebula_type_filter_canonicalizes_lowercase_type():
+    # An exact-case nGQL filter on the planner's lowercase 'organization' returns
+    # [] against 'Organization' labels — the 0b/kb_analyze-empty bug. All three
+    # type-filtered nebula methods must canonicalize the incoming type.
+    for meth, extra in [
+        ("count_entities", (True,)),
+        ("top_entities_by_degree", (10,)),
+        ("top_entities_by_mentions", (10, True)),
+    ]:
+        store = _NebulaRecStore()
+        getattr(ago.NebulaAggregationsGraphOps(store), meth)("organization", *extra)
+        stmt = store.calls[0][0]
+        assert 'e.`Entity`.label == "Organization"' in stmt, f"{meth}: {stmt}"
+        assert '"organization"' not in stmt, f"{meth} kept lowercase: {stmt}"
+
+
 def test_nebula_fail_soft_returns_empty_on_raise():
     assert ago.NebulaAggregationsGraphOps(_NebulaRaisingStore()).count_entities(None, True) == []
 

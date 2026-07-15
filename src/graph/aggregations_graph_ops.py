@@ -20,12 +20,27 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, get_args
 
 from loguru import logger
 
 from src.analytics.ids import ID_TYPES
 from src.config import settings
+from src.graph.schema import EntityType
+
+# The kb_analyze planner emits entity types in lowercase ('organization'), but
+# nebula stores canonical-case labels ('Organization') and the nGQL filter
+# compares exact case → an exact 'organization' match returns [] (kb_analyze
+# came back empty under nebula). Map any casing back to the schema's canonical
+# EntityType value; CamelCase types ('EventOrAction') survive — a plain
+# .capitalize() would mangle them.
+_CANONICAL_LABEL = {t.lower(): t for t in get_args(EntityType)}
+
+
+def _canonical_label(type_: str) -> str:
+    """Normalise a caller-supplied entity type to its canonical EntityType
+    casing; unknown types pass through unchanged."""
+    return _CANONICAL_LABEL.get((type_ or "").strip().lower(), type_)
 
 # ── aggregations Cypher (moved verbatim from
 # analytics/primitives/aggregations.py) ────────────────────────────────
@@ -188,7 +203,7 @@ class NebulaAggregationsGraphOps:
 
         clauses = []
         if type:
-            clauses.append(f"e.`Entity`.label == {_q(type)}")
+            clauses.append(f"e.`Entity`.label == {_q(_canonical_label(type))}")
         if exclude_identifiers:
             clauses.append(f"e.`Entity`.label NOT IN {_list_literal(ID_TYPES)}")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -273,7 +288,7 @@ class NebulaAggregationsGraphOps:
 
         clauses = []
         if type:
-            clauses.append(f"e.`Entity`.label == {_q(type)}")
+            clauses.append(f"e.`Entity`.label == {_q(_canonical_label(type))}")
         if exclude_identifiers:
             clauses.append(f"e.`Entity`.label NOT IN {_list_literal(ID_TYPES)}")
         clauses.append("e.`Entity`.mention_count IS NOT NULL")
@@ -296,7 +311,7 @@ class NebulaAggregationsGraphOps:
         # zero-degree entity never ranks).
         clauses = []
         if type:
-            clauses.append(f"e.`Entity`.label == {_q(type)}")
+            clauses.append(f"e.`Entity`.label == {_q(_canonical_label(type))}")
         clauses.append("(r.polarity IS NULL OR r.polarity != 'negated')")
         where = " WHERE " + " AND ".join(clauses)
         stmt = (
