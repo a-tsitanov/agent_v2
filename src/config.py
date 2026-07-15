@@ -232,7 +232,10 @@ class LiteLLMSettings(BaseSettings):
     # ``effective_base``.  Remove once all readers use the tier fields.
     llm_model: str = ""
     embedding_model: str = "text-embedding-3-small"
-    timeout_s: float = 900.0
+    # Per-request LLM timeout. 60s: a hung ollama-behind-nginx surfaces fast as a
+    # transient error (→ retry) instead of blocking a worker for minutes. Override
+    # via LITELLM_TIMEOUT_S if legitimate generations need longer.
+    timeout_s: float = 60.0
     max_retries: int = 2
     # ── extra request-body params ────────────────────────────────────
     # Backend-specific fields injected verbatim into every chat request

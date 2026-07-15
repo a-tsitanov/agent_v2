@@ -94,6 +94,34 @@ def _default_entity_types() -> list[str]:
     return list(get_args(EntityType))
 
 
+# Error-class-name / message markers that mean the LLM BACKEND transiently
+# failed (litellm→ollama-behind-nginx timeout/5xx/connection), NOT that the
+# model successfully returned nothing. Extraction must RE-RAISE these so the
+# Temporal activity retries instead of committing empty triplets for a chunk
+# that really had content.
+_TRANSIENT_ERR_NAMES = (
+    "timeout", "connection", "ratelimit", "internalservererror",
+    "serviceunavailable", "apitimeout", "apiconnection",
+)
+_TRANSIENT_MSG_MARKERS = (
+    "timeout", "timed out", "gateway", "502", "503", "504",
+    "connection", "overloaded", "temporarily unavailable",
+)
+
+
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """True for retryable LLM-backend failures (vs a genuine empty response or
+    a real bug). Checks the exception class name, an HTTP status >= 500, and
+    common transient message markers (nginx 502/503/504, timeouts)."""
+    if any(t in type(exc).__name__.lower() for t in _TRANSIENT_ERR_NAMES):
+        return True
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if isinstance(status, int) and status >= 500:
+        return True
+    msg = str(exc).lower()
+    return any(m in msg for m in _TRANSIENT_MSG_MARKERS)
+
+
 class LightRAGExtractor(TransformComponent):
     """Per-chunk extractor with optional gleaning, LightRAG-style.
 
@@ -200,10 +228,18 @@ class LightRAGExtractor(TransformComponent):
         try:
             initial_text = await self._chat(system_msg, user_msg)
         except Exception as exc:  # broad catch — LLM call can fail in many ways
+            if _is_transient_llm_error(exc):
+                # The BACKEND failed (timeout/504/…), the chunk was not empty.
+                # Re-raise so the activity retries — never commit empty triplets
+                # as if the model genuinely found nothing.
+                logger.warning(
+                    "lightrag-extract chunk={c} transient LLM error — re-raising "
+                    "for retry (not committing empty): {err}", c=chunk_id, err=exc,
+                )
+                raise
             logger.warning(
-                "lightrag-extract chunk={c} initial failed: {err}",
-                c=chunk_id,
-                err=exc,
+                "lightrag-extract chunk={c} initial failed (non-transient, "
+                "empty): {err}", c=chunk_id, err=exc,
             )
             # Preserve the contract — downstream readers expect the
             # keys to be present (possibly empty).
