@@ -148,6 +148,96 @@ async def test_event_dedup_enabled_collapses_duplicate_events():
 
 
 @pytest.mark.asyncio
+async def test_cross_channel_dedup_folds_entity_event_into_pipeline_event():
+    """п.4: an entity-channel EventOrAction (no `trigger`) that paraphrases a
+    same-chunk pipeline event folds into it; its relation is repointed."""
+    nodes = [MagicMock(node_id="a")]
+    pipe = _make_event("уничтожены три диверсанта")  # pipeline event (has trigger)
+    pipe.properties["source_chunks"] = ["c1"]
+    ent_ev = EntityNode(
+        name="Уничтожение диверсантов",
+        label="EventOrAction",
+        properties={"source_chunk_id": "c1", "description": "d"},  # no `trigger`
+    )
+    regular = _make_entity("Alice")
+
+    merged_entities = [pipe, ent_ev, regular]
+    merged_relations = [_make_relation("Уничтожение диверсантов", "Alice")]
+
+    fake_settings = MagicMock()
+    fake_settings.agent.er_enabled = False
+    fake_settings.events.extraction_enabled = True
+    fake_settings.events.cross_channel_dedup_enabled = True
+    fake_settings.events.cross_channel_dedup_threshold = 0.88
+
+    embed = MagicMock()
+
+    async def _batch(names):  # near-identical vectors → cosine ~1 → fold
+        return [[1.0, 0.02] for _ in names]
+
+    embed.aget_text_embedding_batch = _batch
+
+    patches = _base_patches(nodes, merged_entities, merged_relations, fake_settings)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patch(
+        "src.workflow.activities.merge_and_resolve.build_embedding_model",
+        return_value=embed,
+    ):
+        await merge_and_resolve(_ctx())
+
+    written = patches[0].kwargs["return_value"].write_pickle.call_args.args[2]
+    out_entities, out_relations, _ = written
+    names = {e.name for e in out_entities}
+    assert "Уничтожение диверсантов" not in names  # entity-channel dup folded away
+    assert "уничтожены три диверсанта" in names  # richer event node survives
+    assert any(
+        r.source_id == "уничтожены три диверсанта" and r.target_id == "Alice"
+        for r in out_relations
+    )  # relation repointed to the survivor
+
+
+@pytest.mark.asyncio
+async def test_cross_channel_dedup_keeps_low_similarity_entity_event():
+    """Recall guard: an entity-channel event with NO similar same-chunk pipeline
+    event survives (the event channel missed it)."""
+    nodes = [MagicMock(node_id="a")]
+    pipe = _make_event("состоялась встреча")
+    pipe.properties["source_chunks"] = ["c1"]
+    ent_ev = EntityNode(
+        name="Новые санкции",
+        label="EventOrAction",
+        properties={"source_chunk_id": "c1", "description": "d"},
+    )
+    merged_entities = [pipe, ent_ev]
+    merged_relations = []
+
+    fake_settings = MagicMock()
+    fake_settings.agent.er_enabled = False
+    fake_settings.events.extraction_enabled = True
+    fake_settings.events.cross_channel_dedup_enabled = True
+    fake_settings.events.cross_channel_dedup_threshold = 0.88
+
+    embed = MagicMock()
+
+    async def _batch(names):  # orthogonal vectors per name → cosine ~0 → keep
+        return [[1.0, 0.0] if "санкции" in n else [0.0, 1.0] for n in names]
+
+    embed.aget_text_embedding_batch = _batch
+
+    patches = _base_patches(nodes, merged_entities, merged_relations, fake_settings)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patch(
+        "src.workflow.activities.merge_and_resolve.build_embedding_model",
+        return_value=embed,
+    ):
+        await merge_and_resolve(_ctx())
+
+    written = patches[0].kwargs["return_value"].write_pickle.call_args.args[2]
+    out_entities, _out_relations, _ = written
+    names = {e.name for e in out_entities}
+    assert "Новые санкции" in names  # kept — recall preserved
+    assert "состоялась встреча" in names
+
+
+@pytest.mark.asyncio
 async def test_event_dedup_different_ts_bucket_does_not_collapse():
     """Same type+participants but different ISO-week ts_bucket → both survive.
 

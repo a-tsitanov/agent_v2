@@ -2,7 +2,70 @@ from datetime import UTC, datetime
 
 from llama_index.core.graph_stores.types import EntityNode, Relation
 
-from src.graph.event_merge import _ts_bucket, event_key, merge_events
+from src.graph.event_merge import (
+    _ts_bucket,
+    dedup_cross_channel_events,
+    event_key,
+    merge_events,
+)
+
+# ── cross-channel event dedup (п.4) ─────────────────────────────────
+
+
+def _ev_entity(name, chunk, desc="d"):
+    """Entity-channel EventOrAction: has source_chunk_id, no `trigger`."""
+    return EntityNode(name=name, label="EventOrAction",
+                      properties={"source_chunk_id": chunk, "description": desc})
+
+
+def _ev_pipeline(name, chunks, etype="incident"):
+    """Event-channel EventOrAction: carries `trigger` + structured props."""
+    return EntityNode(name=name, label="EventOrAction",
+                      properties={"source_chunks": chunks, "trigger": name,
+                                  "event_type": etype, "participants": []})
+
+
+def test_cross_channel_merges_same_chunk_high_cosine():
+    ent = _ev_entity("Уничтожение диверсантов", "c1")
+    pipe = _ev_pipeline("уничтожены три диверсанта", ["c1"])
+    emb = {"Уничтожение диверсантов": [1.0, 0.0],
+           "уничтожены три диверсанта": [0.99, 0.14]}
+    kept, alias = dedup_cross_channel_events([ent], [pipe], emb, threshold=0.86)
+    assert kept == []  # entity-channel duplicate folded into the richer event node
+    assert alias == {"Уничтожение диверсантов": "уничтожены три диверсанта"}
+
+
+def test_cross_channel_keeps_low_cosine_recall_preserving():
+    # A distinct action the event channel didn't capture must survive.
+    ent = _ev_entity("Новые меры ЦБ", "c1")
+    pipe = _ev_pipeline("состоялась встреча", ["c1"])
+    emb = {"Новые меры ЦБ": [1.0, 0.0], "состоялась встреча": [0.0, 1.0]}
+    kept, alias = dedup_cross_channel_events([ent], [pipe], emb, threshold=0.86)
+    assert [e.name for e in kept] == ["Новые меры ЦБ"]
+    assert alias == {}
+
+
+def test_cross_channel_never_merges_across_chunks():
+    # Same wording in a DIFFERENT chunk is a different context — never merge.
+    ent = _ev_entity("Уничтожение диверсантов", "cA")
+    pipe = _ev_pipeline("уничтожены три диверсанта", ["cB"])
+    emb = {"Уничтожение диверсантов": [1.0, 0.0],
+           "уничтожены три диверсанта": [1.0, 0.0]}
+    kept, alias = dedup_cross_channel_events([ent], [pipe], emb, threshold=0.86)
+    assert [e.name for e in kept] == ["Уничтожение диверсантов"]  # kept despite cos=1
+    assert alias == {}
+
+
+def test_cross_channel_picks_highest_cosine_candidate():
+    ent = _ev_entity("Встреча глав Роскосмоса и NASA", "c1")
+    p1 = _ev_pipeline("состоялась встреча", ["c1"])
+    p2 = _ev_pipeline("подписан контракт", ["c1"])
+    emb = {"Встреча глав Роскосмоса и NASA": [1.0, 0.0, 0.0],
+           "состоялась встреча": [0.95, 0.31, 0.0],
+           "подписан контракт": [0.0, 0.0, 1.0]}
+    kept, alias = dedup_cross_channel_events([ent], [p1, p2], emb, threshold=0.86)
+    assert alias == {"Встреча глав Роскосмоса и NASA": "состоялась встреча"}
+    assert kept == []
 
 
 def _epoch(y, m, d):

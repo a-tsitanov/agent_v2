@@ -21,13 +21,13 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 
-from llama_index.core.graph_stores.types import KG_NODES_KEY
+from llama_index.core.graph_stores.types import KG_NODES_KEY, Relation
 from loguru import logger
 from temporalio import activity
 
 from src.config import settings
 from src.graph.entity_resolution import ERConfig, resolve_entities
-from src.graph.event_merge import merge_events
+from src.graph.event_merge import dedup_cross_channel_events, merge_events
 from src.graph.merge import merge_kg_extraction
 from src.graph.phone_consolidation import consolidate_phone_entities
 from src.graph.store import build_graph_store
@@ -84,6 +84,18 @@ def _sample_map(m: dict[str, str]) -> dict[str, str]:
     for old, new in list(m.items())[:_HEARTBEAT_SAMPLE_CAP]:
         out[str(old)[:120]] = str(new)[:120]
     return out
+
+
+def _rewrite_endpoints(r: Relation, alias: dict[str, str]) -> Relation:
+    """Repoint a relation's name-endpoints through ``alias`` (folded entity
+    name -> surviving event name).  Returns the same object when untouched."""
+    s = alias.get(r.source_id, r.source_id)
+    t = alias.get(r.target_id, r.target_id)
+    if s == r.source_id and t == r.target_id:
+        return r
+    return Relation(
+        label=r.label, source_id=s, target_id=t, properties=dict(r.properties or {})
+    )
 
 
 @activity.defn
@@ -192,6 +204,62 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
                 "events_out": len(_held_ev_nodes),
             }
         )
+
+        # ── Cross-channel dedup (п.4, gated, dark by default) ────────────
+        # Every event-heavy chunk is double-extracted: the ENTITY channel emits
+        # a nominal EventOrAction and the EVENT channel a verbal one, for the
+        # SAME happening, under different name-VIDs → two nodes. Fold the
+        # entity-channel node into the same-chunk event node it paraphrases
+        # (embedding cosine ≥ threshold); below threshold it is kept so an
+        # event the event channel missed still survives (recall over aggression).
+        if settings.events.cross_channel_dedup_enabled and _held_ev_nodes:
+            _ent_events = [e for e in merged_entities if e.label == "EventOrAction"]
+            if _ent_events:
+                _embed = build_embedding_model()
+                _names = list(
+                    {e.name for e in _ent_events} | {e.name for e in _held_ev_nodes}
+                )
+                _batch = getattr(_embed, "aget_text_embedding_batch", None)
+                if _batch is not None:
+                    _vecs = await _batch(_names)
+                else:
+                    _vecs = await asyncio.gather(
+                        *[_embed.aget_text_embedding(n) for n in _names]
+                    )
+                _emb = dict(zip(_names, _vecs, strict=False))
+                _kept, _alias = dedup_cross_channel_events(
+                    _ent_events,
+                    _held_ev_nodes,
+                    _emb,
+                    threshold=settings.events.cross_channel_dedup_threshold,
+                )
+                if _alias:
+                    _ev_by_name = {e.name: e for e in _held_ev_nodes}
+                    for _src_name, _dst_name in _alias.items():
+                        _src = next(
+                            (e for e in _ent_events if e.name == _src_name), None
+                        )
+                        _dst = _ev_by_name.get(_dst_name)
+                        # carry the (often fuller) entity-channel description onto
+                        # the surviving event node when it has none of its own.
+                        if _src and _dst and not (_dst.properties or {}).get("description"):
+                            _dst.properties = {
+                                **(_dst.properties or {}),
+                                "description": (_src.properties or {}).get("description", ""),
+                            }
+                    _dropped = set(_alias)
+                    merged_entities = [
+                        e for e in merged_entities if e.name not in _dropped
+                    ]
+                    merged_relations = [
+                        _rewrite_endpoints(r, _alias) for r in merged_relations
+                    ]
+                    _held_ev_rels = [
+                        _rewrite_endpoints(r, _alias) for r in _held_ev_rels
+                    ]
+                activity.heartbeat(
+                    {"stage": "cross_channel_deduped", "folded": len(_alias)}
+                )
 
     er_map: dict[str, str] = {}
     if settings.agent.er_enabled:

@@ -115,4 +115,78 @@ def merge_events(
     return merged, out_rels
 
 
-__all__ = ["event_key", "merge_events"]
+# ── cross-channel event dedup (п.4) ─────────────────────────────────
+#
+# Every event-heavy chunk is double-extracted: the ENTITY channel emits a
+# nominal EventOrAction ("Уничтожение диверсантов") and the EVENT channel a
+# verbal one ("уничтожены три диверсанта"). Different phrasings → different
+# name-VIDs → two nodes for one happening that never merge. We fold the
+# entity-channel node into the nearest EVENT-channel node *in the same chunk*
+# by embedding cosine; below threshold it is kept (a real event the event
+# channel missed must survive — recall over aggression). Cross-chunk pairs
+# never merge (a different chunk is a different context).
+
+
+def _cos(a: list[float] | None, b: list[float] | None) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def dedup_cross_channel_events(
+    entity_events: list[EntityNode],
+    pipeline_events: list[EntityNode],
+    embeddings: dict[str, list[float]],
+    *,
+    threshold: float = 0.88,
+) -> tuple[list[EntityNode], dict[str, str]]:
+    """Fold entity-channel EventOrAction nodes into same-chunk event-channel
+    events by name cosine.
+
+    Parameters
+    ----------
+    entity_events:
+        Entity-channel EventOrAction nodes (label EventOrAction, no ``trigger``
+        pipeline prop); each carries ``source_chunk_id``.
+    pipeline_events:
+        Event-channel nodes (from ``events_to_graph``, carry ``source_chunks``);
+        these are the survivors (richer: event_type / participants / ts).
+    embeddings:
+        ``{node.name: vector}`` for every node in both lists.
+    threshold:
+        Minimum cosine for a merge.
+
+    Returns
+    -------
+    (kept_entity_events, alias)
+        ``kept_entity_events`` are the entity-channel nodes with no confident
+        same-chunk event match (recall-preserving).  ``alias`` maps a folded
+        entity node's ``name`` -> the surviving event node's ``name`` so the
+        caller can rewrite that node's relation endpoints.
+    """
+    kept: list[EntityNode] = []
+    alias: dict[str, str] = {}
+    for ent in entity_events:
+        ep = ent.properties or {}
+        chunk = ep.get("source_chunk_id")
+        ent_vec = embeddings.get(ent.name)
+        best_name: str | None = None
+        best_cos = threshold
+        if chunk and ent_vec:
+            for pe in pipeline_events:
+                if chunk not in ((pe.properties or {}).get("source_chunks") or []):
+                    continue
+                c = _cos(ent_vec, embeddings.get(pe.name))
+                if c >= best_cos:
+                    best_cos, best_name = c, pe.name
+        if best_name is not None:
+            alias[ent.name] = best_name
+        else:
+            kept.append(ent)
+    return kept, alias
+
+
+__all__ = ["dedup_cross_channel_events", "event_key", "merge_events"]

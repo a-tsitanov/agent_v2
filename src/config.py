@@ -834,6 +834,22 @@ class EventsSettings(BaseSettings):
         ],
         description="Закрытый список типов событий (event_type), с открытым fallback для длинного хвоста",
     )
+    cross_channel_dedup_enabled: bool = Field(
+        default=False,
+        description=(
+            "п.4: схлопывать entity-канальный EventOrAction в ближайший event-канальный "
+            "узел ТОГО ЖЕ чанка по косинусу эмбеддинга имени (устраняет двойной экстракт "
+            "события двумя каналами). Ниже порога — узел сохраняется (recall). Opt-in, "
+            "по умолчанию OFF — включать после live-валидации."
+        ),
+    )
+    cross_channel_dedup_threshold: float = Field(
+        default=0.88,
+        description=(
+            "Порог косинуса для cross-channel dedup. Калибровка на живой gemma4:12b/.31: "
+            "разные факты ≤0.833, истинные дубли ≥0.915 → 0.88 в середине зазора."
+        ),
+    )
 
 
 class SignalsSettings(BaseSettings):
