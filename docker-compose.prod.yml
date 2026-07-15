@@ -72,6 +72,12 @@ x-app-env: &app-env
   # powers volatility / burst / new-connections. Run
   # scripts/backfill_first_seen ONCE before enabling on an existing graph.
   EVENTS_FIRST_SEEN_ENABLED: ${EVENTS_FIRST_SEEN_ENABLED:-false}
+  # п.4 cross-channel event dedup: fold the entity-channel EventOrAction into
+  # the same-chunk event-channel node it paraphrases (cosine >= threshold).
+  # Dark by default; threshold live-calibrated to 0.88 (distinct facts <=0.833,
+  # true dups >=0.915 on gemma4:12b).
+  EVENTS_CROSS_CHANNEL_DEDUP_ENABLED: ${EVENTS_CROSS_CHANNEL_DEDUP_ENABLED:-false}
+  EVENTS_CROSS_CHANNEL_DEDUP_THRESHOLD: ${EVENTS_CROSS_CHANNEL_DEDUP_THRESHOLD:-0.88}
   # ── Temporal worker concurrency (per-queue slot isolation — NOT the LLM
   #    throttle; that is LLM_POOL_N.  Keep the LLM/merge queues >= LLM_POOL_N
   #    so the in-process pool stays the binding limit.  Raise for more prod
