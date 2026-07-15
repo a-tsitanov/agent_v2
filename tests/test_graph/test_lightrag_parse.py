@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from src.graph.lightrag_parse import (
+    _correct_entity_label,
     _cypher_safe_label,
+    _display_entity_name,
     _first_keyword,
     _normalize_entity_name,
     ensure_orphan_entities,
@@ -40,6 +42,33 @@ def test_normalize_ascii_titlecases() -> None:
     assert _normalize_entity_name('"UV radiation"') == "Uv Radiation"
 
 
+def test_display_name_preserves_acronyms_and_camelcase() -> None:
+    # Latin acronyms / CamelCase brands must survive verbatim in the stored
+    # DISPLAY name. The match key (_normalize_entity_name) still casefolds,
+    # so cross-chunk dedup is unaffected — only the shown name improves.
+    assert (
+        _display_entity_name("honor magic 8 RSR porsche design")
+        == "Honor Magic 8 RSR Porsche Design"
+    )
+    assert _display_entity_name("SpaceX") == "SpaceX"
+    assert _display_entity_name("iPhone 15") == "iPhone 15"
+    assert _display_entity_name("BCC") == "BCC"
+    # all-lowercase parts are still title-cased for readability
+    assert _display_entity_name("basal cell carcinoma") == "Basal Cell Carcinoma"
+    # non-ASCII preserved verbatim (unchanged from _normalize_entity_name)
+    assert _display_entity_name("Иванов Иван") == "Иванов Иван"
+    assert _display_entity_name("   ") == ""
+
+
+def test_parsed_entity_stores_acronym_preserving_name() -> None:
+    raw = _build(
+        entities=[("Honor Magic 8 RSR Porsche Design", "Product", "A phone.")],
+        relations=[],
+    )
+    res = parse_lightrag_output(raw)
+    assert res.entities[0].name == "Honor Magic 8 RSR Porsche Design"
+
+
 def test_normalize_preserves_non_ascii() -> None:
     assert _normalize_entity_name("Иванов Иван Петрович") == "Иванов Иван Петрович"
     assert _normalize_entity_name("ООО «Северные технологии»") == "ООО «Северные технологии»".strip("«»")
@@ -48,6 +77,28 @@ def test_normalize_preserves_non_ascii() -> None:
 def test_normalize_strips_whitespace() -> None:
     assert _normalize_entity_name("   ") == ""
     assert _normalize_entity_name("\tfoo bar\n") == "Foo Bar"
+
+
+def test_correct_entity_label_fixes_url_and_handle_as_email() -> None:
+    # The LLM routinely mislabels a Telegram handle / link as `Email`; only a
+    # real local@domain.tld address is an Email.
+    assert _correct_entity_label("ivan@example.com", "Email") == "Email"
+    assert _correct_entity_label("@brigada_varyag", "Email") == "Other"
+    assert _correct_entity_label("https://ali.click/in34h1e", "Email") == "Document"
+    assert _correct_entity_label("Иванов", "Email") == "Other"
+    # non-Email labels are never touched (URLs stay Document, etc.)
+    assert _correct_entity_label("https://x.com", "Document") == "Document"
+    assert _correct_entity_label("Порше", "Organization") == "Organization"
+
+
+def test_parsed_entity_relabels_handle_from_email() -> None:
+    raw = _build(
+        entities=[("@brigada_varyag", "Email", "A Telegram channel.")],
+        relations=[],
+    )
+    res = parse_lightrag_output(raw)
+    assert res.entities[0].name == "@brigada_varyag"
+    assert res.entities[0].label == "Other"
 
 
 def test_cypher_safe_label() -> None:

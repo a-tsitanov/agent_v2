@@ -14,8 +14,28 @@ from llama_index.core.graph_stores.types import (
 from llama_index.core.schema import TextNode
 
 from src.graph.lightrag_extract import LightRAGExtractor, _extraction_text
-from src.graph.lightrag_prompts import COMPLETE_DELIM, TUPLE_DELIM
+from src.graph.lightrag_prompts import (
+    COMPLETE_DELIM,
+    ENTITY_EXTRACTION_SYSTEM,
+    TUPLE_DELIM,
+)
 from src.ingestion.identifier_transform import _AUGMENT_METADATA_KEY
+
+
+def test_system_prompt_prioritizes_named_entities_and_formats() -> None:
+    """Guard the named-entity recall guidance (A/B-validated on live gemma4:12b:
+    key-entity recall 23/26 → 26/26) and ensure the whole prompt still renders
+    — a stray unescaped `{}` here would crash every ingest chunk."""
+    assert "Prioritize named entities" in ENTITY_EXTRACTION_SYSTEM
+    assert "Do not emit attribute labels as entities" in ENTITY_EXTRACTION_SYSTEM
+    rendered = ENTITY_EXTRACTION_SYSTEM.format(
+        entity_types="Person, Organization",
+        language="the source-text language",
+        examples="(none)",
+        tuple_delimiter=TUPLE_DELIM,
+        completion_delimiter=COMPLETE_DELIM,
+    )
+    assert "ACRONYMS" in rendered and TUPLE_DELIM in rendered
 
 # ── stub LLM ────────────────────────────────────────────────────────
 
@@ -76,7 +96,8 @@ async def test_single_chunk_extraction() -> None:
     ents = out[0].metadata[KG_NODES_KEY]
     rels = out[0].metadata[KG_RELATIONS_KEY]
     assert len(ents) == 2
-    assert {e.name for e in ents} == {"Basal Cell Carcinoma", "Uv Radiation"}
+    # "UV" is preserved as an acronym in the display name (was mangled to "Uv").
+    assert {e.name for e in ents} == {"Basal Cell Carcinoma", "UV Radiation"}
     assert all(isinstance(e, EntityNode) for e in ents)
     assert ents[0].properties["source_chunk_id"] == "c1"
     assert ents[0].properties["file_path"] == "med.txt"

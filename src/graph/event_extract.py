@@ -66,7 +66,12 @@ def events_to_graph(
     orphan_by_norm: dict[str, EntityNode] = {}
 
     for ev in events:
-        event_name = f"{ev.event_type}: {ev.trigger}"[:120]
+        # The trigger phrase IS the event's name; the category lives in the
+        # `event_type` property, so don't smear it into the display name
+        # ("other: провела операцию" → "провела операцию"). Fall back to the
+        # type only when there's no trigger, so the node is never unnamed.
+        trigger = (ev.trigger or "").strip()
+        event_name = (trigger or (ev.event_type or "event").strip())[:120]
         etype = (ev.event_type or "event").strip().lower()
 
         props: dict = {

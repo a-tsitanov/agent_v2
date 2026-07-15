@@ -34,16 +34,28 @@ _CYPHER_LABEL_RE = re.compile(r"[^A-Z0-9_]+")
 _LEADING_KIND_RE = re.compile(r'^[\s"]*"?(?P<kind>entity|relation|event)"?[\s"]*$', re.IGNORECASE)
 
 
+def _clean_raw_name(raw: str) -> str:
+    """Strip surrounding whitespace and quote/guillemet wrappers."""
+    return (raw or "").strip().strip('"').strip("«»").strip()
+
+
 def _normalize_entity_name(raw: str) -> str:
-    """Title-case ASCII-only names; preserve names containing
-    Cyrillic / CJK / other non-ASCII verbatim.
+    """Match-key normalisation: title-case ASCII-only names; preserve names
+    containing Cyrillic / CJK / other non-ASCII verbatim.
 
     Title-case is a *match key* concern — it makes "BCC" / "Bcc" /
-    "bcc" merge into one entity across chunks.  But applying it to
-    "Иванов И.П." would mangle Russian proper nouns, so we skip
-    casing whenever any non-ASCII character is present.
+    "bcc" collapse to one key so they merge into one entity across
+    chunks.  But applying it to "Иванов И.П." would mangle Russian
+    proper nouns, so we skip casing whenever any non-ASCII character
+    is present.
+
+    This is the DEDUP/LINKING key, not the shown name — every call site
+    (parser dedup, relation resolution, entity-resolution blocking)
+    re-applies it to ``EntityNode.name``.  The human-facing name is
+    ``_display_entity_name`` (acronym-preserving); storing that as the
+    name never fragments merge because this key is recomputed on top.
     """
-    name = (raw or "").strip().strip('"').strip("«»").strip()
+    name = _clean_raw_name(raw)
     if not name:
         return ""
     if name.isascii():
@@ -51,6 +63,48 @@ def _normalize_entity_name(raw: str) -> str:
         # punctuation like dashes and slashes.
         return " ".join(part.capitalize() for part in name.split())
     return name
+
+
+def _display_entity_name(raw: str) -> str:
+    """Human-facing entity name stored on ``EntityNode.name``.
+
+    Title-case *all-lowercase* ASCII words for readability but preserve
+    acronyms / CamelCase / mixed-case tokens verbatim — "RSR" stays
+    "RSR" (not "Rsr"), "SpaceX" stays "SpaceX" (not "Spacex"), "iPhone"
+    stays "iPhone".  Non-ASCII (Cyrillic/CJK) is preserved verbatim, as
+    in ``_normalize_entity_name``.
+
+    Only the shown name changes; the dedup/linking key stays
+    ``_normalize_entity_name`` (casefold-ish), so cross-chunk merge is
+    unaffected — plain ``str.capitalize`` used to smear acronyms and
+    Latin brand names, which is a display defect, not a merge concern.
+    """
+    name = _clean_raw_name(raw)
+    if not name or not name.isascii():
+        return name
+    return " ".join(p.capitalize() if p.islower() else p for p in name.split())
+
+
+# A real email address: local@domain.tld, no scheme, not a leading-@ handle.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _correct_entity_label(name: str, label: str) -> str:
+    """Fix the common mislabel of URLs / @-handles as ``Email``.
+
+    The extraction LLM routinely tags a Telegram handle (``@foo``) or a
+    link (``https://…``) as ``Email`` — but only a real ``local@domain.tld``
+    address is an Email.  A URL is downgraded to ``Document`` (the closest
+    taxonomy type for a linked resource); anything else non-email becomes
+    ``Other``.  Labels other than ``Email`` are never touched."""
+    if label != "Email":
+        return label
+    n = (name or "").strip()
+    if n.startswith(("http://", "https://", "www.")) or "://" in n:
+        return "Document"
+    if _EMAIL_RE.match(n) and not n.startswith("@"):
+        return "Email"
+    return "Other"
 
 
 def _cypher_safe_label(raw: str) -> str:
@@ -333,12 +387,15 @@ def _parse_entity(
     if len(fields) < 3:
         return None
     name, etype, description = fields[0], fields[1], fields[2]
-    name = _normalize_entity_name(name)
+    # Store the acronym-preserving display name; dedup/linking below and in
+    # entity-resolution recompute the match key via _normalize_entity_name.
+    name = _display_entity_name(name)
     if not name or not description.strip():
         # Skip entities without a body — LightRAG-style merge needs
         # at least one non-empty description to start with.
         return None
     label = (etype or "Other").strip() or "Other"
+    label = _correct_entity_label(name, label)
     properties: dict = {"description": description.strip()}
     if source_chunk_id:
         properties["source_chunk_id"] = source_chunk_id

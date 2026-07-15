@@ -180,6 +180,23 @@ def test_events_to_graph_builds_event_node_and_participant_edges():
     assert sum(1 for r in rels if r.label == "PARTICIPATED_IN") == 2
 
 
+def test_event_node_name_has_no_type_prefix():
+    """The event_type belongs in the `event_type` property, not smeared into
+    the display name ("other: провела операцию" → "провела операцию")."""
+    ev = _make_ev(event_type="other", trigger="провела операцию", participants=[])
+    nodes, _ = events_to_graph([ev], id_by_name={})
+    assert nodes[0].name == "провела операцию"
+    assert nodes[0].properties["event_type"] == "other"
+
+
+def test_event_node_name_falls_back_to_type_when_trigger_empty():
+    """With no trigger phrase, fall back to the event_type so the node is
+    still nameable (never an empty name)."""
+    ev = _make_ev(event_type="incident", trigger="", participants=[])
+    nodes, _ = events_to_graph([ev], id_by_name={})
+    assert nodes[0].name == "incident"
+
+
 def test_events_to_graph_participants_property_present():
     """Event node must carry a `participants` list property."""
     ev = _make_ev(participants=["A", "B", "C"])
