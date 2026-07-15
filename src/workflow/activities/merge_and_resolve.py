@@ -257,6 +257,11 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
                     _held_ev_rels = [
                         _rewrite_endpoints(r, _alias) for r in _held_ev_rels
                     ]
+                logger.info(
+                    "merge_and_resolve cross-channel dedup  entity_events={e}  "
+                    "events={v}  folded={f}",
+                    e=len(_ent_events), v=len(_held_ev_nodes), f=len(_alias),
+                )
                 activity.heartbeat(
                     {"stage": "cross_channel_deduped", "folded": len(_alias)}
                 )
