@@ -148,6 +148,56 @@ async def test_event_dedup_enabled_collapses_duplicate_events():
 
 
 @pytest.mark.asyncio
+async def test_er_stage_wrapped_in_heartbeat_every():
+    """ER can run far past the 15-min heartbeat_timeout on a dense-entity doc
+    (thousands of judge-pairs). It MUST pulse heartbeats during that call, else
+    Temporal cancels + retries it forever (the 0b938ba5 wedge). Assert the
+    resolve_entities call runs inside heartbeat_every(..., stage='resolving')."""
+    hb_calls: list = []
+
+    class _FakeHB:  # records the heartbeat_every(interval, detail) invocations
+        def __init__(self, interval, detail=None):
+            hb_calls.append(detail)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    nodes = [MagicMock(node_id="a")]
+    regular = _make_entity("Alice")
+    merged_entities = [regular]
+    merged_relations = []
+
+    fake_settings = MagicMock()
+    fake_settings.agent.er_enabled = True
+    fake_settings.events.extraction_enabled = False
+
+    patches = _base_patches(nodes, merged_entities, merged_relations, fake_settings)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patch(
+        "src.workflow.activities.merge_and_resolve.heartbeat_every", _FakeHB
+    ), patch(
+        "src.workflow.activities.merge_and_resolve.build_embedding_model",
+        return_value=MagicMock(),
+    ), patch(
+        "src.workflow.activities.merge_and_resolve.build_graph_store",
+        return_value=MagicMock(),
+    ), patch(
+        "src.graph.entity_vector_store.build_entity_vector_store",
+        return_value=MagicMock(),
+    ), patch(
+        "src.workflow.activities.merge_and_resolve.resolve_entities",
+        new=AsyncMock(return_value=(merged_entities, merged_relations, {})),
+    ):
+        await merge_and_resolve(_ctx())
+
+    assert {"stage": "resolving"} in hb_calls, (
+        f"ER not wrapped in heartbeat_every; pulses seen: {hb_calls}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cross_channel_dedup_folds_entity_event_into_pipeline_event():
     """п.4: an entity-channel EventOrAction (no `trigger`) that paraphrases a
     same-chunk pipeline event folds into it; its relation is repointed."""

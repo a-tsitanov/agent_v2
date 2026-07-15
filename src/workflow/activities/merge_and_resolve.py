@@ -282,27 +282,33 @@ async def merge_and_resolve(kg: KGExtracted) -> Merged:
         _evs = build_entity_vector_store(graph_store)
         vector_store = None if isinstance(_evs, Neo4jEntityVectorStore) else _evs
         pre_er_count = len(merged_entities)
-        merged_entities, merged_relations, er_map = await resolve_entities(
-            merged_entities,
-            merged_relations,
-            nodes,
-            llm=llm,
-            embed_model=embed_model,
-            graph_store=graph_store,
-            config=ERConfig(
-                language="Russian",
-                judge_batch=settings.agent.er_judge_batch_size,
-                name_token_min_overlap=0.1,
-                verdict_cache_enabled=settings.agent.er_verdict_cache_enabled,
-                use_native_vector_knn=settings.agent.er_use_native_vector_knn,
-                vector_knn_k=settings.agent.er_vector_knn_k,
-            ),
-            # Reuse the Neo4j handle as the persistent verdict-cache
-            # store (it exposes `structured_query`).  Cache stays
-            # inactive when `er_verdict_cache_enabled` is off.
-            er_store=graph_store,
-            vector_store=vector_store,
-        )
+        # ER on a dense-entity doc issues thousands of LLM judge-pairs and can
+        # run far past the 15-min heartbeat_timeout; resolve_entities emits no
+        # heartbeat of its own, so pulse throughout — otherwise Temporal cancels
+        # + retries it every 15 min, re-running the same explosion forever
+        # (the 0b938ba5 wedge: attempt 9/50, 2385 judge-pairs, ~4.5h stuck).
+        async with heartbeat_every(_HEARTBEAT_INTERVAL_S, {"stage": "resolving"}):
+            merged_entities, merged_relations, er_map = await resolve_entities(
+                merged_entities,
+                merged_relations,
+                nodes,
+                llm=llm,
+                embed_model=embed_model,
+                graph_store=graph_store,
+                config=ERConfig(
+                    language="Russian",
+                    judge_batch=settings.agent.er_judge_batch_size,
+                    name_token_min_overlap=0.1,
+                    verdict_cache_enabled=settings.agent.er_verdict_cache_enabled,
+                    use_native_vector_knn=settings.agent.er_use_native_vector_knn,
+                    vector_knn_k=settings.agent.er_vector_knn_k,
+                ),
+                # Reuse the Neo4j handle as the persistent verdict-cache
+                # store (it exposes `structured_query`).  Cache stays
+                # inactive when `er_verdict_cache_enabled` is off.
+                er_store=graph_store,
+                vector_store=vector_store,
+            )
         activity.heartbeat(
             {
                 "stage": "resolved",
