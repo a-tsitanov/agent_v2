@@ -59,9 +59,7 @@ class _FakeSession:
 
 
 def _store_with_session(sess):
-    s = NebulaGraphStore.__new__(NebulaGraphStore)
-    s._session = sess
-    return s
+    return NebulaGraphStore(sess)
 
 
 def test_entity_vid_is_stable_fixed_string():

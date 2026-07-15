@@ -52,8 +52,7 @@ def test_subgraph_maps_to_walk_rows_shape():
                 {"rel_type": "WORKS_AT", "polarity": "pos", "valid_from": 0, "valid_to": 0})
     rs = _ResultSet([(_Cell([ivan], "n"), _Cell([edge], "e")),
                      (_Cell([mosk], "n"), _Cell([], "e"))])
-    store = NebulaGraphStore.__new__(NebulaGraphStore)
-    store._session = _Session(rs)
+    store = NebulaGraphStore(_Session(rs))
     rows = store.subgraph("v_ivan", 2)
     assert len(rows) == 1
     ents = {e["name"] for e in rows[0]["entities"]}

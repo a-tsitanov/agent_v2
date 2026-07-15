@@ -55,6 +55,16 @@ def _q(value: Any) -> str:
 class NebulaGraphStore:
     def __init__(self, session: Any):
         self._session = session
+        # The nebula3 session/connection is NOT thread-safe: concurrent
+        # execute() on one thrift socket desyncs the protocol → the graphd
+        # returns 'Unknown client type'. This store is a shared singleton used
+        # from many worker threads (asyncio.to_thread writes + read tools), so
+        # serialize every execute() through one lock.
+        self._exec_lock = threading.Lock()
+
+    def _run(self, stmt: str) -> Any:
+        with self._exec_lock:
+            return self._session.execute(stmt)
 
     # --- writes ---------------------------------------------------------
     def upsert_nodes(self, nodes: list[Any]) -> None:
@@ -204,7 +214,7 @@ class NebulaGraphStore:
                 "NebulaGraphStore.structured_query does not bind nGQL params yet "
                 f"(Phase 2); got param_map keys: {sorted(param_map)}"
             )
-        resp = self._session.execute(query)
+        resp = self._run(query)
         if not resp.is_succeeded():
             raise RuntimeError(f"nGQL failed: {resp.error_msg()}")
         return _rows_to_dicts(resp)
@@ -219,7 +229,7 @@ class NebulaGraphStore:
             f"GET SUBGRAPH WITH PROP {int(hops)} STEPS FROM {_q(vid)} "
             f"BOTH `{edge}` YIELD VERTICES AS nodes, EDGES AS rels;"
         )
-        rs = self._session.execute(q)
+        rs = self._run(q)
         if not rs.is_succeeded():
             logger.warning("nebula subgraph failed: {e}", e=rs.error_msg())
             return [{"entities": [], "relations": []}]
@@ -263,12 +273,12 @@ class NebulaGraphStore:
         return [{"entities": entities, "relations": relations}]
 
     def _exec(self, stmt: str) -> None:
-        resp = self._session.execute(stmt)
+        resp = self._run(stmt)
         if not resp.is_succeeded():
             logger.warning("nebula write failed: {s} -> {e}", s=stmt[:80], e=resp.error_msg())
 
     def close(self) -> None:
-        with contextlib.suppress(Exception):
+        with self._exec_lock, contextlib.suppress(Exception):
             self._session.release()
 
 
