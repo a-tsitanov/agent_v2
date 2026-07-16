@@ -33,6 +33,18 @@ model_list:
       num_ctx: 16384
       think: false
 
+  # Third node (byse.tech, Ollama 0.31.1), same public model_name gemma4:12b,
+  # mapped to qwen3.5:27b. The litellm container reaches this host over TLS only
+  # after the host-side MSS-clamp fix (default route egresses wg0, MTU 1320;
+  # unclamped 1500-byte TLS packets were black-holed). think:false — qwen3 emits
+  # only reasoning tokens otherwise and returns empty content.
+  - model_name: gemma4:12b
+    litellm_params:
+      model: ollama_chat/qwen3.5:27b
+      api_base: https://ollama.byse.tech
+      num_ctx: 16384
+      think: false
+
   # Embeddings — 768-dim; MUST match MILVUS_DIM=768. Uses the ollama/ (NOT
   # ollama_chat/) transport — the chat transport can't serve /embeddings.
   - model_name: nomic-embed-text:latest
@@ -46,3 +58,17 @@ litellm_settings:
   # Pin to 0 — avoids an upstream litellm TypeError when num_retries is None at
   # root level (full explanation in docker/litellm_config.yaml).
   num_retries: 0
+
+# Cross-deployment failover for the gemma4:12b group (efko / e4b / byse).
+# On a retryable error or timeout the Router retries the request on a DIFFERENT
+# deployment in the same model_name group, and a node that fails repeatedly is
+# pulled out of rotation for cooldown_time — this absorbs efko flapping so a
+# hung/erroring backend no longer hard-fails the request (num_retries here is
+# the Router-level setting, distinct from litellm_settings.num_retries above).
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 120        # per-attempt cap: a hung backend fails over instead of
+                      # blocking; 120s stays clear of legit long extractions.
+  allowed_fails: 2    # after 2 fails a deployment is cooled down…
+  cooldown_time: 60   # …removed from rotation for 60s (heals flapping efko).
