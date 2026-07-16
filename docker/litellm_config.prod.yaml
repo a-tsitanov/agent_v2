@@ -19,6 +19,20 @@ model_list:
       num_ctx: 16384
       think: false
 
+  # Second node, load-balanced into the SAME public model_name (gemma4:12b):
+  # LiteLLM's router simple-shuffles across all entries sharing a model_name,
+  # so gemma4:12b traffic now fans out over both backends. This node runs an
+  # older Ollama (0.24.0) that can't pull/serve 12b, so it is mapped to
+  # gemma4:e4b instead — a deliberate quality-for-throughput trade-off
+  # (accepted by ops): a share of gemma4:12b requests are answered by the
+  # smaller e4b model here.
+  - model_name: gemma4:12b
+    litellm_params:
+      model: ollama_chat/gemma4:e4b
+      api_base: http://141.105.69.136:11434
+      num_ctx: 16384
+      think: false
+
   # Embeddings — 768-dim; MUST match MILVUS_DIM=768. Uses the ollama/ (NOT
   # ollama_chat/) transport — the chat transport can't serve /embeddings.
   - model_name: nomic-embed-text:latest
