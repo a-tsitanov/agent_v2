@@ -88,18 +88,41 @@ def _display_entity_name(raw: str) -> str:
 # A real email address: local@domain.tld, no scheme, not a leading-@ handle.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Countries (nominative RU + key EN/abbrev) are routinely mislabeled
+# Organization/Other by the extractor — a country is a Location (GPE). Match is
+# exact-casefold on the nominative form (the extractor tends to emit it), so no
+# over-correction of non-country orgs; declined mentions just aren't corrected.
+_COUNTRIES = frozenset(s.casefold() for s in {
+    "Россия", "РФ", "Российская Федерация", "Украина", "США", "Соединённые Штаты",
+    "Иран", "Ирак", "Китай", "КНР", "Германия", "ФРГ", "Франция", "Великобритания",
+    "Англия", "Индия", "Япония", "Турция", "Польша", "Румыния", "Казахстан",
+    "Белоруссия", "Беларусь", "Грузия", "Армения", "Азербайджан", "Сирия",
+    "Израиль", "Египет", "Бразилия", "Канада", "Италия", "Испания", "Греция",
+    "Финляндия", "Швеция", "Норвегия", "Молдова", "Литва", "Латвия", "Эстония",
+    "Венгрия", "Чехия", "Словакия", "Болгария", "Сербия", "КНДР", "Южная Корея",
+    "Вьетнам", "Афганистан", "Саудовская Аравия", "ОАЭ", "Катар", "Йемен", "Мали",
+    "Монако", "Ливия", "Судан", "Нигерия", "Пакистан", "Индонезия", "Мексика",
+    "Аргентина", "Куба", "Венесуэла", "Узбекистан", "Киргизия", "Таджикистан",
+    "Монголия", "Австралия", "Нидерланды", "Бельгия", "Австрия", "Швейцария",
+    "Португалия", "Ирландия", "Дания", "Хорватия", "Словения", "Черногория",
+    "Russia", "Ukraine", "Iran", "China", "Germany", "France", "USA", "UK",
+    "India", "Japan", "Turkey", "Poland", "Romania", "Greece", "Kazakhstan",
+})
+
 
 def _correct_entity_label(name: str, label: str) -> str:
-    """Fix the common mislabel of URLs / @-handles as ``Email``.
+    """Fix common entity-label mistakes from the extractor.
 
-    The extraction LLM routinely tags a Telegram handle (``@foo``) or a
-    link (``https://…``) as ``Email`` — but only a real ``local@domain.tld``
-    address is an Email.  A URL is downgraded to ``Document`` (the closest
-    taxonomy type for a linked resource); anything else non-email becomes
-    ``Other``.  Labels other than ``Email`` are never touched."""
+    * Countries mislabeled ``Organization``/``Other``/``Concept`` → ``Location``
+      (a country is a place, not an org — powers geo-filters/analytics).
+    * URLs / @-handles tagged ``Email`` → ``Document`` / ``Other`` (only a real
+      ``local@domain.tld`` is an Email).
+    Other labels are left untouched."""
+    n = (name or "").strip()
+    if label in ("Organization", "Other", "Concept") and n.casefold() in _COUNTRIES:
+        return "Location"
     if label != "Email":
         return label
-    n = (name or "").strip()
     if n.startswith(("http://", "https://", "www.")) or "://" in n:
         return "Document"
     if _EMAIL_RE.match(n) and not n.startswith("@"):

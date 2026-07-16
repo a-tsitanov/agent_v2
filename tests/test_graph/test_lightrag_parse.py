@@ -91,6 +91,21 @@ def test_correct_entity_label_fixes_url_and_handle_as_email() -> None:
     assert _correct_entity_label("Порше", "Organization") == "Organization"
 
 
+def test_correct_entity_label_country_to_location() -> None:
+    # Countries are routinely mislabeled Organization/Other — force Location so
+    # geo-filters/analytics work (Украина/Россия/США/Иран were all Organization).
+    for c in ["Украина", "Россия", "США", "Иран", "Германия", "Франция"]:
+        assert _correct_entity_label(c, "Organization") == "Location", c
+    assert _correct_entity_label("США", "Other") == "Location"
+    assert _correct_entity_label("Иран", "Concept") == "Location"
+    # non-country orgs are NOT touched
+    assert _correct_entity_label("Ростех", "Organization") == "Organization"
+    assert _correct_entity_label("Apple", "Organization") == "Organization"
+    # already-Location stays; a country under Person is left alone
+    assert _correct_entity_label("Украина", "Location") == "Location"
+    assert _correct_entity_label("Иран", "Person") == "Person"
+
+
 def test_parsed_entity_relabels_handle_from_email() -> None:
     raw = _build(
         entities=[("@brigada_varyag", "Email", "A Telegram channel.")],

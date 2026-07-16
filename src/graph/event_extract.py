@@ -75,6 +75,10 @@ def events_to_graph(
         etype = (ev.event_type or "event").strip().lower()
 
         props: dict = {
+            # The entity channel drops empty-description entities; give event
+            # nodes a non-empty description too (the trigger phrase) so they
+            # aren't blank and ER can embed `name: description` meaningfully.
+            "description": trigger or event_name,
             "event_type": etype if etype in taxonomy else "other",
             "trigger": ev.trigger,
             "polarity": ev.polarity,

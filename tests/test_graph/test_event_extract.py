@@ -180,6 +180,22 @@ def test_events_to_graph_builds_event_node_and_participant_edges():
     assert sum(1 for r in rels if r.label == "PARTICIPATED_IN") == 2
 
 
+def test_events_to_graph_fills_description_from_trigger():
+    """Event nodes must carry a non-empty `description` (the trigger phrase) —
+    the entity channel drops empty-description entities, but the event channel
+    used to keep events with none, leaving ~43% of EventOrAction blank and
+    weakening ER (which embeds `name: description`)."""
+    ev = _make_ev(trigger="провела операцию по установке импланта")
+    nodes, _ = events_to_graph([ev], id_by_name={"Romashka": "r", "Lutik": "l"})
+    assert nodes[0].properties["description"] == "провела операцию по установке импланта"
+
+
+def test_events_to_graph_description_falls_back_to_type_when_no_trigger():
+    ev = _make_ev(trigger="", event_type="incident", participants=[])
+    nodes, _ = events_to_graph([ev], id_by_name={})
+    assert nodes[0].properties["description"] == "incident"  # never blank
+
+
 def test_event_node_name_has_no_type_prefix():
     """The event_type belongs in the `event_type` property, not smeared into
     the display name ("other: провела операцию" → "провела операцию")."""
