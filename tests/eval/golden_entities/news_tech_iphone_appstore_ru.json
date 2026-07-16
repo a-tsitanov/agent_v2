@@ -1,0 +1,16 @@
+{
+  "name": "news_tech_iphone_appstore_ru",
+  "lang": "ru",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "Владельцы iPhone снова остались без привычных приложений. За последние годы пользователи Apple уже привыкли, что нужный сервис может в любой момент исчезнуть из App Store. Потом начинаются инструкции, смена региона и поиск обходных путей. Пользователи Android в это время просто скачивают приложение.",
+  "expected": {
+    "Organization": [
+      "Apple",
+      "App Store"
+    ],
+    "Product": [
+      "iPhone",
+      "Android"
+    ]
+  }
+}

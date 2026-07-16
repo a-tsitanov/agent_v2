@@ -26,6 +26,7 @@ EntityType = Literal[
     "Person",
     "Organization",
     "Location",
+    "Role",  # a named position/title (мэр, глава города, CEO, муфтий) — distinct from the Person holding it
     # what
     "Concept",
     "Topic",

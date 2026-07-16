@@ -1,0 +1,18 @@
+{
+  "name": "news_geo_ermolaev_gur_ru",
+  "lang": "ru",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "Украинский бизнесмен Вадим Ермолаев обвинил в совершенном на него в Монако покушении ГУР Украины, пишет французская газета Nice-Matin. Он также обратился к властям нескольких стран и международным организациям с просьбой обеспечить безопасность своей семьи.",
+  "expected": {
+    "Person": [
+      "Вадим Ермолаев"
+    ],
+    "Organization": [
+      "ГУР Украины",
+      "Nice-Matin"
+    ],
+    "Location": [
+      "Монако"
+    ]
+  }
+}

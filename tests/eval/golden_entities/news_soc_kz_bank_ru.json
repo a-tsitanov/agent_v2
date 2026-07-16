@@ -1,0 +1,14 @@
+{
+  "name": "news_soc_kz_bank_ru",
+  "lang": "ru",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "В Казахстане пенсионеры взорвали торт с петардой в отделении банка: за это мошенники обещали вернуть им деньги. Момент подрыва попал на видео. Старики смогли выжить, но получили травмы.",
+  "expected": {
+    "Location": [
+      "Казахстане"
+    ],
+    "Issue": [
+      "мошенники"
+    ]
+  }
+}

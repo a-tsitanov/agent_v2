@@ -1,0 +1,19 @@
+{
+  "name": "news_tech_spacex_ru",
+  "lang": "ru",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "SpaceX выпустила новое поколение пользовательского терминала для Starlink. Он стал на 35% компактнее и на 62% легче — вес устройства 1,1 кг. Среднее энергопотребление также уменьшилось примерно на 50%, до 35-50 Вт.\n\nПиковая скорость передачи данных — свыше 375 Мбит/с\n\nvc.ru/tech/3028452",
+  "expected": {
+    "Organization": [
+      "SpaceX"
+    ],
+    "Product": [
+      "Starlink",
+      "пользовательский терминал"
+    ],
+    "Metric": [
+      "1,1 кг",
+      "375 Мбит/с"
+    ]
+  }
+}

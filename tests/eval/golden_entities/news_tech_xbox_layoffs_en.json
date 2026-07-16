@@ -1,0 +1,16 @@
+{
+  "name": "news_tech_xbox_layoffs_en",
+  "lang": "en",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "GameDeveloper опубликовал большой материал, в котором сотрудники Xbox и Bethesda рассказали, как внутри компаний переживают недавнюю волну массовых сокращений. В id Software один из сотрудников заявил, что Microsoft «абсолютно всё равно». Источники утверждают, что Bethesda Game Studios лишилась большого количества опытных специалистов.",
+  "expected": {
+    "Organization": [
+      "GameDeveloper",
+      "Xbox",
+      "Bethesda",
+      "id Software",
+      "Microsoft",
+      "Bethesda Game Studios"
+    ]
+  }
+}

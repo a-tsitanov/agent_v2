@@ -1,0 +1,23 @@
+{
+  "name": "news_tech_honor_ru",
+  "lang": "ru",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "Новый премиальный смартфон Honor Magic 8 RSR Porsche Design, это лимитированная версия для настоящих фанатов этой марки. Корпус выполнен из нанокерамики. По техническим части у телефона всё отлично, стоит аккумулятор на 7200 мАч, oled дисплей 120 гц, процессор Snapdragon 8 Elite Gen 5 и камера на 200 мп\n\nна аliеxрrеss - https://ali.click/in34h1e?erid=2SDnjdhZ7F9",
+  "expected": {
+    "Organization": [
+      "Honor",
+      "Porsche Design"
+    ],
+    "Product": [
+      "Honor Magic 8 RSR Porsche Design",
+      "Snapdragon 8 Elite Gen 5"
+    ],
+    "Metric": [
+      "7200 мАч",
+      "200 мп"
+    ],
+    "Concept": [
+      "нанокерамика"
+    ]
+  }
+}

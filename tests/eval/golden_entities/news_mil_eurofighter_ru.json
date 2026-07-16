@@ -1,0 +1,31 @@
+{
+  "name": "news_mil_eurofighter_ru",
+  "lang": "ru",
+  "description": "DRAFT (verify). Exhaustive: named entities + roles + domain concepts.",
+  "text": "Компания Airbus Defense & Space рапортует, что первый новый истребитель Eurofighter Typhoon Tranche 4 по программе Quadriga для ВВС Германии совершил свой первый испытательный полет на предприятии Airbus в Манчинге (Германия). Общий заказ до 2030 года составляет 38 единиц. Общая сумма контракта €5,4 млрд. Новые истребители будут оснащены современной РЛС с АФАР ECRS Mk.1. Военный Осведомитель",
+  "expected": {
+    "Organization": [
+      "Airbus Defense & Space",
+      "Airbus",
+      "ВВС Германии",
+      "Военный Осведомитель"
+    ],
+    "Product": [
+      "Eurofighter Typhoon Tranche 4",
+      "ECRS Mk.1"
+    ],
+    "Location": [
+      "Манчинге",
+      "Германия"
+    ],
+    "Amount": [
+      "€5,4 млрд"
+    ],
+    "Concept": [
+      "Quadriga"
+    ],
+    "EventOrAction": [
+      "первый испытательный полет"
+    ]
+  }
+}
