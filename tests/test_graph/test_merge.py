@@ -331,3 +331,49 @@ async def test_source_chunks_deduped() -> None:
         _StubLLM(),
     )
     assert ents[0].properties["source_chunks"] == ["c1", "c2"]
+
+
+# ── event structure preservation (#3: nebula trending_events) ────────
+@pytest.mark.asyncio
+async def test_event_participated_in_label_preserved() -> None:
+    # Event PARTICIPATED_IN relations carry NO keywords; merge must keep the
+    # incoming structural label instead of collapsing it to the default.
+    ev = _ent("провёл операцию", "EventOrAction", "d")
+    person = _ent("Иван", "Person", "d")
+    rel = Relation(label="PARTICIPATED_IN", source_id=ev.id,
+                   target_id=person.id, properties={})
+    _, rels = await merge_kg_extraction([_chunk("c1", [ev, person], [rel])], _StubLLM())
+    assert len(rels) == 1
+    assert rels[0].label == "PARTICIPATED_IN"
+
+
+@pytest.mark.asyncio
+async def test_entity_relation_label_from_keywords_unchanged() -> None:
+    # Guard: entity relations (which DO carry keywords) keep their
+    # keyword-derived label — the fix must not touch this path.
+    from src.graph.lightrag_parse import _cypher_safe_label
+
+    a = _ent("A", "Organization", "d")
+    b = _ent("B", "Person", "d")
+    rel = _rel(a, b, label="OWNS", desc="d", keywords="ownership")
+    _, rels = await merge_kg_extraction([_chunk("c1", [a, b], [rel])], _StubLLM())
+    assert rels[0].label == _cypher_safe_label("ownership")
+
+
+@pytest.mark.asyncio
+async def test_event_node_props_preserved() -> None:
+    # Event-specific node props (event_type / trigger / polarity / participants)
+    # must survive the merge, not be stripped to the 4 generic fields.
+    ev = EntityNode(
+        name="провёл операцию", label="EventOrAction",
+        properties={
+            "description": "d", "event_type": "military",
+            "trigger": "провёл операцию", "polarity": "affirmed",
+            "participants": ["Иван", "Пётр"],
+        },
+    )
+    ents, _ = await merge_kg_extraction([_chunk("c1", [ev], [])], _StubLLM())
+    merged = next(e for e in ents if e.name == "провёл операцию")
+    assert merged.properties.get("event_type") == "military"
+    assert merged.properties.get("trigger") == "провёл операцию"
+    assert merged.properties.get("participants") == ["Иван", "Пётр"]

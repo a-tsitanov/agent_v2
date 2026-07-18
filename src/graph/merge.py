@@ -54,6 +54,16 @@ from src.retrieval._common import strip_thinking
 # ── intermediate aggregation shapes ─────────────────────────────────
 
 
+# Event-specific EntityNode props (from event_extract.events_to_graph) that the
+# generic entity merge would otherwise strip. Preserved so nebula stores them and
+# event/trending analytics can read them. `participants` is list-valued (unioned);
+# the rest are first-non-empty-wins scalars. `description` is handled separately.
+_EVENT_PROP_KEYS = (
+    "event_type", "event_type_raw", "trigger", "polarity", "participants",
+    "event_ts_raw", "event_start_epoch", "event_end_epoch", "event_ts_precision",
+)
+
+
 @dataclass
 class _EntityAgg:
     """Bucket of per-chunk extractions for one (normalised) entity name."""
@@ -64,6 +74,7 @@ class _EntityAgg:
     source_chunks: list[str] = field(default_factory=list)
     file_paths: set[str] = field(default_factory=set)
     raw_ids: list[str] = field(default_factory=list)  # original per-chunk EntityNode ids
+    event_props: dict = field(default_factory=dict)   # preserved event-node props
 
 
 @dataclass
@@ -78,6 +89,7 @@ class _RelationAgg:
     polarity_votes: Counter = field(default_factory=Counter)
     valid_froms: list[str] = field(default_factory=list)
     valid_tos: list[str] = field(default_factory=list)
+    label_votes: Counter = field(default_factory=Counter)  # incoming rel.label
 
 
 def _id_to_name(nodes: list[BaseNode]) -> dict[str, str]:
@@ -211,6 +223,19 @@ async def merge_kg_extraction(
                 agg.file_paths.add(fp)
             agg.raw_ids.append(ent.id)
             name_to_chunk_ids.setdefault(key, []).append(chunk_id)
+            # Preserve event-specific props (else the generic materialiser
+            # below drops event_type/trigger/participants/… — the #3 leak).
+            if (ent.label or "") == "EventOrAction":
+                ep = ent.properties or {}
+                for pk in _EVENT_PROP_KEYS:
+                    val = ep.get(pk)
+                    if pk == "participants":
+                        seen = agg.event_props.setdefault("participants", [])
+                        for p in (val or []):
+                            if p and p not in seen:
+                                seen.append(p)
+                    elif val not in (None, "", []) and pk not in agg.event_props:
+                        agg.event_props[pk] = val
 
     # ── 2. Aggregate relations by normalised (src, tgt) ──────────────
     rel_agg: dict[tuple[str, str], _RelationAgg] = {}
@@ -244,6 +269,7 @@ async def merge_kg_extraction(
                 agg.valid_froms.append(props["valid_from"])
             if props.get("valid_to"):
                 agg.valid_tos.append(props["valid_to"])
+            agg.label_votes[(getattr(rel, "label", "") or "").strip()] += 1
             agg.source_chunks.append(chunk_id)
 
     # ── 3. Materialise merged EntityNode list ────────────────────────
@@ -262,15 +288,19 @@ async def merge_kg_extraction(
             summary_max_tokens=summary_max_tokens,
             language=language,
         )
+        props = {
+            "description": merged_desc,
+            "source_chunks": list(dict.fromkeys(agg.source_chunks)),
+            "file_paths": sorted(agg.file_paths),
+            "mention_count": len(agg.source_chunks),
+        }
+        # Carry preserved event props (event_type/trigger/participants/…) — #3.
+        for pk, pv in agg.event_props.items():
+            props.setdefault(pk, pv)
         ent = EntityNode(
             name=agg.display_name,
             label=majority_type,
-            properties={
-                "description": merged_desc,
-                "source_chunks": list(dict.fromkeys(agg.source_chunks)),
-                "file_paths": sorted(agg.file_paths),
-                "mention_count": len(agg.source_chunks),
-            },
+            properties=props,
         )
         merged_entities.append(ent)
         name_to_merged_id[key] = ent.id
@@ -293,7 +323,14 @@ async def merge_kg_extraction(
             language=language,
         )
         primary_keyword = sorted(agg.keywords)[0] if agg.keywords else ""
-        label = _cypher_safe_label(primary_keyword)
+        if agg.keywords:
+            # Entity relations carry keywords → keyword-derived label (unchanged).
+            label = _cypher_safe_label(primary_keyword)
+        else:
+            # No keywords (e.g. event PARTICIPATED_IN) — keep the incoming
+            # structural label instead of collapsing it to the default RELATED.
+            incoming = next((lbl for lbl, _ in agg.label_votes.most_common() if lbl), "")
+            label = _cypher_safe_label(incoming)
         tags = sorted(agg.keywords)
         distinct_chunks = list(dict.fromkeys(agg.source_chunks))
         mention_count = len(distinct_chunks)
