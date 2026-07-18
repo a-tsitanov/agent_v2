@@ -89,3 +89,21 @@ async def test_plan_query_trend_fallback_when_llm_plans_nothing():
     names = [s.primitive for s in plan.steps]
     assert "top_entities_by_mentions" in names
     assert "fallback" in plan.reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_plan_query_trend_fallback_overrides_broken_picks():
+    # The other trending failure mode: the LLM DOES plan steps, but picks the
+    # trend primitives that are empty under nebula (topic_trend / trending_events).
+    # Trend intent must still guarantee the backend-working primitives run.
+    llm = _StubLLM(reply=(
+        '{"route":"catalog","steps":['
+        '{"primitive":"topic_trend","params":{"topic":"all","granularity":"day"}},'
+        '{"primitive":"trending_events","params":{"window_days":1}}'
+        '],"reason":"trends"}'
+    ))
+    plan = await planner.plan_query("что сегодня в трендах", llm, max_steps=3)
+    names = [s.primitive for s in plan.steps]
+    assert "top_entities_by_mentions" in names
+    assert "new_events" in names
+    assert "fallback" in plan.reason.lower()

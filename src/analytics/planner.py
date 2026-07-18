@@ -130,10 +130,14 @@ async def plan_query(question: str, llm: Any, *, max_steps: int) -> AnalysisPlan
         logger.warning("plan_query LLM failed: {e}", e=exc)
         return AnalysisPlan(steps=[], reason="llm error — could not plan")
     plan = parse_plan(raw, max_steps=max_steps)
-    # Safety net: the LLM planned nothing but the ask is a trend/popularity
-    # question → route to backend-working primitives deterministically.
-    if not plan.steps:
-        fb = trend_fallback_steps(question)
-        if fb:
-            return AnalysisPlan(route="catalog", steps=fb[:max_steps], reason="trend-intent fallback")
+    # Trend/popularity intent → guarantee the backend-working primitives run.
+    # Covers BOTH failure modes: the LLM plans nothing ("no matching primitive")
+    # AND the LLM picks the trend primitives that are empty under nebula
+    # (topic_trend / trending_events). Prepend the working ones, keep any
+    # distinct LLM steps behind them, cap at max_steps.
+    fb = trend_fallback_steps(question)
+    if fb:
+        seen = {s.primitive for s in fb}
+        steps = fb + [s for s in plan.steps if s.primitive not in seen]
+        return AnalysisPlan(route="catalog", steps=steps[:max_steps], reason="trend-intent fallback")
     return plan
