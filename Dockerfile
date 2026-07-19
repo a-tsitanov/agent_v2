@@ -57,6 +57,18 @@ WORKDIR /app
 # /app to the same path keeps it valid (same python base in both stages).
 COPY --from=builder /app /app
 
+# Pre-cache the BGE cross-encoder reranker into the image's HF cache when
+# built with the `rerank` extra (the search worker). Done in the RUNTIME
+# stage on purpose — the builder's ~/.cache is NOT copied over, and this
+# avoids a ~1.1 GB first-request download (there is no persistent HF volume,
+# so a first-use download would be re-fetched on every restart). Downloaded
+# directly via huggingface_hub so the build never imports src.config (no .env
+# at build time). No-op for the slim api/ingest images (APP_EXTRAS unset).
+ARG APP_EXTRAS=
+RUN if echo "$APP_EXTRAS" | grep -qw rerank; then \
+        python -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-reranker-v2-m3')"; \
+    fi
+
 EXPOSE 8000
 # Default role: API.  worker / mcp services override `command` in compose.
 CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

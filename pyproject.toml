@@ -88,6 +88,14 @@ postal = ["postal>=1.1,<2"]
 # extractor modes. The default ``lightrag`` path never imports it.
 gliner = ["gliner>=0.2.13"]
 
+# BGE cross-encoder reranker deps — sentence-transformers + torch. Heavy, so
+# kept optional (api/ingest stay slim); the SEARCH worker installs it (build
+# with APP_EXTRAS=rerank) for the unified graph+vector rerank pass
+# (SentenceTransformerRerank on BAAI/bge-reranker-v2-m3). torch is pinned to
+# CPU wheels via [tool.uv.sources] below — no CUDA/nvidia-cu12 bloat on the
+# GPU-less worker.
+rerank = ["sentence-transformers>=3,<6", "torch>=2,<3"]
+
 # Telethon (Telegram MTProto client) — only needed by the tg_ingest test
 # harness (TG -> ingest), not by core runtime. Kept optional.
 tg = ["telethon>=1.36,<2"]
@@ -102,6 +110,17 @@ dev = [
     "httpx>=0.27,<0.30",
     "ruff>=0.7,<1",
 ]
+
+[tool.uv.sources]
+# CPU-only torch on the Linux deploy target (worker has no GPU) — avoids
+# pulling the ~5-7 GB nvidia-cu12 CUDA stack. Other platforms (e.g. macOS
+# used for locking) resolve torch from PyPI, which is already CPU-only.
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

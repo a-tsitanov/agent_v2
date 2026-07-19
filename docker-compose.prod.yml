@@ -144,10 +144,24 @@ services:
   # services for independent scaling (e.g. a GPU host running only `llm`).
   worker:
     <<: [*app-build]
+    # The unified graph+vector rerank pass (rerank_sources) runs in the worker,
+    # so build WITH the `rerank` extra (sentence-transformers + CPU torch + the
+    # baked BGE model). Pinned here so a plain `docker compose build worker`
+    # can't silently revert search to the un-reranked (noisy) RRF pool.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_EXTRAS: rerank
     command: ["python", "-m", "src.workflow.worker"]
     environment:
       <<: *app-env
       WORKER_GROUPS: ${WORKER_GROUPS:-}
+      # Rerank trim: feed more reranked chunks to synthesis. Safe now that the
+      # cross-encoder actually sorts by relevance (noise scores ~0 and sinks),
+      # and it lifts multi-facet coverage. TemporalSettings reads process env
+      # (no env_file), so it must live here, not in .env.
+      TEMPORAL_RERANK_TOP_N: "20"
     depends_on:
       postgres: {condition: service_healthy}
       milvus: {condition: service_healthy}
