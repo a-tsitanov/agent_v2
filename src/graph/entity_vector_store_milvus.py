@@ -18,6 +18,19 @@ _COLLECTION = "entity_er_vec"
 _NAME_MAX, _LABEL_MAX, _DESC_MAX = 512, 256, 4096
 
 
+def _btrunc(s: str, max_bytes: int) -> str:
+    """Truncate to fit a Milvus VARCHAR: max_length counts UTF-8 BYTES, not chars.
+
+    A plain ``s[:max_bytes]`` slices code points, so non-ASCII text (Cyrillic ≈ 2
+    bytes/char) still overflows max_length and the upsert is rejected with
+    code=1100. Slice the encoded bytes and drop any partial trailing char.
+    """
+    b = (s or "").encode("utf-8")
+    if len(b) <= max_bytes:
+        return s or ""
+    return b[:max_bytes].decode("utf-8", "ignore")
+
+
 class MilvusEntityVectorStore:
     def __init__(self, client: Any | None = None, collection: str = _COLLECTION):
         from pymilvus import MilvusClient
@@ -60,11 +73,11 @@ class MilvusEntityVectorStore:
             return
         self._ensure()
         data = [{
-            "name": e["name"][:_NAME_MAX],
+            "name": _btrunc(e["name"], _NAME_MAX),
             "er_vec": list(e["embedding"]),
-            "label": (e.get("label") or "")[:_LABEL_MAX],
+            "label": _btrunc(e.get("label") or "", _LABEL_MAX),
             "mention_count": int(e.get("mention_count") or 1),
-            "description": (e.get("description") or "")[:_DESC_MAX],
+            "description": _btrunc(e.get("description") or "", _DESC_MAX),
         } for e in entities if e.get("embedding")]
         if data:
             self._client.upsert(collection_name=self._collection, data=data)
