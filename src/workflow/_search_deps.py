@@ -127,14 +127,21 @@ async def get_retriever() -> RetrieverProtocol:
     return _state["retriever"]
 
 
-async def get_vector_retriever(top_k: int) -> RetrieverProtocol:
+async def get_vector_retriever(
+    top_k: int, filters: Any | None = None,
+) -> RetrieverProtocol:
     """Per-request vector retriever at a custom ``similarity_top_k``.
 
-    Used by the date-filter over-fetch path (``retrieve_subquestion``):
-    fetch more candidates so post-filtering out-of-range chunks doesn't
-    starve the in-range pool.  Reuses the cached vector index —
-    ``as_retriever`` is an in-memory wrap (no Milvus rebuild), so building
-    one per request is cheap."""
+    Used by the date-filter path (``retrieve_subquestion``). ``filters`` is
+    a Milvus ``MetadataFilters`` push-down: WITHOUT it the vector search
+    ranks the globally-most-similar chunks and a post-filter then drops the
+    out-of-range ones — which starves the in-range pool when the corpus
+    spans many dates (the relevant same-date chunks never enter the global
+    top-k). Pushing the date bound INTO the Milvus search makes it rank the
+    top-k among only in-range chunks. Over-fetch still applies so the merged
+    pool (vector + graph + walk) has candidates for rerank. Reuses the
+    cached vector index — ``as_retriever`` is an in-memory wrap (no Milvus
+    rebuild), so building one per request is cheap."""
     async with _lock:
         if _state.get("_vector_index") is None:
             ret, embed = await _build_retriever_once()
@@ -142,7 +149,7 @@ async def get_vector_retriever(top_k: int) -> RetrieverProtocol:
                 _state["retriever"] = ret
             _state["_embed_model"] = embed
         index = _state["_vector_index"]
-    return index.as_retriever(similarity_top_k=top_k)
+    return index.as_retriever(similarity_top_k=top_k, filters=filters)
 
 
 async def get_graph_retriever() -> GraphRetrieverProtocol | None:

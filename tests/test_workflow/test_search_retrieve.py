@@ -21,6 +21,7 @@ import pytest
 from llama_index.core.schema import NodeWithScore, TextNode
 
 from src.retrieval import atomic_tools
+from src.retrieval.date_filters import DateBounds, to_metadata_filters
 from src.workflow.contracts import RetrieveParams
 from src.workflow.search.activities import retrieve as retrieve_mod
 from src.workflow.search.activities.retrieve import (
@@ -220,15 +221,17 @@ def test_pipeline_includes_find_entity_by_name():
 @pytest.mark.asyncio
 async def test_date_bounds_overfetch_and_postfilter(monkeypatch):
     """With a date bound set: the vector retriever is built per-request at
-    the over-fetched top_k, and the merged pool is post-filtered — chunks
-    out of range OR missing the epoch field are dropped (vector + graph)."""
+    the over-fetched top_k WITH the Milvus date push-down filter, and the
+    merged pool is post-filtered — chunks out of range OR missing the epoch
+    field are dropped (vector + graph)."""
     async def _gret():
         return object()
 
     seen: dict = {}
 
-    async def _vret(top_k):
+    async def _vret(top_k, filters=None):
         seen["top_k"] = top_k
+        seen["filters"] = filters
         return object()
 
     monkeypatch.setattr(retrieve_mod, "get_graph_retriever", _gret)
@@ -256,6 +259,11 @@ async def test_date_bounds_overfetch_and_postfilter(monkeypatch):
 
     # Over-fetch retriever used at top_k × default factor (3).
     assert seen["top_k"] == 15
+    # Date bound is pushed DOWN into the Milvus vector search (not just the
+    # post-filter) so same-date chunks aren't starved out of the global top-k.
+    assert seen["filters"] == to_metadata_filters(
+        DateBounds(doc_after=50, doc_before=150)
+    )
     # Only in-range chunks survive; out-of-range + missing-field dropped.
     assert {s.chunk_id for s in res.sources} == {"in", "g_in"}
 
@@ -264,7 +272,7 @@ async def test_date_bounds_overfetch_and_postfilter(monkeypatch):
 async def test_no_date_bounds_uses_cached_retriever(_patch_deps, monkeypatch):
     """No date bound → cached retriever (never the over-fetch path) and no
     post-filter (every source survives, behaviour unchanged)."""
-    def _boom(_top_k):
+    def _boom(_top_k, filters=None):
         raise AssertionError("get_vector_retriever must not be called unfiltered")
 
     monkeypatch.setattr(retrieve_mod, "get_vector_retriever", _boom)

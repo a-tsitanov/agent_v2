@@ -21,7 +21,12 @@ from temporalio import activity
 
 from src.config import settings
 from src.retrieval import atomic_tools
-from src.retrieval.date_filters import DateBounds, filter_nodes, overfetch_top_k
+from src.retrieval.date_filters import (
+    DateBounds,
+    filter_nodes,
+    overfetch_top_k,
+    to_metadata_filters,
+)
 from src.workflow._search_deps import (
     get_graph_retriever,
     get_retriever,
@@ -118,8 +123,13 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
         ins_before=params.inserted_before_epoch,
     )
     if bounds.any_set:
+        # Push the date bound INTO the Milvus vector search (not just the
+        # post-filter below): otherwise the vector top-k is chosen across ALL
+        # dates and the post-filter starves the in-range pool — same-date
+        # chunks never enter the global top-k. See get_vector_retriever.
         retriever = await get_vector_retriever(
-            overfetch_top_k(params.top_k, bounds)
+            overfetch_top_k(params.top_k, bounds),
+            filters=to_metadata_filters(bounds),
         )
     else:
         retriever = await get_retriever()
