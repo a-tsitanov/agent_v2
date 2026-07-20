@@ -54,7 +54,9 @@ router_settings:
   timeout: 60
   allowed_fails: 2
   cooldown_time: 300
-  # If the external provider errors/rate-limits, fall back to the local pool.
+  # Cross-tier fallback: if every deployment in one alias group fails/times out,
+  # spill to the other group (both are real model_names — a fallback to a
+  # non-existent group like "gemma4:12b" hard-500s instead of falling back).
   fallbacks:
-    - small: ["gemma4:12b"]
-    - large: ["gemma4:12b"]
+    - small: ["large"]
+    - large: ["small"]
