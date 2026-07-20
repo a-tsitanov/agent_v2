@@ -1,74 +1,60 @@
-# LiteLLM proxy config for the prod extension (docker-compose.litellm.yml).
-# Both models are served by the remote ollama at
-# https://ollama.efko-smart-systems-dev.ru (set via the app's LITELLM_* env).
+# LiteLLM proxy config for the prod stack.
 #
-# The app requests these exact model_name values (see .env):
-#   LITELLM_MODEL_SMALL / LITELLM_MODEL_LARGE = gemma4:12b
-#   LITELLM_EMBEDDING_MODEL                    = nomic-embed-text:latest
-# MILVUS_DIM MUST be 768 (nomic-embed-text native dim) or Milvus rejects inserts.
+# MODEL ALIASES (stable): the app requests only these two model names, set in
+# .env as LITELLM_MODEL_SMALL=small / LITELLM_MODEL_LARGE=large. Switch the
+# ACTUAL model HERE (this file) + `docker restart litellm` — NEVER touch .env
+# or recreate app containers to change models.
+#   small = high-volume tier (extraction/judge/search/plan)
+#   large = final user-facing synthesis
+# Embeddings: nomic-embed-text:latest (768-dim; MUST match MILVUS_DIM=768).
 
 model_list:
-  # Chat / completion tier (SMALL + LARGE). ollama_chat/ transport.
-  # num_ctx 16384: the 2048 default truncates extraction few-shots.
-  # think:false: thinking mode off for high-volume roles (benched — no quality
-  # win for extraction, big latency cost).
-  - model_name: gemma4:12b
+  # ---- SMALL pool (2 deployments, simple-shuffle) ----
+  - model_name: small
     litellm_params:
       model: ollama_chat/gemma4:12b
       api_base: https://ollama.efko-smart-systems-dev.ru
+      api_key: sk-change-me
       num_ctx: 16384
       think: false
-
-  # Second node, load-balanced into the SAME public model_name (gemma4:12b):
-  # LiteLLM's router simple-shuffles across all entries sharing a model_name,
-  # so gemma4:12b traffic now fans out over both backends. This node runs an
-  # older Ollama (0.24.0) that can't pull/serve 12b, so it is mapped to
-  # gemma4:e4b instead — a deliberate quality-for-throughput trade-off
-  # (accepted by ops): a share of gemma4:12b requests are answered by the
-  # smaller e4b model here.
-  - model_name: gemma4:12b
+  - model_name: small
     litellm_params:
       model: ollama_chat/gemma4:e4b
       api_base: http://141.105.69.136:11434
+      api_key: sk-change-me
       num_ctx: 16384
       think: false
-
-  # Third node (byse.tech, Ollama 0.31.1), same public model_name gemma4:12b,
-  # mapped to qwen3.5:27b. The litellm container reaches this host over TLS only
-  # after the host-side MSS-clamp fix (default route egresses wg0, MTU 1320;
-  # unclamped 1500-byte TLS packets were black-holed). think:false — qwen3 emits
-  # only reasoning tokens otherwise and returns empty content.
-  - model_name: gemma4:12b
+  # ---- LARGE pool (2 deployments) ----
+  - model_name: large
     litellm_params:
-      model: ollama_chat/qwen3.5:27b
-      api_base: https://ollama.byse.tech
+      model: openai/gemini-2.5-flash
+      api_base: https://openai.bothub.ru/v1
+      api_key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijc5OWQ0MzMxLWQ1MzUtNDE5Mi05YjA5LTNkM2U1Mjc3ZjI3OCIsImlzRGV2ZWxvcGVyIjp0cnVlLCJpYXQiOjE3ODQ1NTk0MDksImV4cCI6MjEwMDEzNTQwOSwianRpIjoiXzFtdEd5RjkyTDF6VmxhXyJ9.nAqdTNX0i9PE9QBjlLSB24nxDR0JNjJKd9ODvkcOhDM
+  - model_name: large
+    litellm_params:
+      model: ollama_chat/gemma4:31b-cloud
+      api_base: http://host.docker.internal:11434
       num_ctx: 16384
       think: false
-
-  # Embeddings — 768-dim; MUST match MILVUS_DIM=768. Uses the ollama/ (NOT
-  # ollama_chat/) transport — the chat transport can't serve /embeddings.
+  # ---- Embeddings ----
   - model_name: nomic-embed-text:latest
     litellm_params:
       model: ollama/nomic-embed-text:latest
-      api_base: https://ollama.efko-smart-systems-dev.ru
+      api_base: http://host.docker.internal:11434
+
 
 litellm_settings:
   drop_params: true
   set_verbose: false
-  # Pin to 0 — avoids an upstream litellm TypeError when num_retries is None at
-  # root level (full explanation in docker/litellm_config.yaml).
   num_retries: 0
 
-# Cross-deployment failover for the gemma4:12b group (efko / e4b / byse).
-# On a retryable error or timeout the Router retries the request on a DIFFERENT
-# deployment in the same model_name group, and a node that fails repeatedly is
-# pulled out of rotation for cooldown_time — this absorbs efko flapping so a
-# hung/erroring backend no longer hard-fails the request (num_retries here is
-# the Router-level setting, distinct from litellm_settings.num_retries above).
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 2
-  timeout: 120        # per-attempt cap: a hung backend fails over instead of
-                      # blocking; 120s stays clear of legit long extractions.
-  allowed_fails: 2    # after 2 fails a deployment is cooled down…
-  cooldown_time: 60   # …removed from rotation for 60s (heals flapping efko).
+  timeout: 60
+  allowed_fails: 2
+  cooldown_time: 300
+  # If the external provider errors/rate-limits, fall back to the local pool.
+  fallbacks:
+    - small: ["gemma4:12b"]
+    - large: ["gemma4:12b"]
