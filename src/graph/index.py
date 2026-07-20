@@ -17,6 +17,7 @@ default, which reliably emits structured output for schema mode).
 
 from __future__ import annotations
 
+import functools
 from typing import Literal
 
 from llama_index.core import PropertyGraphIndex
@@ -40,6 +41,31 @@ from src.graph.schema import (
 )
 from src.retrieval._common import strip_thinking
 
+
+def _skip_under_nebula(fn):
+    """Short-circuit a neo4j ``ensure_*_index`` helper when the active graph
+    backend is nebula.
+
+    All these helpers issue neo4j ``CREATE [FULLTEXT|VECTOR] INDEX`` DDL at
+    ``store.structured_query``. nebula 3.8 rejects that grammar
+    (``SyntaxError near 'INDEX'`` — it uses ``CREATE TAG INDEX``, created
+    separately by ``nebula_schema.ensure_schema``), so under nebula the DDL is
+    a guaranteed no-op that the fail-open ``except`` swallows — but it spams a
+    warning on every ingest / search bootstrap. Skip it and report success
+    (nothing to do), leaving the neo4j path byte-for-byte unchanged.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from src.config import settings
+
+        if settings.graph.backend == "nebula":
+            return True
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 # Full-text index over entity names — backs partial-name lookup
 # (``GraphRetriever.afind_entities_by_name``).  Idempotent DDL, safe to
 # run repeatedly / concurrently.
@@ -48,6 +74,7 @@ ENTITY_FULLTEXT_INDEX_CYPHER = (
 )
 
 
+@_skip_under_nebula
 def ensure_entity_fulltext_index(store) -> bool:
     """Idempotently create the entity-name full-text index.
 
@@ -77,6 +104,7 @@ ENTITY_MENTION_COUNT_INDEX_CYPHER = (
 )
 
 
+@_skip_under_nebula
 def ensure_entity_lookup_indexes(store) -> bool:
     """Idempotently create the range indexes that keep entity lookups and
     the incremental-ER window scalable at 250k+ entities.
@@ -106,6 +134,7 @@ ER_VECTOR_INDEX_CYPHER = (
 )
 
 
+@_skip_under_nebula
 def ensure_er_vector_index(store, dim: int) -> bool:
     """Idempotently create the ER vector index on ``__Entity__.er_vec``.
 
@@ -132,6 +161,7 @@ COMMUNITY_REPORT_VECTOR_INDEX_CYPHER = (
 )
 
 
+@_skip_under_nebula
 def ensure_community_report_vector_index(store, dim: int) -> bool:
     """Idempotently create the community-report vector index on
     ``Community.report_vec``.
@@ -163,6 +193,7 @@ COMMUNITY_LEVEL_INDEX_CYPHER = (
 CHUNK_DOC_ID_INDEX_CYPHER = "CREATE INDEX chunk_doc_id IF NOT EXISTS FOR (c:Chunk) ON (c.doc_id)"
 
 
+@_skip_under_nebula
 def ensure_community_indexes(store) -> bool:
     """Idempotent range indexes for the community/global read paths
     (Community.level filter, Chunk.doc_id traversal).  Fail-open."""
@@ -188,6 +219,7 @@ CHUNK_INSERTED_AT_INDEX_CYPHER = (
 )
 
 
+@_skip_under_nebula
 def ensure_chunk_date_indexes(store) -> bool:
     """Idempotent range indexes on ``:Chunk(doc_date_epoch)`` and
     ``:Chunk(inserted_at_epoch)`` for date-filtered search.  Fail-open
@@ -222,6 +254,7 @@ REL_TEMPORAL_INDEX_CYPHERS = (
 )
 
 
+@_skip_under_nebula
 def ensure_first_seen_indexes(store) -> bool:
     """Idempotently create the E1 temporal indexes: ``created_at`` on
     entities + per-type temporal indexes on RELATED relationships.

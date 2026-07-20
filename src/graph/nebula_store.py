@@ -242,8 +242,18 @@ class NebulaGraphStore:
             row = rs.row_values(i)
             for nv in row[ni].as_list():
                 node = nv.as_node()
+                tags = node.tags()
+                if not tags:
+                    # GET SUBGRAPH returns frontier vertices (endpoints one
+                    # step past the last hop) with no tags/props loaded →
+                    # node.tags() == [] → the old node.tags()[0] raised
+                    # IndexError, failing the whole walk ("graph_walk (nebula)
+                    # failed: list index out of range"). No tag ⇒ no props ⇒
+                    # no name to map; skip. Edges to it keep whatever endpoint
+                    # names the tagged vertices already contributed.
+                    continue
                 nid = node.get_id().cast()
-                props = {k: v.cast() for k, v in node.properties(node.tags()[0]).items()}
+                props = {k: v.cast() for k, v in node.properties(tags[0]).items()}
                 name = props.get("name") or ""
                 vid_name[nid] = name
                 entities.append({

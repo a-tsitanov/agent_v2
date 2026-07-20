@@ -15,7 +15,16 @@ from llama_index.core.indices.property_graph import (
 )
 from llama_index.core.llms import MockLLM
 
-from src.graph.index import _ENTITY_DESCRIPTION_PROP, build_kg_extractor
+from src.config import settings
+from src.graph.index import (
+    _ENTITY_DESCRIPTION_PROP,
+    build_kg_extractor,
+    ensure_chunk_date_indexes,
+    ensure_community_indexes,
+    ensure_entity_fulltext_index,
+    ensure_entity_lookup_indexes,
+    ensure_first_seen_indexes,
+)
 from src.graph.schema import (
     DEFAULT_VALIDATION_SCHEMA,
     EntityType,
@@ -319,3 +328,44 @@ def test_ensure_community_indexes_ddl_and_failopen():
     class _Boom:
         def structured_query(self, c, param_map=None): raise RuntimeError("x")
     assert ensure_community_indexes(_Boom()) is False
+
+
+def test_ensure_indexes_skip_under_nebula(monkeypatch):
+    # neo4j `CREATE INDEX` DDL raises `SyntaxError near INDEX` under nebula
+    # (nebula uses TAG INDEX, created by nebula_schema.ensure_schema). The
+    # ensure_* helpers must early-return under nebula, NOT fire neo4j DDL —
+    # else every search/ingest bootstrap spams fail-open warnings.
+    monkeypatch.setattr(settings.graph, "backend", "nebula")
+
+    class _CountingStore:
+        def __init__(self):
+            self.calls = 0
+
+        def structured_query(self, *a, **k):
+            self.calls += 1
+            return []
+
+    store = _CountingStore()
+    assert ensure_entity_fulltext_index(store) is True
+    assert ensure_entity_lookup_indexes(store) is True
+    assert ensure_chunk_date_indexes(store) is True
+    assert ensure_first_seen_indexes(store) is True
+    assert ensure_community_indexes(store) is True
+    assert store.calls == 0  # no neo4j DDL sent to nebula
+
+
+def test_ensure_indexes_run_under_neo4j(monkeypatch):
+    # Guard is nebula-only: neo4j path still issues the DDL unchanged.
+    monkeypatch.setattr(settings.graph, "backend", "neo4j")
+
+    class _CountingStore:
+        def __init__(self):
+            self.calls = 0
+
+        def structured_query(self, *a, **k):
+            self.calls += 1
+            return []
+
+    store = _CountingStore()
+    assert ensure_entity_fulltext_index(store) is True
+    assert store.calls == 1

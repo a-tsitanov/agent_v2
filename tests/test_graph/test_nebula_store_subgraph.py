@@ -14,6 +14,14 @@ class _Node:
     def tags(self): return ["Entity"]
     def properties(self, tag): return {k: _VW(v) for k, v in self._props.items()}
 
+class _TaglessNode:
+    """GET SUBGRAPH frontier vertex: an edge endpoint one step past the last
+    hop, returned with NO tags/props loaded (node.tags() == [])."""
+    def __init__(self, vid): self._vid = vid
+    def get_id(self): return _VW(self._vid)
+    def tags(self): return []
+    def properties(self, tag): raise AssertionError("must not read props of a tagless node")
+
 class _Rel:
     def __init__(self, s, t, props): self._s, self._t, self._props = s, t, props
     def start_vertex_id(self): return _VW(self._s)
@@ -61,3 +69,17 @@ def test_subgraph_maps_to_walk_rows_shape():
     assert rels == [{"src": "Иванов", "tgt": "Москва", "label": "WORKS_AT",
                      "polarity": "pos", "valid_from": 0, "valid_to": 0}]
     assert 'GET SUBGRAPH WITH PROP 2 STEPS FROM "v_ivan" BOTH `RELATED`' in store._session.last
+
+
+def test_subgraph_skips_tagless_frontier_vertex():
+    # GET SUBGRAPH returns outer-step frontier vertices with no tags/props →
+    # node.tags() == [] → the old `node.tags()[0]` raised IndexError, which
+    # failed the whole walk ("graph_walk (nebula) failed: list index out of
+    # range", 109x in prod). subgraph must skip them, not crash.
+    ivan = _Node("v_ivan", {"name": "Иванов", "label": "PERSON", "description": ""})
+    ghost = _TaglessNode("v_ghost")
+    rs = _ResultSet([(_Cell([ivan, ghost], "n"), _Cell([], "e"))])
+    store = NebulaGraphStore(_Session(rs))
+    rows = store.subgraph("v_ivan", 1)  # must NOT raise
+    ents = {e["name"] for e in rows[0]["entities"]}
+    assert ents == {"Иванов"}  # tagless frontier vertex skipped
