@@ -715,8 +715,10 @@ class AgentSettings(BaseSettings):
     # from the LlamaIndex default so a named entity isn't ranked out of the
     # result set on a large graph.
     graph_similarity_top_k: int = Field(default=20, ge=1, le=100)
-    # Per-group rerank multipliers (Search R5+). Applied to the cross-encoder
-    # score before the top_n cut; a missing group (or "") → 1.0. Override via
+    # Per-group rerank multipliers (Search R5+). Applied to the sigmoid-
+    # normalized cross-encoder score (raw logits are unbounded/often negative,
+    # so weighting happens post-normalization to stay monotonic) before the
+    # top_n cut; a missing group (or "") → 1.0. Override via
     # AGENT_GROUP_WEIGHTS (JSON).
     group_weights: dict[str, float] = Field(default_factory=lambda: {
         "official": 1.30, "data": 1.25, "analytics": 1.10,
