@@ -6,7 +6,8 @@
 # or recreate app containers to change models.
 #   small = high-volume tier (extraction/judge/search/plan)
 #   large = final user-facing synthesis
-# Embeddings: nomic-embed-text:latest (768-dim; MUST match MILVUS_DIM=768).
+# Embeddings: bge-m3 (1024-dim; MUST match MILVUS_DIM=1024). nomic-embed-text
+# (768) kept as legacy fallback — far weaker RU retrieval discrimination.
 
 model_list:
   # ---- SMALL pool (2 deployments, simple-shuffle) ----
@@ -37,6 +38,12 @@ model_list:
       num_ctx: 16384
       think: false
   # ---- Embeddings ----
+  # nomic-embed-text (768) is the legacy embedder; bge-m3 (1024) is the
+  # current one — far better RU retrieval discrimination. MUST match MILVUS_DIM.
+  - model_name: bge-m3
+    litellm_params:
+      model: ollama/bge-m3
+      api_base: http://host.docker.internal:11434
   - model_name: nomic-embed-text:latest
     litellm_params:
       model: ollama/nomic-embed-text:latest
