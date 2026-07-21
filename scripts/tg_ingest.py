@@ -48,6 +48,8 @@ from typing import Any
 
 from loguru import logger
 
+from src.retrieval.groups import GROUP_SET, pick_priority
+
 # How many chars of each message body to echo in the per-message "sent" log
 # (visibility into WHAT news is ingested each round). Override via TG_LOG_PREVIEW_CHARS.
 _PREVIEW_CHARS = int(os.environ.get("TG_LOG_PREVIEW_CHARS", "200"))
@@ -71,11 +73,14 @@ async def post_ingest(
     text: str,
     document_date: str,
     queue: str | None,
+    group: str = "",
 ) -> bool:
     """POST one document to /api/v1/ingest (multipart). True on 2xx; fail-soft."""
     data: dict[str, str] = {"document_date": document_date}
     if queue:
         data["queue"] = queue
+    if group:
+        data["group"] = group
     try:
         resp = await http.post(
             f"{api_base}/api/v1/ingest",
@@ -179,6 +184,35 @@ def resolve_folders(
     return spec, missing
 
 
+def resolve_group_map(folders: list[Any], *, peer_id: Callable[[Any], int]) -> dict[int, str]:
+    """Map dialog_id → channel group (folder title ∈ GROUP_SET).
+
+    A group is the lowercase folder title. Disjoint: if a channel appears in
+    >1 group-folder keep the higher-priority group (``pick_priority``) and log
+    a WARNING. Folders whose title is not a known group are ignored here (they
+    may still scope the sync via ``resolve_folders``). Category-flag folders
+    («все каналы») don't enumerate peers, so channels included only by a flag
+    stay ungrouped (``""``)."""
+    out: dict[int, str] = {}
+    for f in folders:
+        title = _filter_title(f).strip().casefold()
+        if title not in GROUP_SET:
+            continue
+        for p in [*getattr(f, "include_peers", []), *getattr(f, "pinned_peers", [])]:
+            pid = peer_id(p)
+            prev = out.get(pid)
+            if prev and prev != title:
+                winner = pick_priority(prev, title)
+                logger.warning(
+                    "tg_ingest: channel {c} in multiple group-folders "
+                    "({a}, {b}) → keeping {w}", c=pid, a=prev, b=title, w=winner,
+                )
+                out[pid] = winner
+            else:
+                out[pid] = title
+    return out
+
+
 def dialog_in_folders(dialog: Any, spec: dict) -> bool:
     """Membership check against a resolve_folders() spec. Explicit include
     beats exclude; category flags cover peers a folder holds implicitly."""
@@ -226,6 +260,7 @@ async def sync_round(
     api_key: str,
     queue: str | None,
     bootstrap_limit: int,
+    group_map: dict[int, str] | None = None,
 ) -> Counter:
     """One catch-up pass over ``dialogs``.
 
@@ -235,7 +270,10 @@ async def sync_round(
     message — so an interrupt loses at most the in-flight one, and a
     restart never re-sends. On a POST failure the dialog's round stops
     WITHOUT advancing (the message is retried next round); empty messages
-    advance the cursor (nothing to send — never retry them)."""
+    advance the cursor (nothing to send — never retry them). ``group_map``
+    (dialog_id → channel group, from ``resolve_group_map``) tags each
+    posted doc with its group when the dialog has one."""
+    group_map = group_map or {}
     tally: Counter = Counter()
     for dialog in dialogs:
         key = str(dialog.id)
@@ -244,6 +282,7 @@ async def sync_round(
             key, {"last_id": 0, "title": getattr(dialog, "title", "") or slug},
         )
         last_id = int(entry.get("last_id", 0) or 0)
+        group = group_map.get(dialog.id, "")
         try:
             if last_id <= 0 and bootstrap_limit:
                 fetched = [
@@ -271,6 +310,7 @@ async def sync_round(
             filename, text, document_date = doc
             ok = await post_ingest(
                 http, api_base, api_key, filename, text, document_date, queue,
+                group=group,
             )
             if not ok:
                 tally["failed"] += 1
@@ -359,9 +399,13 @@ def main() -> int:
             missing_warned = False
             while True:
                 dialogs = select_dialogs([d async for d in tg.iter_dialogs()])
+                # Folders are read every round regardless of --folders scoping:
+                # group tagging (resolve_group_map) needs the account's full
+                # folder list too, not just the ones used to scope the sync.
+                res = await tg(functions.messages.GetDialogFiltersRequest())
+                filters = getattr(res, "filters", res)  # obj in new layers, list in old
+                group_map = resolve_group_map(filters, peer_id=tg_utils.get_peer_id)
                 if folder_names:
-                    res = await tg(functions.messages.GetDialogFiltersRequest())
-                    filters = getattr(res, "filters", res)  # obj in new layers, list in old
                     spec, missing = resolve_folders(
                         filters, folder_names, peer_id=tg_utils.get_peer_id,
                     )
@@ -383,6 +427,7 @@ def main() -> int:
                     api_key=args.api_key,
                     queue=args.queue,
                     bootstrap_limit=args.bootstrap_limit,
+                    group_map=group_map,
                 )
                 logger.info(
                     "tg_ingest sync round: dialogs={d} tally={t}",
