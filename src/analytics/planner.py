@@ -15,6 +15,7 @@ from loguru import logger
 
 from src.analytics.catalog import CATALOG, render_catalog_for_planner
 from src.analytics.contracts import AnalysisPlan, PrimitiveCall
+from src.analytics.ids import coerce_entity_type
 
 _SYSTEM = (
     "You are the planner for an analytical layer over a knowledge graph. "
@@ -70,7 +71,14 @@ def parse_plan(raw: str, *, max_steps: int) -> AnalysisPlan:
                 model = prim.param_model(**params)  # validates required + types
             except Exception:
                 continue  # bad params → drop
-            validated.append(PrimitiveCall(primitive=name, params=model.model_dump()))
+            dumped = model.model_dump()
+            # The planner LLM tends to fill a `type` param with a generic word
+            # from the question ("entity"/"сущности"); coerce anything that
+            # isn't a real EntityType to None (= all types) so type-filtered
+            # primitives don't silently match zero rows.
+            if dumped.get("type"):
+                dumped["type"] = coerce_entity_type(dumped["type"])
+            validated.append(PrimitiveCall(primitive=name, params=dumped))
             if len(validated) >= max_steps:
                 break
 
