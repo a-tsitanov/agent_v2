@@ -3,9 +3,12 @@
 Mirrors the existing `doc_date_epoch` propagation path — this file only
 covers the pure contracts-level default/round-trip behaviour. Stamping
 of `doc_group` onto chunk metadata inside `parse_and_chunk` is covered
-by the "doc_group" assertions layered onto the existing
-`test_parse_and_chunk.py` suite (see that file for the pipeline mocks);
-here we keep to what Step 1 of the task brief asks for.
+by `test_stamps_doc_group_from_ctx_when_present` and
+`test_omits_doc_group_when_ctx_group_is_empty` in
+`tests/test_workflow/test_parse_and_chunk.py` (mirroring the
+`test_stamps_date_epochs_from_ctx_when_present` mocked-pipeline
+mechanism in that file); here we keep to what Step 1 of the task brief
+asks for.
 """
 
 from __future__ import annotations
