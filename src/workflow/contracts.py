@@ -80,6 +80,9 @@ class IngestParams(_Frozen):
     doc_date: str = ""
     doc_date_epoch: int | None = None
     inserted_at_epoch: int | None = None
+    # Channel group (news/analytics/.../data or "" = ungrouped). Stamped
+    # onto each chunk's doc_group metadata for search filter/rerank/synth.
+    group: str = ""
 
 
 class Ctx(_Frozen):
@@ -91,6 +94,7 @@ class Ctx(_Frozen):
     # them onto each chunk (date-filter feature). None ⇒ not provided.
     doc_date_epoch: int | None = None
     inserted_at_epoch: int | None = None
+    group: str = ""
 
 
 class SchedulerParams(_Frozen):

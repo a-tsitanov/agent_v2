@@ -25,6 +25,7 @@ from urllib3.exceptions import MaxRetryError
 from src.api.auth import require_api_key
 from src.config import settings
 from src.retrieval.date_filters import iso_to_epoch_days, today_epoch_days
+from src.retrieval.groups import GROUP_SET
 from src.storage.minio import S3Error, build_minio_storage
 from src.storage.postgres import AsyncPostgres
 from src.workflow.client import get_temporal_client
@@ -63,6 +64,7 @@ async def upload_document(
     force: bool = Form(default=False),
     document_date: str | None = Form(default=None),
     queue: str | None = Form(default=None),
+    group: str = Form(default=""),
     x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
     if not file.filename:
@@ -79,6 +81,13 @@ async def upload_document(
                 f"unknown queue {queue!r}; configured: {settings.rabbitmq.queues}",
             )
         target_queue = queue
+
+    # Optional channel group. Validate up front → 422 on an unknown name.
+    if group and group not in GROUP_SET:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"unknown group {group!r}; allowed: {sorted(GROUP_SET)}",
+        )
 
     # Optional client document date (ISO YYYY-MM-DD) for date-filtered
     # search.  Validate up front so a malformed value 422s before any
@@ -173,6 +182,7 @@ async def upload_document(
         doc_date=document_date or "",
         doc_date_epoch=doc_date_epoch,
         inserted_at_epoch=inserted_at_epoch,
+        group=group,
     )
     # Admission is always on: hand the document to the configured backlog
     # backend (INGEST_QUEUE_BACKEND).  Default `temporal` = signal-with-start
