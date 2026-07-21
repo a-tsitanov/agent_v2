@@ -19,6 +19,7 @@ import asyncio
 
 from temporalio import activity
 
+from src.config import settings
 from src.workflow._search_deps import get_reranker
 from src.workflow._search_serde import node_to_serialized, serialized_to_node
 from src.workflow.contracts import RerankParams, RerankResult, SerializedNode
@@ -36,6 +37,21 @@ def prepare_rerank_pool(
     — unit-tested directly.
     """
     return dedup_by_chunk_id(sources)
+
+
+def apply_group_weights(
+    sources: list[SerializedNode], weights: dict[str, float],
+) -> list[SerializedNode]:
+    """Multiply each source's rerank score by its group weight (missing
+    group / "" → 1.0) and return the pool re-sorted by weighted score desc.
+    Pure — no model, unit-tested directly."""
+    weighted = [
+        s.model_copy(update={
+            "score": s.score * weights.get(s.metadata.get("doc_group", ""), 1.0)
+        })
+        for s in sources
+    ]
+    return sorted(weighted, key=lambda s: s.score, reverse=True)
 
 
 @activity.defn
@@ -65,6 +81,7 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
     )
 
     out = [node_to_serialized(n) for n in reranked]
+    out = apply_group_weights(out, settings.agent.group_weights)[: params.top_n]
     activity.logger.info(
         "rerank_sources  pool=%d  top_n=%d  out=%d",
         len(pool), params.top_n, len(out),

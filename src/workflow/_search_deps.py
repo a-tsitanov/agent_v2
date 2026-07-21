@@ -30,6 +30,12 @@ from src.retrieval.atomic_tools import (
     RetrieverProtocol,
 )
 
+# The unified rerank now owns the top_n cut (after group weighting), so the
+# cached cross-encoder is built as a pure SCORER that never truncates below
+# this cap. Pools are bounded (top_k × sub-questions + graph + walk); 256 is
+# comfortably above any real pool.
+_RERANK_SCORE_CAP = 256
+
 _lock = asyncio.Lock()
 _state: dict[str, Any] = {
     "llm": None, "retriever": None, "graph_retriever": None,
@@ -210,10 +216,11 @@ async def get_reranker(top_n: int | None = None):
     Heavy: pulls ``sentence-transformers`` and downloads
     ``BAAI/bge-reranker-v2-m3`` on first use — memoised per worker
     process so the unified rerank pass before synthesis doesn't reload
-    it.  ``top_n`` defaults to ``TemporalSettings.rerank_top_n``; the
-    cached instance is built once with that top_n (the rerank activity
-    enforces top_n on its side too, so a config change between calls
-    still truncates correctly)."""
+    it.  The cached instance is always built as a pure SCORER sized to
+    ``_RERANK_SCORE_CAP`` (never pre-cuts below it) — the rerank
+    activity applies per-group weighting and then owns the final
+    ``top_n`` cut.  ``top_n`` is kept as a parameter for signature
+    compatibility but is no longer used to size the build."""
     async with _lock:
         # Fail-soft: the reranker pulls sentence-transformers + torch, which are
         # heavy and may be absent from a lean deploy image (e.g. no linux-arm64
@@ -223,13 +230,9 @@ async def get_reranker(top_n: int | None = None):
         if _state.get("reranker_failed"):
             return None
         if _state["reranker"] is None:
-            from src.config import settings
             from src.retrieval.reranker import build_reranker
             try:
-                _state["reranker"] = build_reranker(
-                    top_n=top_n if top_n is not None
-                    else settings.temporal.rerank_top_n,
-                )
+                _state["reranker"] = build_reranker(top_n=_RERANK_SCORE_CAP)
             except Exception as exc:  # ImportError (no torch) or model-load failure
                 from loguru import logger
                 logger.warning(
