@@ -95,7 +95,7 @@ def parse_plan(raw: str, *, max_steps: int) -> AnalysisPlan:
 # "что в трендах" answerable even when the planner LLM maps nothing (its jargon
 # catalog descriptions make it emit "no matching primitive" for trend phrasings).
 _TREND_KEYWORDS = (
-    "тренд", "в тренде", "трендах", "trending", "популярн", "часто упомин",
+    "тренд", "в тренде", "трендах", "trending", "популярн", "упомин",
     "самое обсуждаемое", "обсуждаем", "на слуху", "хайп", "burst", "surge",
     "most mentioned", "most talked", "most discussed", "hot topic", "hottest",
 )
