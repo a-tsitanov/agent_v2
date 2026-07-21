@@ -229,6 +229,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "AGENT_GRAPH_WALK_ENABLED": "Multi-hop seeding: после graph_search авто-засеять bounded graph_walk от топ-сущности (без LLM tool-pick). Fail-open: ошибка walk проглатывается.",
     "AGENT_GRAPH_WALK_FILTER_POLARITY_TEMPORAL": "Фильтрация на retrieval: graph_walk выкидывает отрицаемые (polarity=negated) связи и рёбра с истёкшим valid_to. Opt-out, если мешает.",
     "AGENT_GRAPH_WALK_HOPS": "Запрошенное число хопов для graph_walk (инструмент клампит к GRAPH_WALK_MAX_HOPS). По умолчанию 2, капа 1..3.",
+    "AGENT_GROUP_WEIGHTS": 'JSON-словарь множителей rerank-скора по channel-group (доменные группы Telegram-папок news/analytics/digest/opinion/official/data), применяется к скору bge cross-encoder перед top_n; группа без записи (или "") → 1.0. Дефолт: {"official":1.30,"data":1.25,"analytics":1.10,"news":1.00,"digest":0.95,"opinion":0.80}. ВАЖНО: заданное значение ПОЛНОСТЬЮ ЗАМЕЩАЕТ словарь дефолтов, а не мёржится с ним — группы, не перечисленные в override, откатываются к 1.0 (НЕ к своему встроенному дефолту).',
     "AGENT_HISTORY_MAX_CHARS": "Лимит символов истории диалога, передаваемой в контекстуализацию запроса. 0 = без истории. Капа >= 0.",
     "AGENT_HISTORY_MAX_TURNS": "Сколько последних реплик истории учитывать при контекстуализации запроса. 0 = single-shot. Капа 0..40.",
     "AGENT_MAX_COVERAGE_ROUNDS": "Макс. число доп. раундов coverage-check в plan-execute: на найденный пробел запускается ещё один SubQueryRetrievalWorkflow. Капа 0..3.",
@@ -259,6 +260,8 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "EVENTS_FIRST_SEEN_ENABLED": "Включить простановку метки first_seen при создании узла (переключать ТОЛЬКО после бэкфила).",
     "EVENTS_NEW_WINDOW_DAYS": "Окно в днях для выборки новых событий (new_events) по умолчанию.",
     "EVENTS_TAXONOMY": "Закрытый список типов событий (event_type) для LLM-извлечения; с открытым fallback для длинного хвоста.",
+    "EVENTS_CROSS_CHANNEL_DEDUP_ENABLED": "Схлопывать entity-канальный EventOrAction в ближайший event-канальный узел ТОГО ЖЕ чанка по косинусу эмбеддинга имени (устраняет двойной экстракт одного события двумя каналами). Ниже порога узел сохраняется (recall). Opt-in, по умолчанию OFF — включать после live-валидации.",
+    "EVENTS_CROSS_CHANNEL_DEDUP_THRESHOLD": "Порог косинуса для cross-channel dedup событий. Калибровка на живом gemma4:12b/.31: разные факты ≤0.833, истинные дубли ≥0.915 → дефолт 0.88 в середине зазора.",
     # ── HFSettings (явные имена без префикса) — offline HF-модели ─────
     "HF_CACHE_DIR": "Путь к локальному HF-кэшу для air-gapped деплоя; пусто = дефолт HF. Связано с download_models.py / configure_hf.",
     "HF_OFFLINE": "Включить offline-режим HuggingFace (читать только из локального кэша, без обращений к Hub).",
@@ -371,6 +374,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     # ── TemporalSettings (TEMPORAL_*) — воркер/клиент Temporal ───────
     "TEMPORAL_ACTIVITY_CONCURRENCY": "Слотов активити на основной очереди kb-ingest.",
     "TEMPORAL_ANALYTICS_MATERIALIZE_CONCURRENCY": "GDS-воркеры для офлайн-материализации аналитики (centrality/link-prediction) на очереди kb-graph-build. >= 1.",
+    "TEMPORAL_CENTRALITY_BACKEND": "Бэкенд вычисления centrality-метрик (pageRank/betweenness/eigenvector): 'gds' (легаси, in-Neo4j GDS) или 'igraph' (в воркере, память вне Neo4j; единственный вариант под GRAPH_BACKEND=nebula — форсится независимо от флага, см. analytics/materialize.py).",
     "TEMPORAL_COMMUNITY_BACKEND": "Движок детекции сообществ: 'gds' (Leiden в Neo4j, легаси), 'leidenalg' (leidenalg/igraph в воркере, память вне Neo4j) или 'graphscope' (распределённый Leiden через GraphScope, вне Neo4j/igraph). Дефолт 'gds' до прохождения бенчмарка паритета.",
     "TEMPORAL_COMMUNITY_LEIDEN_CONCURRENCY": "Число GDS-потоков для прогона Leiden; держать умеренным, чтобы rebuild не голодил Neo4j. >= 1.",
     "TEMPORAL_COMMUNITY_LEIDEN_GAMMA": "Resolution Leiden: >1 → больше мелких сообществ, <1 → меньше крупных. Только детекция, не query-путь. > 0.",
@@ -412,6 +416,15 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "WIKIBASE_ENABLED": "Включить push в Wikibase после успешного graph build (canonical-сущности + связи + identifier-statements). По умолчанию off.",
     "WIKIBASE_LANGUAGE": "Язык лейблов/описаний в Wikibase (по умолчанию ru).",
     "WIKIBASE_TIMEOUT_S": "Таймаут обращений к Wikibase API в секундах.",
+    # ── BotSettings (BOT_*) — Telegram Q&A-бот (src/bot) ──────────────
+    "BOT_ALLOWED_USERS": "Telegram user id через запятую, кому разрешено пользоваться ботом; пусто = запретить всем (fail-closed).",
+    "BOT_API_BASE": "Base URL поискового API, который дёргает бот (по умолчанию compose-internal http://api:8000).",
+    "BOT_API_KEY": "X-API-Key для поискового API от лица бота. Пусто → берётся первый ключ из API_KEYS.",
+    "BOT_FALLBACK_MODE": "Fallback-режим поиска, если основной вернул пусто/ошибку (auto|local|global|drift). Пустая строка = без fallback.",
+    "BOT_MAX_MESSAGES": "Сколько последних сообщений чата держать в скользящем окне разговора бота. >= 1.",
+    "BOT_SEARCH_MODE": "Основной режим поиска бота: auto | local | global | drift.",
+    "BOT_SEARCH_TIMEOUT_S": "HTTP-таймаут одного поискового запроса бота, сек (fallback-режимы медленнее основного).",
+    "BOT_TOKEN": "Токен Telegram-бота, выданный @BotFather.",
 }
 
 

@@ -29,7 +29,11 @@
 #   TG_INGEST_API_BASE       — target API base; default http://api:8000
 #   TG_INGEST_POLL_INTERVAL  — seconds between catch-up rounds; default 60
 #   TG_INGEST_BOOTSTRAP_LIMIT — newest N msgs for a never-seen dialog; default 100
-#   TG_INGEST_FOLDERS        — comma-separated TG folder names to scope the sync
+#   TG_INGEST_FOLDERS        — comma-separated TG folder names to scope the sync;
+#                              ALSO stamps each doc's doc_group metadata from the
+#                              folder it came from (feeds AGENT_GROUP_WEIGHTS
+#                              rerank). Use exactly: news,analytics,digest,opinion,
+#                              official,data
 #   TG_INGEST_QUEUE          — target ingest queue (only for INGEST_QUEUE_BACKEND=rabbitmq)
 
 services:
