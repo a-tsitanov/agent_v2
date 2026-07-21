@@ -83,6 +83,8 @@ async def parse_and_chunk(ctx: Ctx) -> Parsed:
             md["doc_date_epoch"] = ctx.doc_date_epoch
         if ctx.inserted_at_epoch is not None:
             md["inserted_at_epoch"] = ctx.inserted_at_epoch
+        if ctx.group:
+            md["doc_group"] = ctx.group
 
     # Scrub doc-translation scaffolding so it never reaches downstream
     # stores.

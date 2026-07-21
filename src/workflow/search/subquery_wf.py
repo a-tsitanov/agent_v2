@@ -47,6 +47,8 @@ class SubQueryRetrievalWorkflow:
                 doc_date_before_epoch=params.doc_date_before_epoch,
                 inserted_after_epoch=params.inserted_after_epoch,
                 inserted_before_epoch=params.inserted_before_epoch,
+                groups=params.groups,
+                exclude_groups=params.exclude_groups,
             ),
             result_type=RetrieveResult,
             start_to_close_timeout=LLM_START_TO_CLOSE,

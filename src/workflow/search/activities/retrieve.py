@@ -25,7 +25,11 @@ from src.retrieval.date_filters import (
     DateBounds,
     filter_nodes,
     overfetch_top_k,
-    to_metadata_filters,
+)
+from src.retrieval.group_filter import (
+    GroupFilter,
+    combined_metadata_filters,
+    filter_nodes_by_group,
 )
 from src.workflow._search_deps import (
     get_graph_retriever,
@@ -122,14 +126,18 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
         ins_after=params.inserted_after_epoch,
         ins_before=params.inserted_before_epoch,
     )
-    if bounds.any_set:
-        # Push the date bound INTO the Milvus vector search (not just the
-        # post-filter below): otherwise the vector top-k is chosen across ALL
-        # dates and the post-filter starves the in-range pool — same-date
-        # chunks never enter the global top-k. See get_vector_retriever.
+    gf = GroupFilter(
+        include=tuple(params.groups),
+        exclude=tuple(params.exclude_groups),
+    )
+    if bounds.any_set or gf.any_set:
+        # Push date AND group INTO the Milvus vector search (not just the
+        # post-filter below): otherwise the vector top-k is chosen across
+        # ALL docs and the post-filter starves the in-scope pool.
         retriever = await get_vector_retriever(
-            overfetch_top_k(params.top_k, bounds),
-            filters=to_metadata_filters(bounds),
+            overfetch_top_k(params.top_k, bounds) if bounds.any_set
+            else params.top_k * 3,
+            filters=combined_metadata_filters(bounds, gf),
         )
     else:
         retriever = await get_retriever()
@@ -206,11 +214,12 @@ async def retrieve_subquestion(params: RetrieveParams) -> RetrieveResult:
     # drop chunks whose epoch metadata is out of range, or that lack the
     # field when a bound is set. No-op when no bound. Truncation to the
     # final top-N is the downstream rerank's job, so we keep the pool here.
-    if bounds.any_set:
+    if bounds.any_set or gf.any_set:
         before = len(collected)
         collected = filter_nodes(collected, bounds)
+        collected = filter_nodes_by_group(collected, gf)
         activity.logger.info(
-            "retrieve_subquestion  date-filter kept %d/%d",
+            "retrieve_subquestion  scope-filter kept %d/%d",
             len(collected), before,
         )
 

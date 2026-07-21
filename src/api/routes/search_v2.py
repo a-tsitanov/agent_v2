@@ -88,6 +88,8 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
         doc_date_before_epoch=b.doc_before,
         inserted_after_epoch=b.ins_after,
         inserted_before_epoch=b.ins_before,
+        groups=req.groups or [],
+        exclude_groups=req.exclude_groups or [],
     )
 
 

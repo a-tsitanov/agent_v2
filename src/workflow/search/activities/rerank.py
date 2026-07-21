@@ -16,9 +16,11 @@ pure helper so it's unit-testable without loading the model.
 from __future__ import annotations
 
 import asyncio
+import math
 
 from temporalio import activity
 
+from src.config import settings
 from src.workflow._search_deps import get_reranker
 from src.workflow._search_serde import node_to_serialized, serialized_to_node
 from src.workflow.contracts import RerankParams, RerankResult, SerializedNode
@@ -36,6 +38,31 @@ def prepare_rerank_pool(
     — unit-tested directly.
     """
     return dedup_by_chunk_id(sources)
+
+
+def _sigmoid(x: float) -> float:
+    """Map an unbounded logit to (0, 1). Clamped against ``math.exp``
+    overflow on pathological (very negative) inputs — at that tail the
+    true value is indistinguishable from 0.0 anyway."""
+    if x < -700:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def apply_group_weights(
+    sources: list[SerializedNode], weights: dict[str, float],
+) -> list[SerializedNode]:
+    """Bias rerank order by channel group. The cross-encoder emits unbounded
+    logits (often negative), so we sigmoid-normalize to (0,1) BEFORE applying
+    the group multiplier — otherwise a boost on a negative logit would demote
+    it (and a penalty promote it). Missing group / "" -> weight 1.0. Returns
+    the pool re-sorted by weighted score desc. Pure."""
+    def _weighted(s: SerializedNode) -> float:
+        norm = _sigmoid(s.score)
+        return norm * weights.get(s.metadata.get("doc_group", ""), 1.0)
+
+    weighted = [s.model_copy(update={"score": _weighted(s)}) for s in sources]
+    return sorted(weighted, key=lambda s: s.score, reverse=True)
 
 
 @activity.defn
@@ -65,6 +92,7 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
     )
 
     out = [node_to_serialized(n) for n in reranked]
+    out = apply_group_weights(out, settings.agent.group_weights)[: params.top_n]
     activity.logger.info(
         "rerank_sources  pool=%d  top_n=%d  out=%d",
         len(pool), params.top_n, len(out),

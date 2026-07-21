@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ConversationTurn(BaseModel):
@@ -73,6 +73,14 @@ class SearchRequest(BaseModel):
     # (prompts/answer_templates/<name>.md) or an inline template string.
     # Empty/None → default Russian-output synthesis (unchanged).
     answer_template: str | None = None
+    groups: list[str] | None = Field(
+        default=None,
+        description="Include-list of channel groups; None/[] = all groups.",
+    )
+    exclude_groups: list[str] | None = Field(
+        default=None,
+        description="Exclude-list of channel groups (mutually exclusive with groups).",
+    )
 
     @field_validator(
         "created_after", "created_before", "doc_date_after", "doc_date_before",
@@ -87,6 +95,23 @@ class SearchRequest(BaseModel):
         except ValueError as exc:
             raise ValueError(f"must be ISO YYYY-MM-DD: {exc}") from exc
         return v
+
+    @field_validator("groups", "exclude_groups")
+    @classmethod
+    def _validate_groups(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        from src.retrieval.groups import GROUP_SET
+        bad = [g for g in v if g not in GROUP_SET]
+        if bad:
+            raise ValueError(f"unknown group(s) {bad}; allowed: {sorted(GROUP_SET)}")
+        return v
+
+    @model_validator(mode="after")
+    def _groups_xor_exclude(self):
+        if self.groups and self.exclude_groups:
+            raise ValueError("groups and exclude_groups are mutually exclusive")
+        return self
 
 
 class SourceCitation(BaseModel):

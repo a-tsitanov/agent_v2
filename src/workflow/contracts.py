@@ -80,6 +80,9 @@ class IngestParams(_Frozen):
     doc_date: str = ""
     doc_date_epoch: int | None = None
     inserted_at_epoch: int | None = None
+    # Channel group (news/analytics/.../data or "" = ungrouped). Stamped
+    # onto each chunk's doc_group metadata for search filter/rerank/synth.
+    group: str = ""
 
 
 class Ctx(_Frozen):
@@ -91,6 +94,7 @@ class Ctx(_Frozen):
     # them onto each chunk (date-filter feature). None ⇒ not provided.
     doc_date_epoch: int | None = None
     inserted_at_epoch: int | None = None
+    group: str = ""
 
 
 class SchedulerParams(_Frozen):
@@ -385,6 +389,9 @@ class RetrieveParams(_Frozen):
     doc_date_before_epoch: int | None = None
     inserted_after_epoch: int | None = None
     inserted_before_epoch: int | None = None
+    # Channel-group filter (include / exclude lists; empty = all groups).
+    groups: list[str] = Field(default_factory=list)
+    exclude_groups: list[str] = Field(default_factory=list)
 
 
 class RetrieveResult(_Frozen):
@@ -426,6 +433,9 @@ class SubQueryParams(_Frozen):
     doc_date_before_epoch: int | None = None
     inserted_after_epoch: int | None = None
     inserted_before_epoch: int | None = None
+    # Channel-group filter (include / exclude lists; empty = all groups).
+    groups: list[str] = Field(default_factory=list)
+    exclude_groups: list[str] = Field(default_factory=list)
 
 
 class SubQueryResult(_Frozen):
@@ -479,6 +489,9 @@ class OrchestratorParams(_Frozen):
     doc_date_before_epoch: int | None = None
     inserted_after_epoch: int | None = None
     inserted_before_epoch: int | None = None
+    # Channel-group filter (include / exclude lists; empty = all groups).
+    groups: list[str] = Field(default_factory=list)
+    exclude_groups: list[str] = Field(default_factory=list)
 
 
 class SearchOutcome(_Frozen):
