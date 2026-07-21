@@ -389,6 +389,9 @@ class RetrieveParams(_Frozen):
     doc_date_before_epoch: int | None = None
     inserted_after_epoch: int | None = None
     inserted_before_epoch: int | None = None
+    # Channel-group filter (include / exclude lists; empty = all groups).
+    groups: list[str] = Field(default_factory=list)
+    exclude_groups: list[str] = Field(default_factory=list)
 
 
 class RetrieveResult(_Frozen):
@@ -430,6 +433,9 @@ class SubQueryParams(_Frozen):
     doc_date_before_epoch: int | None = None
     inserted_after_epoch: int | None = None
     inserted_before_epoch: int | None = None
+    # Channel-group filter (include / exclude lists; empty = all groups).
+    groups: list[str] = Field(default_factory=list)
+    exclude_groups: list[str] = Field(default_factory=list)
 
 
 class SubQueryResult(_Frozen):
@@ -483,6 +489,9 @@ class OrchestratorParams(_Frozen):
     doc_date_before_epoch: int | None = None
     inserted_after_epoch: int | None = None
     inserted_before_epoch: int | None = None
+    # Channel-group filter (include / exclude lists; empty = all groups).
+    groups: list[str] = Field(default_factory=list)
+    exclude_groups: list[str] = Field(default_factory=list)
 
 
 class SearchOutcome(_Frozen):
