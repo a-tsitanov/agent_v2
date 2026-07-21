@@ -223,10 +223,11 @@ def dialog_in_folders(dialog: Any, spec: dict) -> bool:
         return False
     if spec["groups"] and getattr(dialog, "is_group", False):
         return True
-    if spec["broadcasts"] and getattr(dialog, "is_channel", False) \
-            and not getattr(dialog, "is_group", False):
-        return True
-    return False
+    return bool(
+        spec["broadcasts"]
+        and getattr(dialog, "is_channel", False)
+        and not getattr(dialog, "is_group", False)
+    )
 
 
 def load_state(path: Path | str) -> dict:

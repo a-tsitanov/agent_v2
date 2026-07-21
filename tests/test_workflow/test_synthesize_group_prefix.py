@@ -1,5 +1,5 @@
-from src.workflow.contracts import SerializedNode
 from src.workflow.activities.synthesize_answer import with_group_prefix
+from src.workflow.contracts import SerializedNode
 
 
 def test_prefixes_group():

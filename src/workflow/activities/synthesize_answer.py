@@ -16,7 +16,7 @@ from temporalio import activity
 from src.retrieval.answer_template import build_query
 from src.workflow._search_deps import get_synthesis_synthesizer, get_synthesizer
 from src.workflow._search_serde import serialized_to_node
-from src.workflow.contracts import SynthesizeParams, SynthesizeResult, SerializedNode
+from src.workflow.contracts import SerializedNode, SynthesizeParams, SynthesizeResult
 
 
 def with_group_prefix(sn: SerializedNode) -> SerializedNode:

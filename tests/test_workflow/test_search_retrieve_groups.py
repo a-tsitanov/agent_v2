@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 import pytest
 
 import src.workflow.search.activities.retrieve as R
-from src.retrieval.group_filter import GroupFilter, combined_metadata_filters
 from src.retrieval.date_filters import DateBounds
+from src.retrieval.group_filter import GroupFilter, combined_metadata_filters
 from src.workflow.contracts import RetrieveParams
 
 

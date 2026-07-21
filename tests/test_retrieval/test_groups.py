@@ -1,9 +1,9 @@
-from src.retrieval.groups import GROUPS, GROUP_SET, GROUP_PRIORITY, pick_priority
+from src.retrieval.groups import GROUP_SET, GROUPS, pick_priority
 
 
 def test_enum_is_the_six_groups():
     assert GROUPS == ("news", "analytics", "digest", "opinion", "official", "data")
-    assert GROUP_SET == frozenset(GROUPS)
+    assert frozenset(GROUPS) == GROUP_SET
     assert "official" in GROUP_SET
     assert "sport" not in GROUP_SET
 

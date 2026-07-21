@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from llama_index.core.vector_stores import FilterOperator
+
 from src.retrieval.date_filters import DateBounds
 from src.retrieval.group_filter import (
     GROUP_FIELD,
