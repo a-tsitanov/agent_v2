@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 from src.graph.schema import EntityType
@@ -43,6 +44,39 @@ ID_TYPES: list[str] = [
     "BIC",
     "BankAccount",
 ]
+
+_ID_TYPES_SET = frozenset(ID_TYPES)
+# A name is "number-ish" if, stripped of digits/%/spaces/currency/punctuation,
+# nothing meaningful remains (e.g. "60%", "7,2 трлн" → drop; "822" → drop).
+_NUMERISH_RE = re.compile(
+    r"^[\d\s.,%€$₽+–—-]*(?:трлн|млрд|млн|тыс|%)?[\d\s.,%€$₽+–—-]*$", re.IGNORECASE
+)
+
+
+def is_meaningful_entity(
+    name: str | None, type: str | None, *, exclude_identifiers: bool = True
+) -> bool:
+    """Whether an entity row is worth showing in a themes/events answer.
+
+    Always drops: empty/single-char names and names equal to their own type
+    label (e.g. "Concept"/"Concept"). When ``exclude_identifiers`` (default
+    True), also drops identifier-typed rows (``ID_TYPES``) and pure
+    number/percent/amount names (e.g. "60%", "7,2 трлн", "822") — pass
+    ``exclude_identifiers=False`` to opt back into raw identifier-ish rows.
+    Keeps genuine named entities/events.
+    """
+    n = (name or "").strip()
+    if len(n) < 2:
+        return False
+    if type and n.lower() == type.lower():
+        return False
+    if exclude_identifiers:
+        if (type or "") in _ID_TYPES_SET:
+            return False
+        if _NUMERISH_RE.match(n):
+            return False
+    return True
+
 
 _EPOCH = date(1970, 1, 1)
 

@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
-from src.analytics.ids import clamp_top_n
+from src.analytics.ids import clamp_top_n, is_meaningful_entity
 from src.config import settings
 from src.graph.events_graph_ops import build_events_graph_ops
 from src.retrieval.date_filters import today_epoch_days
@@ -21,6 +21,7 @@ class _Params(BaseModel):
 class NewEventsParams(_Params):
     window_days: int | None = None
     type: str | None = None
+    exclude_identifiers: bool = True
     top_n: int = 25
 
 
@@ -29,13 +30,19 @@ async def new_events(
     *,
     window_days: int | None = None,
     type: str | None = None,
+    exclude_identifiers: bool = True,
     top_n: int = 25,
 ) -> PrimitiveResult:
     top_n = clamp_top_n(top_n, default=25)
     wd = window_days if window_days is not None else settings.events.new_window_days
     since = today_epoch_days() - int(wd)
     cypher = "events_graph_ops.new_entities ;; events_graph_ops.new_edges"
-    params = {"since": since, "top_n": top_n, "type": type}
+    params = {
+        "since": since,
+        "top_n": top_n,
+        "type": type,
+        "exclude_identifiers": exclude_identifiers,
+    }
     if store is None:
         return PrimitiveResult(cypher=cypher, params=params, rows=[])
     ops = build_events_graph_ops(store)
@@ -43,6 +50,11 @@ async def new_events(
     edges = await asyncio.to_thread(ops.new_edges, since, top_n)
     if type:
         ents = [e for e in ents if e.get("type") == type]
+    ents = [
+        e
+        for e in ents
+        if is_meaningful_entity(e.get("name"), e.get("type"), exclude_identifiers=exclude_identifiers)
+    ]
     rows = [{"kind": "entity", **e} for e in ents] + [{"kind": "edge", **e} for e in edges]
     rows.sort(key=lambda r: r.get("created_at", 0), reverse=True)
     return PrimitiveResult(cypher=cypher, params=params, rows=rows[:top_n])
