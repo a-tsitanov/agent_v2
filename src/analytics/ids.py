@@ -52,6 +52,11 @@ _NUMERISH_RE = re.compile(
     r"^[\d\s.,%€$₽+–—-]*(?:трлн|млрд|млн|тыс|%)?[\d\s.,%€$₽+–—-]*$", re.IGNORECASE
 )
 
+# A name that is really a URL, not an entity (e.g. "https://kod.ru/niva").
+# Conservative on purpose: only the unambiguous `scheme://` / leading `www.`
+# shapes trip it, so dotted real names ("U.S.A.", "BAE Systems") never match.
+_URL_RE = re.compile(r"^(?:https?://|www\.)|://", re.IGNORECASE)
+
 
 def is_meaningful_entity(
     name: str | None, type: str | None, *, exclude_identifiers: bool = True
@@ -60,8 +65,9 @@ def is_meaningful_entity(
 
     Always drops: empty/single-char names and names equal to their own type
     label (e.g. "Concept"/"Concept"). When ``exclude_identifiers`` (default
-    True), also drops identifier-typed rows (``ID_TYPES``) and pure
-    number/percent/amount names (e.g. "60%", "7,2 трлн", "822") — pass
+    True), also drops identifier-typed rows (``ID_TYPES``), pure
+    number/percent/amount names (e.g. "60%", "7,2 трлн", "822"), and
+    URL-shaped names (e.g. "https://kod.ru/niva") — pass
     ``exclude_identifiers=False`` to opt back into raw identifier-ish rows.
     Keeps genuine named entities/events.
     """
@@ -74,6 +80,8 @@ def is_meaningful_entity(
         if (type or "") in _ID_TYPES_SET:
             return False
         if _NUMERISH_RE.match(n):
+            return False
+        if _URL_RE.search(n):
             return False
     return True
 

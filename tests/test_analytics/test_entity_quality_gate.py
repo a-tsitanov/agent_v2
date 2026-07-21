@@ -22,3 +22,17 @@ def test_keeps_real_entities():
     assert is_meaningful_entity("Вячеслав Володин", "Person")
     assert is_meaningful_entity("Дагестан", "Location")
     assert is_meaningful_entity("Anti-Access And Area-Denial", "Concept")
+
+
+def test_drops_url_named_entities():
+    assert not is_meaningful_entity("https://kod.ru/niva", "Concept")
+    assert not is_meaningful_entity("http://x.io", "Document")
+    assert not is_meaningful_entity("www.example.com/page", "Topic")
+    # opt-out still surfaces raw identifier-ish rows, including URLs
+    assert is_meaningful_entity("https://kod.ru/niva", "Concept", exclude_identifiers=False)
+
+
+def test_keeps_dotted_real_names_not_mistaken_for_urls():
+    assert is_meaningful_entity("U.S.A.", "Location")
+    assert is_meaningful_entity("BAE Systems", "Organization")
+    assert is_meaningful_entity("Anti-Access And Area-Denial", "Concept")

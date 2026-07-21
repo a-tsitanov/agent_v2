@@ -48,10 +48,19 @@ async def test_execute_step_unknown_primitive_returns_empty(monkeypatch):
     assert sr.rows == [] and sr.row_count == 0
 
 
+class _MentionsStore:
+    """Minimal graph-store stub shaped like the real top_entities_by_mentions
+    graph-op output ({name, mentions} — no type/label key), so the row
+    survives the is_meaningful_entity gate applied in the primitive."""
+
+    def structured_query(self, cypher: str, param_map: dict | None = None) -> list[dict]:
+        return [{"name": "Acme Corp", "mentions": 5}]
+
+
 @pytest.mark.asyncio
 async def test_execute_step_injects_top_n_when_omitted(monkeypatch):
     """When the primitive param_model has top_n and caller omits it, default is injected."""
-    monkeypatch.setattr(act, "build_graph_store", lambda: _Store())
+    monkeypatch.setattr(act, "build_graph_store", lambda: _MentionsStore())
     # top_entities_by_mentions has a top_n field; we omit it from params
     p = ExecInput(
         call=PrimitiveCall(
