@@ -56,8 +56,8 @@ def bounds_from_iso(
     return DateBounds(_c(doc_after), _c(doc_before), _c(ins_after), _c(ins_before))
 
 
-def to_metadata_filters(b: DateBounds) -> MetadataFilters | None:
-    """Milvus push-down filter for whichever bounds are set (None if none)."""
+def date_metadata_filters(b: DateBounds) -> list[MetadataFilter]:
+    """The per-bound Milvus MetadataFilter list (empty when no bound set)."""
     f: list[MetadataFilter] = []
     if b.doc_after is not None:
         f.append(MetadataFilter(key=DOC_DATE_FIELD, value=b.doc_after, operator=FilterOperator.GTE))
@@ -67,6 +67,12 @@ def to_metadata_filters(b: DateBounds) -> MetadataFilters | None:
         f.append(MetadataFilter(key=INSERTED_AT_FIELD, value=b.ins_after, operator=FilterOperator.GTE))
     if b.ins_before is not None:
         f.append(MetadataFilter(key=INSERTED_AT_FIELD, value=b.ins_before, operator=FilterOperator.LTE))
+    return f
+
+
+def to_metadata_filters(b: DateBounds) -> MetadataFilters | None:
+    """Milvus push-down filter for whichever bounds are set (None if none)."""
+    f = date_metadata_filters(b)
     if not f:
         return None
     return MetadataFilters(filters=f, condition=FilterCondition.AND)
