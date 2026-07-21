@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from src.analytics.catalog import Primitive, PrimitiveResult, register
-from src.analytics.ids import ID_TYPES, clamp_top_n
+from src.analytics.ids import ID_TYPES, clamp_top_n, is_meaningful_entity
 from src.graph.aggregations_graph_ops import build_aggregations_graph_ops
 
 
@@ -133,7 +133,16 @@ async def top_entities_by_mentions(
         build_aggregations_graph_ops(store).top_entities_by_mentions,
         type, top_n, exclude_identifiers,
     )
-    return PrimitiveResult(cypher=cypher, params=params, rows=rows, truncated=len(rows) >= top_n)
+    truncated = len(rows) >= top_n
+    # The graph-op only returns {name, mentions} (no type/label key), so
+    # row.get("type") is None here in practice — still worth applying since
+    # it usefully drops empty/<2-char/numerish/URL-shaped names.
+    rows = [
+        r
+        for r in rows
+        if is_meaningful_entity(r.get("name"), r.get("type"), exclude_identifiers=exclude_identifiers)
+    ]
+    return PrimitiveResult(cypher=cypher, params=params, rows=rows, truncated=truncated)
 
 
 class TopByDegreeParams(_Params):

@@ -151,7 +151,7 @@ async def test_distribution_by_polarity_routes_through_seam(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_top_entities_by_mentions_routes_through_seam(monkeypatch):
-    ops = _FakeOps(top_entities_by_mentions=[{"name": "X", "mentions": 9}])
+    ops = _FakeOps(top_entities_by_mentions=[{"name": "Acme Corp", "mentions": 9}])
     _patch_ops(monkeypatch, ops)
 
     res = await agg.top_entities_by_mentions(
@@ -159,7 +159,30 @@ async def test_top_entities_by_mentions_routes_through_seam(monkeypatch):
     )
 
     assert ops.calls["top_entities_by_mentions"] == ("Organization", 10, True)
-    assert res.rows[0]["name"] == "X"
+    assert res.rows[0]["name"] == "Acme Corp"
+
+
+@pytest.mark.asyncio
+async def test_top_entities_by_mentions_filters_degenerate_rows(monkeypatch):
+    """The most-mentioned-entities surface must not let degenerate names
+    (numerish, URL-shaped, name==type, single-char) through, even though the
+    graph-op only returns {name, mentions} with no type/label key."""
+    ops = _FakeOps(
+        top_entities_by_mentions=[
+            {"name": "BAE Systems", "mentions": 12},
+            {"name": "60%", "type": "Metric", "mentions": 9},
+            {"name": "https://kod.ru/niva", "mentions": 5},
+            {"name": "Concept", "type": "Concept", "mentions": 3},
+            {"name": "X", "mentions": 1},
+            {"name": "Дагестан", "mentions": 2},
+        ]
+    )
+    _patch_ops(monkeypatch, ops)
+
+    res = await agg.top_entities_by_mentions(object(), top_n=10)
+
+    names = {r["name"] for r in res.rows}
+    assert names == {"BAE Systems", "Дагестан"}
 
 
 @pytest.mark.asyncio
