@@ -21,6 +21,11 @@ Two modes:
 * **Backfill (--channels @a,@b).** Legacy one-shot: last --limit messages
   per named channel, no state, may create duplicates if repeated.
 
+* **Reingest (--reingest @a,@b).** Manual re-read: newest --reingest-limit
+  messages per channel, posted at LOW priority (drains only when the live
+  lane is idle). The channel must be in a --folders folder; each doc is
+  tagged with that folder's group. Does NOT touch the sync --state cursor.
+
 DATE SEMANTICS: ``document_date`` sent to /ingest = the message's ORIGINAL
 POST date (``msg.date``, UTC) — so doc-date filters and the analytics
 time axis reflect when the post was written, NOT when it was ingested
@@ -403,7 +408,8 @@ def main() -> int:
 
     p = argparse.ArgumentParser(
         description="Sync TG channels+groups into the ingest queue "
-        "(default: continuous, restart-safe; --channels = legacy one-shot backfill).",
+        "(default: continuous, restart-safe; --channels = legacy one-shot backfill; "
+        "--reingest = manual low-priority channel reingest).",
     )
     p.add_argument("--channels", default=None, help="legacy backfill: comma-separated, e.g. @a,@b")
     p.add_argument("--limit", type=int, default=50, help="backfill: messages per channel")
