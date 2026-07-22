@@ -386,6 +386,16 @@ async def sync_round(
     return tally
 
 
+def select_mode(args: Any) -> str:
+    """Choose the run mode from parsed args: reingest wins over the legacy
+    backfill, which wins over the default continuous sync."""
+    if getattr(args, "reingest", None):
+        return "reingest"
+    if getattr(args, "channels", None):
+        return "backfill"
+    return "sync"
+
+
 def main() -> int:
     import argparse
     import asyncio
@@ -413,6 +423,15 @@ def main() -> int:
         "--folders", default=None,
         help="sync: comma-separated TG folder names — only dialogs from these "
         "folders are synced (default: all channels+groups of the account)",
+    )
+    p.add_argument(
+        "--reingest", default=None,
+        help="reingest mode: comma-separated @channel/id to re-read (must be in "
+        "a --folders folder); posts newest --reingest-limit msgs at low priority",
+    )
+    p.add_argument(
+        "--reingest-limit", type=int, default=100,
+        help="reingest: newest N messages per channel (default 100)",
     )
     args = p.parse_args()
 
@@ -493,8 +512,47 @@ def main() -> int:
                     break
                 await asyncio.sleep(args.poll_interval)
 
+    async def _run_reingest() -> int:
+        import httpx
+        from telethon import TelegramClient
+        from telethon import utils as tg_utils
+        from telethon.tl import functions
+
+        channels = [c.strip() for c in args.reingest.split(",") if c.strip()]
+        folder_names = [n for n in (args.folders or "").split(",") if n.strip()]
+        async with (
+            TelegramClient(args.session, api_id, api_hash) as tg,
+            httpx.AsyncClient(timeout=30.0) as http,
+        ):
+            dialogs = select_dialogs([d async for d in tg.iter_dialogs()])
+            res = await tg(functions.messages.GetDialogFiltersRequest())
+            filters = getattr(res, "filters", res)
+            group_map = resolve_group_map(filters, peer_id=tg_utils.get_peer_id)
+            spec = None
+            if folder_names:
+                spec, missing = resolve_folders(
+                    filters, folder_names, peer_id=tg_utils.get_peer_id,
+                )
+                if missing:
+                    logger.warning(
+                        "tg_ingest reingest: folders not found: {m}", m=missing,
+                    )
+            _tally, errors = await reingest_channels(
+                tg, http,
+                dialogs=dialogs, channels=channels, spec=spec,
+                group_map=group_map, limit=args.reingest_limit,
+                api_base=args.api_base, api_key=args.api_key,
+                queue=args.queue, priority=PRIO_BACKFILL,
+            )
+            for e in errors:
+                logger.error("tg_ingest reingest: {e}", e=e)
+            return 2 if errors else 0
+
+    mode = select_mode(args)
     try:
-        asyncio.run(_run_backfill() if args.channels else _run_sync())
+        if mode == "reingest":
+            return asyncio.run(_run_reingest())
+        asyncio.run(_run_backfill() if mode == "backfill" else _run_sync())
     except KeyboardInterrupt:
         logger.info("tg_ingest: stopped by user (state is saved per-message)")
     return 0

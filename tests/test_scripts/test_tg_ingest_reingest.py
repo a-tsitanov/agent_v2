@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
-from scripts.tg_ingest import reingest_channels
+from scripts.tg_ingest import reingest_channels, select_mode
 
 
 class _FakeMsg:
@@ -121,3 +122,16 @@ async def test_reingest_matches_by_numeric_id_when_no_spec():
     )
     assert errors == []
     assert [f for f, _ in http.posted] == ["tg_-100333_7.txt"]
+
+
+def test_select_mode_prefers_reingest():
+    args = SimpleNamespace(reingest="@a", channels="@b")
+    assert select_mode(args) == "reingest"
+
+
+def test_select_mode_backfill_when_channels_only():
+    assert select_mode(SimpleNamespace(reingest=None, channels="@b")) == "backfill"
+
+
+def test_select_mode_sync_by_default():
+    assert select_mode(SimpleNamespace(reingest=None, channels=None)) == "sync"
