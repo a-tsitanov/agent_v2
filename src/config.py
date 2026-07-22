@@ -17,6 +17,8 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from src.ingest_queue.priorities import PRIO_LIVE
+
 # Two physical model tiers operators actually manage:
 #   * ``small`` — local, high-volume (extraction, judge, search, plan, …)
 #   * ``large`` — final user-facing synthesis only.
@@ -1079,7 +1081,10 @@ class RabbitMQSettings(BaseSettings):
     # lane (PRIO_BACKFILL=0) drain only when the live feed (PRIO_LIVE=5) has
     # nothing waiting. Immutable per queue: changing it needs a delete +
     # redeclare of the queue (see docs/runbook/reingest-and-priority.md).
-    max_priority: int = Field(default=10, ge=1, le=255)
+    # Floor is PRIO_LIVE: a max below the live priority would fail the
+    # route's ``0 <= PRIO_LIVE <= max_priority`` check and 422 all live
+    # ingest.
+    max_priority: int = Field(default=10, ge=PRIO_LIVE, le=255)
 
     @field_validator("queues", mode="before")
     @classmethod

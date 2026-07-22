@@ -433,7 +433,8 @@ def main() -> int:
     p.add_argument(
         "--reingest", default=None,
         help="reingest mode: comma-separated @channel/id to re-read (must be in "
-        "a --folders folder); posts newest --reingest-limit msgs at low priority",
+        "a --folders folder); posts newest --reingest-limit msgs at low priority "
+        "(requires --folders)",
     )
     p.add_argument(
         "--reingest-limit", type=int, default=100,
@@ -526,6 +527,12 @@ def main() -> int:
 
         channels = [c.strip() for c in args.reingest.split(",") if c.strip()]
         folder_names = [n for n in (args.folders or "").split(",") if n.strip()]
+        if not folder_names:
+            logger.error(
+                "tg_ingest reingest: --folders is required (a channel must be "
+                "in a tracked folder to reingest); refusing to run",
+            )
+            return 2
         async with (
             TelegramClient(args.session, api_id, api_hash) as tg,
             httpx.AsyncClient(timeout=30.0) as http,

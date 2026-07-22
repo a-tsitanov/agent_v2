@@ -20,9 +20,20 @@ would be lost):
     # then delete — the app redeclares it with x-max-priority on next connect:
     rabbitmqadmin delete queue name=ingest.pending
 
+`declare_ingest_topology` stamps `x-max-priority` on EVERY queue listed in
+`RABBITMQ_QUEUES`, so repeat the delete+redeclare for each one. The deployed
+config is single-queue (`ingest.pending`), so today that's the only queue to
+migrate — but check `RABBITMQ_QUEUES` before assuming.
+
 Set `RABBITMQ_MAX_PRIORITY` (default 10) in `.env` if you want a different
 ceiling. Restart the API + consumer so `declare_ingest_topology` recreates the
 queue with the priority arg. The DLQ needs no change.
+
+If this code is deployed before the migration runs, the failure is loud, not
+silent: publishes against the un-migrated queue return 500, and the consumer
+crash-loops on the same queue-args mismatch — both fail obviously (not silent
+corruption) until the queue is deleted per above, at which point both recover
+on their own.
 
 ## Running a reingest
 One-off container run, reusing the mounted Telethon session + folders:

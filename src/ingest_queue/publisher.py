@@ -44,6 +44,11 @@ async def publish_ingest(
     default the first configured).  The caller (/ingest) has already
     validated ``queue`` ∈ ``RabbitMQSettings.queues``.
 
+    ``priority`` defaults to ``PRIO_LIVE``; manual reingest passes
+    ``PRIO_BACKFILL`` instead. RabbitMQ delivers a lower-priority message
+    to a free consumer slot only when no higher-priority message is ready,
+    so backfill drains only when the live feed is idle.
+
     ``message_id`` = ``doc_id`` so the payload is dedup-friendly and
     traceable; ``PERSISTENT`` so an enqueued document survives a broker
     restart before the consumer admits it."""
