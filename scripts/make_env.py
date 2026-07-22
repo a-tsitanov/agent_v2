@@ -352,6 +352,7 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "RABBITMQ_DLQ": "Имя dead-letter очереди (парная к RABBITMQ_DLX).",
     "RABBITMQ_CONSUMER_TIMEOUT_MS": "x-consumer-timeout очереди, мс: сколько брокер ждёт ack по in-flight документу прежде чем закрыть канал (держать больше максимальной длительности ингеста одного документа).",
     "RABBITMQ_REQUEUE_ON_FAILURE": "true → возвращать сообщение в очередь при падении обработки (после ретраев), false → в DLQ.",
+    "RABBITMQ_MAX_PRIORITY": "Максимальный приоритет сообщений очередей ингеста (x-max-priority): живой ингест публикуется с приоритетом 5, ручной reingest канала — с 0, поэтому низкоприоритетная полоса раскидывается только когда в основной нет сообщений. Смена значения требует пересоздания очереди.",
     "NEO4J_URI": "Bolt-URI Neo4j (напр. bolt://localhost:7687).",
     "NEO4J_USER": "Пользователь Neo4j.",
     # ── PostgresSettings (POSTGRES_*) — метаданные / ingest_metrics ──

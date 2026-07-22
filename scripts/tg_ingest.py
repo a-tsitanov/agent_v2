@@ -21,6 +21,11 @@ Two modes:
 * **Backfill (--channels @a,@b).** Legacy one-shot: last --limit messages
   per named channel, no state, may create duplicates if repeated.
 
+* **Reingest (--reingest @a,@b).** Manual re-read: newest --reingest-limit
+  messages per channel, posted at LOW priority (drains only when the live
+  lane is idle). The channel must be in a --folders folder; each doc is
+  tagged with that folder's group. Does NOT touch the sync --state cursor.
+
 DATE SEMANTICS: ``document_date`` sent to /ingest = the message's ORIGINAL
 POST date (``msg.date``, UTC) — so doc-date filters and the analytics
 time axis reflect when the post was written, NOT when it was ingested
@@ -48,6 +53,7 @@ from typing import Any
 
 from loguru import logger
 
+from src.ingest_queue.priorities import PRIO_BACKFILL
 from src.retrieval.groups import GROUP_SET, pick_priority
 
 # How many chars of each message body to echo in the per-message "sent" log
@@ -74,6 +80,7 @@ async def post_ingest(
     document_date: str,
     queue: str | None,
     group: str = "",
+    priority: int | None = None,
 ) -> bool:
     """POST one document to /api/v1/ingest (multipart). True on 2xx; fail-soft."""
     data: dict[str, str] = {"document_date": document_date}
@@ -81,6 +88,8 @@ async def post_ingest(
         data["queue"] = queue
     if group:
         data["group"] = group
+    if priority is not None:
+        data["priority"] = str(priority)
     try:
         resp = await http.post(
             f"{api_base}/api/v1/ingest",
@@ -117,6 +126,57 @@ async def read_and_enqueue(
             tally["sent" if ok else "failed"] += 1
     logger.info("tg_ingest tally: {t}", t=dict(tally))
     return tally
+
+
+async def reingest_channels(
+    tg_client: Any,
+    http: Any,
+    *,
+    dialogs: list[Any],
+    channels: list[str],
+    spec: dict | None,
+    group_map: dict[int, str],
+    limit: int,
+    api_base: str,
+    api_key: str,
+    queue: str | None,
+    priority: int,
+) -> tuple[Counter, list[str]]:
+    """Reingest the newest ``limit`` messages of each requested channel at
+    ``priority``. A channel token is matched to an account dialog by
+    ``@username`` (case-insensitive) or numeric id; when ``spec`` is given the
+    dialog must also be in those folders (else an error, and none of its
+    messages are posted). Each posted doc is tagged with the channel's folder
+    group. The live sync cursor (``--state``) is never read or written here.
+    Returns ``(tally, errors)``; a non-empty ``errors`` means the caller should
+    exit non-zero."""
+    by_slug = {dialog_slug(d).lstrip("@").casefold(): d for d in dialogs}
+    by_id = {str(d.id): d for d in dialogs}
+    tally: Counter = Counter()
+    errors: list[str] = []
+    for token in channels:
+        dialog = by_slug.get(token.lstrip("@").casefold()) or by_id.get(token)
+        if dialog is None:
+            errors.append(f"{token}: not found among account dialogs")
+            continue
+        if spec is not None and not dialog_in_folders(dialog, spec):
+            errors.append(f"{token}: not in the configured folders")
+            continue
+        group = group_map.get(dialog.id, "")
+        slug = dialog_slug(dialog)
+        async for msg in tg_client.iter_messages(dialog.entity, limit=limit, reverse=True):
+            doc = _message_to_doc(msg, slug)
+            if doc is None:
+                tally["skipped"] += 1
+                continue
+            filename, text, document_date = doc
+            ok = await post_ingest(
+                http, api_base, api_key, filename, text, document_date, queue,
+                group=group, priority=priority,
+            )
+            tally["sent" if ok else "failed"] += 1
+    logger.info("tg_ingest reingest tally: {t}", t=dict(tally))
+    return tally, errors
 
 
 # ── continuous sync mode (channels + groups, restart-safe dedup) ─────
@@ -331,6 +391,16 @@ async def sync_round(
     return tally
 
 
+def select_mode(args: Any) -> str:
+    """Choose the run mode from parsed args: reingest wins over the legacy
+    backfill, which wins over the default continuous sync."""
+    if getattr(args, "reingest", None):
+        return "reingest"
+    if getattr(args, "channels", None):
+        return "backfill"
+    return "sync"
+
+
 def main() -> int:
     import argparse
     import asyncio
@@ -338,7 +408,8 @@ def main() -> int:
 
     p = argparse.ArgumentParser(
         description="Sync TG channels+groups into the ingest queue "
-        "(default: continuous, restart-safe; --channels = legacy one-shot backfill).",
+        "(default: continuous, restart-safe; --channels = legacy one-shot backfill; "
+        "--reingest = manual low-priority channel reingest).",
     )
     p.add_argument("--channels", default=None, help="legacy backfill: comma-separated, e.g. @a,@b")
     p.add_argument("--limit", type=int, default=50, help="backfill: messages per channel")
@@ -358,6 +429,16 @@ def main() -> int:
         "--folders", default=None,
         help="sync: comma-separated TG folder names — only dialogs from these "
         "folders are synced (default: all channels+groups of the account)",
+    )
+    p.add_argument(
+        "--reingest", default=None,
+        help="reingest mode: comma-separated @channel/id to re-read (must be in "
+        "a --folders folder); posts newest --reingest-limit msgs at low priority "
+        "(requires --folders)",
+    )
+    p.add_argument(
+        "--reingest-limit", type=int, default=100,
+        help="reingest: newest N messages per channel (default 100)",
     )
     args = p.parse_args()
 
@@ -438,8 +519,53 @@ def main() -> int:
                     break
                 await asyncio.sleep(args.poll_interval)
 
+    async def _run_reingest() -> int:
+        import httpx
+        from telethon import TelegramClient
+        from telethon import utils as tg_utils
+        from telethon.tl import functions
+
+        channels = [c.strip() for c in args.reingest.split(",") if c.strip()]
+        folder_names = [n for n in (args.folders or "").split(",") if n.strip()]
+        if not folder_names:
+            logger.error(
+                "tg_ingest reingest: --folders is required (a channel must be "
+                "in a tracked folder to reingest); refusing to run",
+            )
+            return 2
+        async with (
+            TelegramClient(args.session, api_id, api_hash) as tg,
+            httpx.AsyncClient(timeout=30.0) as http,
+        ):
+            dialogs = select_dialogs([d async for d in tg.iter_dialogs()])
+            res = await tg(functions.messages.GetDialogFiltersRequest())
+            filters = getattr(res, "filters", res)
+            group_map = resolve_group_map(filters, peer_id=tg_utils.get_peer_id)
+            spec = None
+            if folder_names:
+                spec, missing = resolve_folders(
+                    filters, folder_names, peer_id=tg_utils.get_peer_id,
+                )
+                if missing:
+                    logger.warning(
+                        "tg_ingest reingest: folders not found: {m}", m=missing,
+                    )
+            _tally, errors = await reingest_channels(
+                tg, http,
+                dialogs=dialogs, channels=channels, spec=spec,
+                group_map=group_map, limit=args.reingest_limit,
+                api_base=args.api_base, api_key=args.api_key,
+                queue=args.queue, priority=PRIO_BACKFILL,
+            )
+            for e in errors:
+                logger.error("tg_ingest reingest: {e}", e=e)
+            return 2 if errors else 0
+
+    mode = select_mode(args)
     try:
-        asyncio.run(_run_backfill() if args.channels else _run_sync())
+        if mode == "reingest":
+            return asyncio.run(_run_reingest())
+        asyncio.run(_run_backfill() if mode == "backfill" else _run_sync())
     except KeyboardInterrupt:
         logger.info("tg_ingest: stopped by user (state is saved per-message)")
     return 0

@@ -24,6 +24,7 @@ from urllib3.exceptions import MaxRetryError
 
 from src.api.auth import require_api_key
 from src.config import settings
+from src.ingest_queue.priorities import PRIO_LIVE
 from src.retrieval.date_filters import iso_to_epoch_days, today_epoch_days
 from src.retrieval.groups import GROUP_SET
 from src.storage.minio import S3Error, build_minio_storage
@@ -65,6 +66,7 @@ async def upload_document(
     document_date: str | None = Form(default=None),
     queue: str | None = Form(default=None),
     group: str = Form(default=""),
+    priority: int | None = Form(default=None),
     x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
     if not file.filename:
@@ -87,6 +89,19 @@ async def upload_document(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"unknown group {group!r}; allowed: {sorted(GROUP_SET)}",
+        )
+
+    # Optional ingest priority (rabbitmq backend only). Higher = served first;
+    # manual channel reingest posts PRIO_BACKFILL (0). None → live default.
+    # Validate against the queue's advertised max so an out-of-range value 422s
+    # before any upload/enqueue work. Ignored on the temporal backend.
+    resolved_priority = PRIO_LIVE if priority is None else priority
+    if settings.ingest_admission.backend == "rabbitmq" and not (
+        0 <= resolved_priority <= settings.rabbitmq.max_priority
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"priority must be 0..{settings.rabbitmq.max_priority}",
         )
 
     # Optional client document date (ISO YYYY-MM-DD) for date-filtered
@@ -190,7 +205,7 @@ async def upload_document(
     # once, each to completion, FIFO; `rabbitmq` = publish to a durable
     # queue a consumer drains at prefetch=K.  See src/workflow/ingest_submit.
     try:
-        await submit_document(client, params, queue=target_queue)
+        await submit_document(client, params, queue=target_queue, priority=resolved_priority)
     except WorkflowAlreadyStartedError as exc:
         # Reuse policy rejected the start: a workflow with this id is
         # already running or already completed successfully.  Don't

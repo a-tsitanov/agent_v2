@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.config import settings
+from src.ingest_queue.priorities import PRIO_LIVE
 from src.workflow.contracts import IngestParams
 from src.workflow.ingest_submit import submit_document
 
@@ -43,11 +44,11 @@ async def test_rabbitmq_backend_publishes_and_skips_temporal(monkeypatch) -> Non
 
     # Inject a fake publisher module so the lazy import in submit_document
     # resolves without aio_pika / a live broker.
-    published: list[IngestParams] = []
+    published: list = []
     fake_mod = types.ModuleType("src.ingest_queue.publisher")
 
-    async def _publish(p: IngestParams, queue: str | None = None) -> None:
-        published.append((p, queue))
+    async def _publish(p, queue=None, priority=None):
+        published.append((p, queue, priority))
 
     fake_mod.publish_ingest = _publish
     monkeypatch.setitem(sys.modules, "src.ingest_queue.publisher", fake_mod)
@@ -56,5 +57,22 @@ async def test_rabbitmq_backend_publishes_and_skips_temporal(monkeypatch) -> Non
     params = _params()
     await submit_document(client, params, queue="ingest.bulk")
 
-    assert published == [(params, "ingest.bulk")]  # queue forwarded to publisher
+    assert published == [(params, "ingest.bulk", PRIO_LIVE)]  # default priority
     assert client.start_workflow.await_count == 0  # never touched Temporal
+
+
+@pytest.mark.asyncio
+async def test_rabbitmq_backend_forwards_explicit_priority(monkeypatch) -> None:
+    monkeypatch.setattr(settings.ingest_admission, "backend", "rabbitmq")
+    published: list = []
+    fake_mod = types.ModuleType("src.ingest_queue.publisher")
+
+    async def _publish(p, queue=None, priority=None):
+        published.append((queue, priority))
+
+    fake_mod.publish_ingest = _publish
+    monkeypatch.setitem(sys.modules, "src.ingest_queue.publisher", fake_mod)
+
+    await submit_document(AsyncMock(), _params(), queue="ingest.pending", priority=0)
+
+    assert published == [("ingest.pending", 0)]
