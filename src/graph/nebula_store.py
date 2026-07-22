@@ -21,7 +21,27 @@ from src.config import settings
 from src.graph.nebula_schema import ensure_schema
 
 _store: NebulaGraphStore | None = None
+# Held at module scope only to keep the ConnectionPool alive for the life of
+# the process (a GC'd pool would close the reconnect path's sockets).
+_pool: Any = None
 _lock = threading.Lock()
+
+# graphd kills idle sessions server-side (session_idle_timeout_secs); the
+# cached session object then keeps failing every execute() with one of these
+# markers until re-acquired. Detect that so _run can self-heal (see the
+# reconnect closure in build_nebula_graph_store).
+_SESSION_DEAD_MARKERS = ("session not existed", "session not found")
+
+
+def _is_session_dead(resp: Any) -> bool:
+    """True when a failed ResultSet blames an expired/unknown session."""
+    try:
+        if resp is None or resp.is_succeeded():
+            return False
+        msg = (resp.error_msg() or "").lower()
+    except Exception:
+        return False
+    return any(m in msg for m in _SESSION_DEAD_MARKERS)
 
 
 def entity_vid(name: str) -> str:
@@ -53,8 +73,13 @@ def _q(value: Any) -> str:
 
 
 class NebulaGraphStore:
-    def __init__(self, session: Any):
+    def __init__(self, session: Any, reconnect: Any = None):
         self._session = session
+        # Optional zero-arg callable returning a fresh, space-selected
+        # session. Set by build_nebula_graph_store so _run can transparently
+        # re-acquire when graphd has expired the cached session (None in
+        # tests / direct construction → no self-heal, prior behaviour).
+        self._reconnect = reconnect
         # The nebula3 session/connection is NOT thread-safe: concurrent
         # execute() on one thrift socket desyncs the protocol → the graphd
         # returns 'Unknown client type'. This store is a shared singleton used
@@ -64,7 +89,22 @@ class NebulaGraphStore:
 
     def _run(self, stmt: str) -> Any:
         with self._exec_lock:
-            return self._session.execute(stmt)
+            try:
+                resp = self._session.execute(stmt)
+            except Exception:
+                # A hard socket/session failure — try one reconnect+retry
+                # before surfacing it (rare; graphd dropped the connection).
+                if self._reconnect is None:
+                    raise
+                self._session = self._reconnect()
+                return self._session.execute(stmt)
+            # A soft "Session not existed" ResultSet: re-acquire once and
+            # replay the statement on the fresh session.
+            if self._reconnect is not None and _is_session_dead(resp):
+                logger.warning("nebula: session expired — reconnecting and retrying")
+                self._session = self._reconnect()
+                resp = self._session.execute(stmt)
+            return resp
 
     # --- writes ---------------------------------------------------------
     def upsert_nodes(self, nodes: list[Any]) -> None:
@@ -303,8 +343,15 @@ def _rows_to_dicts(resp: Any) -> list[dict]:
 
 
 def build_nebula_graph_store() -> NebulaGraphStore:
-    """Process-global NebulaGraph store (mirrors build_neo4j_graph_store)."""
-    global _store
+    """Process-global NebulaGraph store (mirrors build_neo4j_graph_store).
+
+    The store is handed a ``reconnect`` closure so it can transparently
+    re-acquire a session when graphd expires the cached one (idle timeout) —
+    otherwise the singleton would fail every query with 'Session not existed'
+    for the rest of the process's life (seen on the rarely-used global-search
+    path). A fresh session must re-run ``ensure_schema`` because ``USE
+    <space>`` is per-session state."""
+    global _store, _pool
     if _store is not None:
         return _store
     with _lock:
@@ -315,7 +362,14 @@ def build_nebula_graph_store() -> NebulaGraphStore:
             cfg = settings.nebula
             pool = ConnectionPool()
             pool.init([(cfg.host, cfg.port)], Config())
-            sess = pool.get_session(cfg.user, cfg.password.get_secret_value())
-            ensure_schema(sess)
-            _store = NebulaGraphStore(sess)
+            user = cfg.user
+            password = cfg.password.get_secret_value()
+
+            def _new_session() -> Any:
+                sess = pool.get_session(user, password)
+                ensure_schema(sess)  # selects the space (USE) + idempotent DDL
+                return sess
+
+            _pool = pool  # keep the pool alive for the reconnect path
+            _store = NebulaGraphStore(_new_session(), reconnect=_new_session)
     return _store

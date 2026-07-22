@@ -10,27 +10,19 @@
 # (768) kept as legacy fallback — far weaker RU retrieval discrimination.
 
 model_list:
-  # ---- SMALL pool (2 deployments, simple-shuffle) ----
+  # 2026-07-22: BOTH tiers consolidated onto the host.docker.internal Ollama
+  # (gemma4:31b-cloud, paid "pro" tariff). The external efko/141.105 small
+  # nodes were removed — everything now runs on the one paid cloud model.
+  # Single physical endpoint ⇒ keep LLM_POOL_N low (=5) so batch fan-out
+  # (CommunityBuild summaries) doesn't overwhelm it.
+  # ---- SMALL pool ----
   - model_name: small
     litellm_params:
-      model: ollama_chat/gemma4:12b
-      api_base: https://ollama.efko-smart-systems-dev.ru
-      api_key: sk-change-me
+      model: ollama_chat/gemma4:31b-cloud
+      api_base: http://host.docker.internal:11434
       num_ctx: 16384
       think: false
-  - model_name: small
-    litellm_params:
-      model: ollama_chat/gemma4:e4b
-      api_base: http://141.105.69.136:11434
-      api_key: sk-change-me
-      num_ctx: 16384
-      think: false
-  # ---- LARGE pool (2 deployments) ----
-  - model_name: large
-    litellm_params:
-      model: openai/gemini-2.5-flash
-      api_base: https://openai.bothub.ru/v1
-      api_key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijc5OWQ0MzMxLWQ1MzUtNDE5Mi05YjA5LTNkM2U1Mjc3ZjI3OCIsImlzRGV2ZWxvcGVyIjp0cnVlLCJpYXQiOjE3ODQ1NTk0MDksImV4cCI6MjEwMDEzNTQwOSwianRpIjoiXzFtdEd5RjkyTDF6VmxhXyJ9.nAqdTNX0i9PE9QBjlLSB24nxDR0JNjJKd9ODvkcOhDM
+  # ---- LARGE pool ----
   - model_name: large
     litellm_params:
       model: ollama_chat/gemma4:31b-cloud
@@ -64,6 +56,9 @@ router_settings:
   # Cross-tier fallback: if every deployment in one alias group fails/times out,
   # spill to the other group (both are real model_names — a fallback to a
   # non-existent group like "gemma4:12b" hard-500s instead of falling back).
+  # small & large are now the SAME model on the SAME endpoint but distinct
+  # deployment entries — cross-fallback both ways so a per-deployment cooldown
+  # spills to its twin instead of hard-failing.
   fallbacks:
-    - small: ["large"]
     - large: ["small"]
+    - small: ["large"]

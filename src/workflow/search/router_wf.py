@@ -52,16 +52,26 @@ GLOBAL_WF = "GlobalSearchWorkflow"
 DRIFT_WF = "DriftSearchWorkflow"
 
 
-def dispatch_for_route(route: RouteLabel) -> str:
+def dispatch_for_route(route: RouteLabel, *, date_scoped: bool = False) -> str:
     """Pure: map a route label to the workflow that serves it.
 
     Unknown / unexpected labels fall back to the LOCAL flow (the safe
-    default — mirrors ``route_query``'s own fail-safe)."""
-    return {
+    default — mirrors ``route_query``'s own fail-safe).
+
+    ``date_scoped`` — the request carries a date bound (doc_date / created).
+    GLOBAL search (the community-summary map-reduce) has NO date fields on
+    its params and structurally cannot honour a date filter, so a
+    date-scoped question the router sent to GLOBAL is downgraded to LOCAL
+    (which applies the bound). DRIFT still leads with a date-aware local
+    pass, so it is left intact."""
+    target = {
         "local": LOCAL_WF,
         "global": GLOBAL_WF,
         "drift": DRIFT_WF,
     }.get(route, LOCAL_WF)
+    if date_scoped and target == GLOBAL_WF:
+        return LOCAL_WF
+    return target
 
 
 def merge_doc_ids(local: list[str], glob: list[str]) -> list[str]:
@@ -170,10 +180,25 @@ class AutoSearchWorkflow:
             schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
             retry_policy=FAST_RETRY,
         )
-        target = dispatch_for_route(route_res.route)
+        # A date-bounded request (doc_date / created) cannot be served by
+        # GLOBAL — its params carry no date fields — so downgrade global to
+        # local when any bound is set (see dispatch_for_route docstring).
+        date_scoped = any(
+            b is not None
+            for b in (
+                local_params.doc_date_after_epoch,
+                local_params.doc_date_before_epoch,
+                local_params.inserted_after_epoch,
+                local_params.inserted_before_epoch,
+            )
+        )
+        target = dispatch_for_route(route_res.route, date_scoped=date_scoped)
         self._state["route"] = route_res.route
         self._state["phase"] = "dispatch"
-        log.info("auto_search  route=%s → %s", route_res.route, target)
+        log.info(
+            "auto_search  route=%s date_scoped=%s → %s",
+            route_res.route, date_scoped, target,
+        )
 
         wf_id = workflow.info().workflow_id
         if target == GLOBAL_WF:
