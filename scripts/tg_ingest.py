@@ -74,6 +74,7 @@ async def post_ingest(
     document_date: str,
     queue: str | None,
     group: str = "",
+    priority: int | None = None,
 ) -> bool:
     """POST one document to /api/v1/ingest (multipart). True on 2xx; fail-soft."""
     data: dict[str, str] = {"document_date": document_date}
@@ -81,6 +82,8 @@ async def post_ingest(
         data["queue"] = queue
     if group:
         data["group"] = group
+    if priority is not None:
+        data["priority"] = str(priority)
     try:
         resp = await http.post(
             f"{api_base}/api/v1/ingest",

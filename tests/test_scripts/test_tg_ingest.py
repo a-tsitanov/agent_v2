@@ -350,3 +350,40 @@ def test_dialog_in_folders_include_exclude_and_flags():
     assert dialog_in_folders(chan, spec) is True       # флаг «каналы»
     assert dialog_in_folders(grp, spec) is False       # групп-флага нет
     assert dialog_in_folders(banned, spec) is False    # исключён из папки
+
+
+@pytest.mark.asyncio
+async def test_post_ingest_includes_priority_when_set():
+    sent = {}
+
+    class _Resp:
+        status_code = 202
+
+    class _Client:
+        async def post(self, url, headers=None, files=None, data=None):
+            sent.update(data=data)
+            return _Resp()
+
+    ok = await post_ingest(
+        _Client(), "http://api", "k", "f.txt", "hi", "2024-03-01", "q1",
+        group="news", priority=0,
+    )
+    assert ok is True
+    assert sent["data"]["priority"] == "0"
+    assert sent["data"]["group"] == "news"
+
+
+@pytest.mark.asyncio
+async def test_post_ingest_omits_priority_when_none():
+    sent = {}
+
+    class _Resp:
+        status_code = 202
+
+    class _Client:
+        async def post(self, url, headers=None, files=None, data=None):
+            sent.update(data=data)
+            return _Resp()
+
+    await post_ingest(_Client(), "http://api", "k", "f.txt", "hi", "2024-03-01", "q1")
+    assert "priority" not in sent["data"]
