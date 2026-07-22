@@ -48,3 +48,32 @@ def test_queues_parse_and_default():
     # empty → falls back to the single default queue.
     assert RabbitMQSettings(queues="").queues == ["ingest.pending"]
     assert RabbitMQSettings().default_queue == "ingest.pending"
+
+
+@pytest.mark.asyncio
+async def test_declares_queue_with_max_priority() -> None:
+    cfg = RabbitMQSettings(queues=["q1"], max_priority=7)
+
+    channel = MagicMock()
+    channel.declare_exchange = AsyncMock(return_value=MagicMock())
+    dlq = MagicMock()
+    dlq.bind = AsyncMock()
+    q1 = MagicMock()
+    channel.declare_queue = AsyncMock(side_effect=[dlq, q1])
+
+    await declare_ingest_topology(channel, cfg)
+
+    work_call = channel.declare_queue.call_args_list[1]  # skip the DLQ
+    assert work_call.kwargs["arguments"]["x-max-priority"] == 7
+
+
+def test_max_priority_default() -> None:
+    assert RabbitMQSettings().max_priority == 10
+
+
+def test_priority_constants() -> None:
+    from src.ingest_queue.priorities import PRIO_BACKFILL, PRIO_LIVE
+
+    assert PRIO_LIVE == 5
+    assert PRIO_BACKFILL == 0
+    assert PRIO_LIVE > PRIO_BACKFILL  # live must outrank backfill

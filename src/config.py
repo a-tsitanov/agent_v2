@@ -1073,6 +1073,13 @@ class RabbitMQSettings(BaseSettings):
     # and requeue every in-flight message → a storm of duplicate workflow
     # starts.  Set WELL above the longest document run (default 24h).
     consumer_timeout_ms: int = Field(default=86_400_000, ge=60_000)
+    # Max message priority the work queues advertise (x-max-priority).
+    # RabbitMQ delivers a lower-priority message to a free consumer slot only
+    # when no higher-priority message is ready — this makes the manual reingest
+    # lane (PRIO_BACKFILL=0) drain only when the live feed (PRIO_LIVE=5) has
+    # nothing waiting. Immutable per queue: changing it needs a delete +
+    # redeclare of the queue (see docs/runbook/reingest-and-priority.md).
+    max_priority: int = Field(default=10, ge=1, le=255)
 
     @field_validator("queues", mode="before")
     @classmethod

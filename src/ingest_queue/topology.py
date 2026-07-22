@@ -38,6 +38,7 @@ async def declare_ingest_topology(
     args = {
         "x-dead-letter-exchange": cfg.dlx,
         "x-consumer-timeout": cfg.consumer_timeout_ms,
+        "x-max-priority": cfg.max_priority,
     }
     queues = []
     for name in cfg.queues:
