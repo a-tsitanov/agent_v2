@@ -18,6 +18,7 @@ import aio_pika
 from loguru import logger
 
 from src.config import settings
+from src.ingest_queue.priorities import PRIO_LIVE
 from src.ingest_queue.topology import declare_ingest_topology
 from src.workflow.contracts import IngestParams
 
@@ -36,7 +37,9 @@ async def _get_connection() -> aio_pika.abc.AbstractRobustConnection:
     return _connection
 
 
-async def publish_ingest(params: IngestParams, queue: str | None = None) -> None:
+async def publish_ingest(
+    params: IngestParams, queue: str | None = None, priority: int = PRIO_LIVE,
+) -> None:
     """Publish one document to a configured ingest queue (``queue``,
     default the first configured).  The caller (/ingest) has already
     validated ``queue`` ∈ ``RabbitMQSettings.queues``.
@@ -56,6 +59,7 @@ async def publish_ingest(params: IngestParams, queue: str | None = None) -> None
                 content_type="application/json",
                 delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
                 message_id=params.doc_id,
+                priority=priority,
             ),
             routing_key=target,
         )
