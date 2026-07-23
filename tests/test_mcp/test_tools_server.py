@@ -24,6 +24,9 @@ _EXPECTED_TOOLS = {
     "graph_components",
     "graph_shortest_path",
     "graph_stats",
+    # Ingest statistics over the documents pipeline.
+    "channel_message_stats",
+    "channel_message_timeline",
 }
 
 
@@ -107,6 +110,73 @@ async def test_vector_search_schema_has_query_and_top_k():
     props = schema.get("properties", {})
     assert "query" in props
     assert "top_k" in props
+
+
+@pytest.mark.asyncio
+async def test_channel_message_stats_schema_has_group_by():
+    from src.mcp import tools_server
+    tools = await tools_server.mcp._list_tools()
+    by_name = {t.name: t for t in tools}
+    props = by_name["channel_message_stats"].parameters.get("properties", {})
+    assert "group_by" in props
+    assert "since" in props
+    assert "until" in props
+
+
+@pytest.mark.asyncio
+async def test_channel_message_stats_maps_group_by_and_calls_pg(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from src.mcp import tools_server
+    from src.storage.postgres import AsyncPostgres
+
+    fake = [{"key": "alpha", "total": 3, "pending": 0, "processing": 0,
+             "completed": 2, "vector_only": 0, "failed": 1, "skipped": 0}]
+    m = AsyncMock(return_value=fake)
+    monkeypatch.setattr(AsyncPostgres, "status_counts_by", m)
+
+    out = await tools_server._stats_by("group", None, None)
+    assert out == {"group_by": "group", "rows": fake}
+    # 'group' → source_group dimension, passed positionally to the method.
+    assert m.call_args.args[0] == "source_group"
+
+
+@pytest.mark.asyncio
+async def test_channel_message_stats_bad_group_by_errors():
+    from src.mcp import tools_server
+    out = await tools_server._stats_by("bogus", None, None)
+    assert "error" in out
+
+
+@pytest.mark.asyncio
+async def test_channel_message_stats_bad_date_errors():
+    from src.mcp import tools_server
+    out = await tools_server._stats_by("channel", "not-a-date", None)
+    assert "error" in out
+
+
+@pytest.mark.asyncio
+async def test_channel_message_timeline_stringifies_day(monkeypatch):
+    from datetime import date
+    from unittest.mock import AsyncMock
+
+    from src.mcp import tools_server
+    from src.storage.postgres import AsyncPostgres
+
+    monkeypatch.setattr(
+        AsyncPostgres, "timeline_counts",
+        AsyncMock(return_value=[{"day": date(2026, 7, 21), "count": 5}]),
+    )
+    out = await tools_server._timeline("doc_date", None, None, None, None, None)
+    assert out["date_field"] == "doc_date"
+    assert out["buckets"] == [{"day": "2026-07-21", "count": 5}]
+
+
+@pytest.mark.asyncio
+async def test_channel_message_timeline_bad_date_field_errors():
+    from src.mcp import tools_server
+    out = await tools_server._timeline("bogus", None, None, None, None, None)
+    assert "error" in out
 
 
 @pytest.mark.asyncio

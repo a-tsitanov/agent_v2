@@ -388,6 +388,108 @@ async def graph_stats() -> dict[str, Any]:
     return await analysis.graph_stats(await _gs())
 
 
+# ── ingest statistics (Postgres `documents` pipeline) ──────────────
+#
+# NOT retrieval and NOT graph: a direct read over the `documents` table's
+# per-channel / per-group processing state.  Deliberately BYPASSES _init()
+# (no retriever/graph bootstrap needed for a plain Postgres aggregate) and
+# calls AsyncPostgres — the SAME aggregation methods the /api/v1/stats REST
+# routes and the message_stats CLI use, so all three surfaces report identical
+# numbers.  The thin `_stats_by` / `_timeline` helpers hold the validation so
+# they stay unit-testable without FastMCP tool-invocation internals.
+
+
+async def _stats_by(
+    group_by: str, since: str | None, until: str | None,
+) -> dict[str, Any]:
+    from datetime import date
+
+    from src.storage.postgres import GROUP_BY_COLUMN, AsyncPostgres
+
+    dimension = GROUP_BY_COLUMN.get(group_by)
+    if dimension is None:
+        return {"error": f"group_by must be one of {sorted(GROUP_BY_COLUMN)}"}
+    try:
+        s = date.fromisoformat(since) if since else None
+        u = date.fromisoformat(until) if until else None
+    except ValueError as exc:
+        return {"error": f"since/until must be ISO YYYY-MM-DD: {exc}"}
+    rows = await AsyncPostgres().status_counts_by(dimension, since=s, until=u)
+    return {"group_by": group_by, "rows": rows}
+
+
+async def _timeline(
+    date_field: str, group_by: str | None, channel: str | None,
+    group: str | None, since: str | None, until: str | None,
+) -> dict[str, Any]:
+    from datetime import date
+
+    from src.storage.postgres import GROUP_BY_COLUMN, AsyncPostgres
+
+    if date_field not in ("created_at", "doc_date"):
+        return {"error": "date_field must be 'created_at' or 'doc_date'"}
+    if group_by is not None and group_by not in GROUP_BY_COLUMN:
+        return {"error": f"group_by must be one of {sorted(GROUP_BY_COLUMN)}"}
+    try:
+        s = date.fromisoformat(since) if since else None
+        u = date.fromisoformat(until) if until else None
+    except ValueError as exc:
+        return {"error": f"since/until must be ISO YYYY-MM-DD: {exc}"}
+    buckets = await AsyncPostgres().timeline_counts(
+        date_field=date_field, group_by=group_by,
+        channel=channel, group=group, since=s, until=u,
+    )
+    # `day` is a datetime.date → ISO-stringify for a JSON-safe payload.
+    return {
+        "date_field": date_field,
+        "buckets": [{**b, "day": b["day"].isoformat()} for b in buckets],
+    }
+
+
+@mcp.tool(timeout=120)
+async def channel_message_stats(
+    group_by: str = "channel",
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    """Counts of INGESTED Telegram messages, grouped by source channel (or
+    channel group), broken down by pipeline status (completed / pending /
+    processing / failed / vector_only / skipped) plus a per-key total, sorted
+    by total descending.
+
+    USE FOR: "сколько сообщений обработано", "статистика по каналам", "how many
+    posts per channel", pipeline-health questions (a channel's `pending` is its
+    processing backlog). `group_by="channel"` (default) for per-channel;
+    `group_by="group"` for per folder-group (news / analytics / …). Optional
+    `since` / `until` are ISO `YYYY-MM-DD` bounds on ingest time (created_at).
+    Documents with no channel tag are excluded.
+    NOT FOR: message CONTENT / semantic search (use `vector_search`) or graph
+    entities. NEXT STEP: for daily dynamics call `channel_message_timeline`."""
+    return await _stats_by(group_by, since, until)
+
+
+@mcp.tool(timeout=120)
+async def channel_message_timeline(
+    date_field: str = "created_at",
+    group_by: str | None = None,
+    channel: str | None = None,
+    group: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    """Daily counts of ingested Telegram messages — the ingest volume over
+    time.
+
+    USE FOR: "динамика ингеста", "сколько сообщений в день", ingest-trend
+    questions. `date_field`: "created_at" (when processed, default) or
+    "doc_date" (the post's original date). Optionally break out per key with
+    `group_by="channel"|"group"`, and/or filter to a single `channel` /
+    `group`. `since` / `until` are ISO `YYYY-MM-DD` bounds. Returns
+    `{date_field, buckets:[{day, count[, key]}]}`, ordered by day.
+    NOT FOR: per-channel status totals (use `channel_message_stats`)."""
+    return await _timeline(date_field, group_by, channel, group, since, until)
+
+
 # Note: filter_by_metadata is not exposed via MCP-2.  It only makes
 # sense in the context of an existing accumulator, which atomic-MCP
 # clients don't maintain — they pass each tool call as a fresh
