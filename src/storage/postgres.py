@@ -74,16 +74,19 @@ class AsyncPostgres:
         self, doc_id: uuid.UUID, path: str,
         department: str = "", doc_type: str = "",
         doc_date: str | None = None,
+        source_channel: str = "", source_group: str = "",
     ) -> None:
         async with self._conn() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
                     INSERT INTO documents
-                        (id, path, department, doc_type, doc_date, status)
-                    VALUES (%s, %s, %s, %s, %s, 'pending')
+                        (id, path, department, doc_type, doc_date,
+                         source_channel, source_group, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
                     """,
-                    (str(doc_id), path, department, doc_type, doc_date),
+                    (str(doc_id), path, department, doc_type, doc_date,
+                     source_channel, source_group),
                 )
             await conn.commit()
 
