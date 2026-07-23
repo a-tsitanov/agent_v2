@@ -18,6 +18,7 @@
 | [`classifier.md`](classifier.md) | Входной классификатор документов (opt-in `CLASSIFIER_*`): правила + LLM-гейт, `force`-обход, статус `skipped`, fail-soft | Включаешь фильтрацию мусора на входе ингеста |
 | [`admission-control.md`](admission-control.md) | Допуск документов (opt-in `INGEST_ADMISSION_*`): синглтон `IngestSchedulerWorkflow`, ≤K в работе, FIFO, выбор K | Очередь забивается документами с первых стадий; хочешь «документ до конца, потом следующий» |
 | [`leiden-diagnostics.md`](leiden-diagnostics.md) | Почему Leiden «не находит сообществ» на 50k: различение GDS-ошибки / пустого графа / синглтонов; Cypher-диагностика (WCC, leiden.stats); взвешенный Leiden | Перестройка сообществ даёт 0; тюнинг `COMMUNITY_*` |
+| [`message-stats.md`](message-stats.md) | Статистика обработанных сообщений по `documents.source_channel`/`source_group`: `GET /api/v1/stats/{messages,timeline}` + CLI `scripts.message_stats {channels,groups,timeline}` | Нужны counts по каналам/группам/времени; проверка историчных данных (`source_group` пуст до фичи) |
 
 ## Архитектурные документы (не runbook'и)
 
