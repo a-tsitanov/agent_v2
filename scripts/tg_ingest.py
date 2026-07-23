@@ -81,6 +81,7 @@ async def post_ingest(
     queue: str | None,
     group: str = "",
     priority: int | None = None,
+    channel: str = "",
 ) -> bool:
     """POST one document to /api/v1/ingest (multipart). True on 2xx; fail-soft."""
     data: dict[str, str] = {"document_date": document_date}
@@ -90,6 +91,8 @@ async def post_ingest(
         data["group"] = group
     if priority is not None:
         data["priority"] = str(priority)
+    if channel:
+        data["channel"] = channel
     try:
         resp = await http.post(
             f"{api_base}/api/v1/ingest",
@@ -122,7 +125,10 @@ async def read_and_enqueue(
                 tally["skipped"] += 1
                 continue
             filename, text, document_date = doc
-            ok = await post_ingest(http, api_base, api_key, filename, text, document_date, queue)
+            ok = await post_ingest(
+                http, api_base, api_key, filename, text, document_date, queue,
+                channel=channel.lstrip("@"),
+            )
             tally["sent" if ok else "failed"] += 1
     logger.info("tg_ingest tally: {t}", t=dict(tally))
     return tally
@@ -172,7 +178,7 @@ async def reingest_channels(
             filename, text, document_date = doc
             ok = await post_ingest(
                 http, api_base, api_key, filename, text, document_date, queue,
-                group=group, priority=priority,
+                group=group, priority=priority, channel=slug.lstrip("@"),
             )
             tally["sent" if ok else "failed"] += 1
     logger.info("tg_ingest reingest tally: {t}", t=dict(tally))
@@ -371,7 +377,7 @@ async def sync_round(
             filename, text, document_date = doc
             ok = await post_ingest(
                 http, api_base, api_key, filename, text, document_date, queue,
-                group=group,
+                group=group, channel=slug.lstrip("@"),
             )
             if not ok:
                 tally["failed"] += 1
