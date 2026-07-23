@@ -18,6 +18,14 @@ from psycopg.rows import dict_row
 
 from src.storage.pg_pool import get_pg_pool
 
+DOC_STATUSES: tuple[str, ...] = (
+    "pending", "processing", "completed", "vector_only", "failed", "skipped",
+)
+
+_DIMENSIONS = {"source_channel", "source_group"}
+_DATE_FIELDS = {"created_at", "doc_date"}
+_GROUP_BY_COL = {"channel": "source_channel", "group": "source_group"}
+
 
 @dataclass
 class DocumentRow:
@@ -133,3 +141,102 @@ class AsyncPostgres:
             )
             row = await cur.fetchone()
         return DocumentRow.from_dict(row) if row else None
+
+    async def status_counts_by(
+        self,
+        dimension: str,
+        since: object | None = None,
+        until: object | None = None,
+    ) -> list[dict]:
+        """Per-key (channel or group) count of each pipeline status.
+
+        `dimension` MUST be 'source_channel' or 'source_group' — validated
+        against a hardcoded set before interpolation. Empty keys (non-TG
+        docs) are excluded. `since`/`until` bound `created_at` (inclusive /
+        exclusive). Returns dicts with a count per status in DOC_STATUSES plus
+        `total`, sorted by total desc."""
+        if dimension not in _DIMENSIONS:
+            raise ValueError(f"bad dimension {dimension!r}")
+        where = [f"{dimension} <> ''"]
+        params: list[object] = []
+        if since is not None:
+            where.append("created_at >= %s")
+            params.append(since)
+        if until is not None:
+            where.append("created_at < %s")
+            params.append(until)
+        sql = (
+            f"SELECT {dimension} AS key, status, COUNT(*) AS n "
+            f"FROM documents WHERE {' AND '.join(where)} "
+            f"GROUP BY key, status"
+        )
+        async with self._conn() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            raw = await cur.fetchall()
+        agg: dict[str, dict] = {}
+        for key, status, n in raw:
+            row = agg.setdefault(
+                key,
+                {"key": key, "total": 0, **{s: 0 for s in DOC_STATUSES}},
+            )
+            if status in row:
+                row[status] = n
+            row["total"] += n
+        return sorted(agg.values(), key=lambda r: r["total"], reverse=True)
+
+    async def timeline_counts(
+        self,
+        date_field: str = "created_at",
+        group_by: str | None = None,
+        channel: str | None = None,
+        group: str | None = None,
+        since: object | None = None,
+        until: object | None = None,
+    ) -> list[dict]:
+        """Daily message counts. `date_field` ∈ {'created_at','doc_date'};
+        `group_by` ∈ {None,'channel','group'} adds a per-key breakdown.
+        Optional `channel`/`group` filter to one key. All identifiers are
+        allowlisted; values bind as parameters. Ordered by day."""
+        if date_field not in _DATE_FIELDS:
+            raise ValueError(f"bad date_field {date_field!r}")
+        keycol = None
+        if group_by is not None:
+            if group_by not in _GROUP_BY_COL:
+                raise ValueError(f"bad group_by {group_by!r}")
+            keycol = _GROUP_BY_COL[group_by]
+        select = [f"date_trunc('day', {date_field})::date AS day"]
+        group_cols = ["day"]
+        if keycol:
+            select.append(f"{keycol} AS key")
+            group_cols.append("key")
+        where = [f"{date_field} IS NOT NULL"]
+        params: list[object] = []
+        if channel is not None:
+            where.append("source_channel = %s")
+            params.append(channel)
+        if group is not None:
+            where.append("source_group = %s")
+            params.append(group)
+        if since is not None:
+            where.append(f"{date_field} >= %s")
+            params.append(since)
+        if until is not None:
+            where.append(f"{date_field} < %s")
+            params.append(until)
+        sql = (
+            f"SELECT {', '.join(select)}, COUNT(*) AS n "
+            f"FROM documents WHERE {' AND '.join(where)} "
+            f"GROUP BY {', '.join(group_cols)} ORDER BY day"
+        )
+        async with self._conn() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            raw = await cur.fetchall()
+        out: list[dict] = []
+        for rec in raw:
+            if keycol:
+                day, key, n = rec
+                out.append({"day": day, "key": key, "count": n})
+            else:
+                day, n = rec
+                out.append({"day": day, "count": n})
+        return out
