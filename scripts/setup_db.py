@@ -38,17 +38,29 @@ CREATE TABLE IF NOT EXISTS documents (
     doc_type     TEXT DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'pending'
                  CHECK (status IN ('pending', 'processing', 'completed',
-                                   'vector_only', 'failed')),
+                                   'vector_only', 'failed', 'skipped')),
     error        TEXT DEFAULT '',
     summary      TEXT DEFAULT '',
     doc_date     DATE,
+    source_channel TEXT NOT NULL DEFAULT '',
+    source_group   TEXT NOT NULL DEFAULT '',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Idempotent add for pre-existing deployments (CREATE TABLE IF NOT EXISTS
+-- Idempotent adds for pre-existing deployments (CREATE TABLE IF NOT EXISTS
 -- does not add a new column to an already-created table).
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_date DATE;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_channel TEXT NOT NULL DEFAULT '';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_group   TEXT NOT NULL DEFAULT '';
+
+-- Widen the status domain to include 'skipped' (classifier skip, written by
+-- finalize.mark_skipped) on already-created tables. The inline CHECK above is
+-- auto-named documents_status_check; drop + re-add makes this idempotent.
+ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_status_check;
+ALTER TABLE documents ADD CONSTRAINT documents_status_check
+    CHECK (status IN ('pending', 'processing', 'completed',
+                      'vector_only', 'failed', 'skipped'));
 
 CREATE INDEX IF NOT EXISTS documents_status_idx
     ON documents (status);
@@ -58,6 +70,25 @@ CREATE INDEX IF NOT EXISTS documents_department_idx
 
 CREATE INDEX IF NOT EXISTS documents_doc_date_idx
     ON documents (doc_date);
+
+CREATE INDEX IF NOT EXISTS documents_source_channel_idx
+    ON documents (source_channel);
+
+CREATE INDEX IF NOT EXISTS documents_source_group_idx
+    ON documents (source_group);
+"""
+
+
+# Backfill source_channel for historical Telegram rows from the filename
+# embedded in `path` ({doc_id}/tg_<channel>_<msgid>.txt). Greedy .+ so
+# tg_a_b_123.txt -> channel 'a_b', msgid '123'. Only touches still-empty TG
+# rows, so re-running setup is cheap and idempotent. source_group cannot be
+# recovered (never recorded historically) and stays ''.
+_BACKFILL_SOURCE_CHANNEL_SQL = r"""
+UPDATE documents
+   SET source_channel = substring(path from 'tg_(.+)_[0-9]+\.txt$')
+ WHERE source_channel = ''
+   AND path ~ 'tg_.+_[0-9]+\.txt$';
 """
 
 
@@ -208,6 +239,7 @@ def setup_postgres() -> None:
     ) as conn, conn.cursor() as cur:
         cur.execute(_DOCUMENTS_DDL)
         cur.execute(_INGEST_METRICS_DDL)
+        cur.execute(_BACKFILL_SOURCE_CHANNEL_SQL)
     logger.info("postgres setup  done")
 
 
