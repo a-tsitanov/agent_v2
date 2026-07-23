@@ -89,3 +89,18 @@ def test_timeline_counts_by_channel_on_doc_date() -> None:
         assert all(b["key"] == _CH_ALPHA for b in buckets)
     finally:
         _cleanup()
+
+
+def test_timeline_counts_group_by_none() -> None:
+    pg = AsyncPostgres(settings.postgres.dsn)
+    try:
+        _seed()
+        buckets = asyncio.run(
+            pg.timeline_counts(date_field="doc_date", channel=_CH_ALPHA)
+        )
+        assert all("key" not in b for b in buckets)
+        by_day = {b["day"]: b["count"] for b in buckets}
+        assert by_day[date(2026, 7, 20)] == 1
+        assert by_day[date(2026, 7, 21)] == 2
+    finally:
+        _cleanup()

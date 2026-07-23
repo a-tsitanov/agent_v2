@@ -24,7 +24,7 @@ DOC_STATUSES: tuple[str, ...] = (
 
 _DIMENSIONS = {"source_channel", "source_group"}
 _DATE_FIELDS = {"created_at", "doc_date"}
-_GROUP_BY_COL = {"channel": "source_channel", "group": "source_group"}
+GROUP_BY_COLUMN = {"channel": "source_channel", "group": "source_group"}
 
 
 @dataclass
@@ -179,6 +179,12 @@ class AsyncPostgres:
                 key,
                 {"key": key, "total": 0, **{s: 0 for s in DOC_STATUSES}},
             )
+            # `total` is deliberately the count of ALL rows for the key, not
+            # just the ones matching a known status: every status the DB
+            # CHECK permits is already in DOC_STATUSES, so the `if` guard
+            # below never drops a real status. Keeping `total` unconditional
+            # means it stays the true per-key row count even if the status
+            # domain is later widened before DOC_STATUSES is updated to match.
             if status in row:
                 row[status] = n
             row["total"] += n
@@ -201,9 +207,9 @@ class AsyncPostgres:
             raise ValueError(f"bad date_field {date_field!r}")
         keycol = None
         if group_by is not None:
-            if group_by not in _GROUP_BY_COL:
+            if group_by not in GROUP_BY_COLUMN:
                 raise ValueError(f"bad group_by {group_by!r}")
-            keycol = _GROUP_BY_COL[group_by]
+            keycol = GROUP_BY_COLUMN[group_by]
         select = [f"date_trunc('day', {date_field})::date AS day"]
         group_cols = ["day"]
         if keycol:

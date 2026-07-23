@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from src.api.auth import require_api_key
-from src.storage.postgres import AsyncPostgres
+from src.storage.postgres import GROUP_BY_COLUMN, AsyncPostgres
 
 router = APIRouter(
     prefix="/stats",
@@ -25,7 +25,6 @@ router = APIRouter(
     dependencies=[Depends(require_api_key)],
 )
 
-_GROUP_BY_DIM = {"channel": "source_channel", "group": "source_group"}
 _DATE_FIELDS = {"created_at", "doc_date"}
 
 
@@ -65,11 +64,11 @@ async def messages_stats(
     since: date | None = None,
     until: date | None = None,
 ) -> MessagesStatsResponse:
-    dimension = _GROUP_BY_DIM.get(group_by)
+    dimension = GROUP_BY_COLUMN.get(group_by)
     if dimension is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"group_by must be one of {sorted(_GROUP_BY_DIM)}",
+            f"group_by must be one of {sorted(GROUP_BY_COLUMN)}",
         )
     rows = await pg.status_counts_by(dimension, since=since, until=until)
     return MessagesStatsResponse(group_by=group_by, rows=rows)
@@ -92,10 +91,10 @@ async def timeline_stats(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"date_field must be one of {sorted(_DATE_FIELDS)}",
         )
-    if group_by is not None and group_by not in _GROUP_BY_DIM:
+    if group_by is not None and group_by not in GROUP_BY_COLUMN:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"group_by must be one of {sorted(_GROUP_BY_DIM)}",
+            f"group_by must be one of {sorted(GROUP_BY_COLUMN)}",
         )
     buckets = await pg.timeline_counts(
         date_field=date_field, group_by=group_by,

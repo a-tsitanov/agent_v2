@@ -82,3 +82,16 @@ async def test_timeline_shape() -> None:
     assert body["date_field"] == "doc_date"
     assert body["buckets"][0]["count"] == 2
     assert body["buckets"][0]["key"] == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_timeline_bad_date_field_422() -> None:
+    from src.api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/v1/stats/timeline?date_field=bogus",
+            headers=_api_key_header(),
+        )
+    assert resp.status_code == 422, resp.text
