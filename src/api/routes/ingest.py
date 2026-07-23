@@ -66,6 +66,7 @@ async def upload_document(
     document_date: str | None = Form(default=None),
     queue: str | None = Form(default=None),
     group: str = Form(default=""),
+    channel: str = Form(default=""),
     priority: int | None = Form(default=None),
     x_version_tag: str | None = Header(default=None, alias="X-Version-Tag"),
 ) -> IngestEnqueuedResponse:
@@ -159,6 +160,7 @@ async def upload_document(
     await pg.insert_pending(
         doc_id, s3_uri, department=department, doc_type=doc_type,
         doc_date=document_date or None,
+        source_channel=channel, source_group=group,
     )
 
     # Analytics labels: explicit header wins, else AnalyticsSettings default.
