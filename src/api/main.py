@@ -21,6 +21,7 @@ from src.api.routes import (
     health,
     ingest,
     search_v2,
+    stats,
 )
 from src.api.routes import (
     analyze as analyze_routes,
@@ -87,6 +88,7 @@ app.include_router(search_v2.router, prefix="/api/v1")
 app.include_router(analyze_routes.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(stats.router, prefix="/api/v1")
 app.include_router(admin.router)
 app.include_router(admin.monitor_router)
 app.include_router(graph_admin.router)
