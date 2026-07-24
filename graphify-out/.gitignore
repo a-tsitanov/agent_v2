@@ -1,0 +1,5 @@
+# local extraction cache — machine-specific, rebuilt on demand
+cache/
+# machine-local interpreter / scan-root pointers
+.graphify_python
+.graphify_root
