@@ -22,6 +22,15 @@ from src.graph.communities import (
     _READ_OLD_REPORTS_CYPHER,
 )
 
+# Max chars in ONE nGQL statement we will send.  Nebula's graphd rejects
+# anything over `max_allowed_query_size` (default 4 MiB / 4194304) with
+# `SyntaxError: Query is too large`.  A level-0 root community can hold every
+# entity in the graph (60117 members ⇒ a 4568933-char INSERT EDGE), so member
+# edges are emitted in <=budget batches instead of one statement.  Held well
+# under the server cap so a bumped VID width or longer tag list can't creep
+# over it.  Module-level so tests can monkeypatch it small.
+_MAX_STMT_CHARS = 1_000_000
+
 
 def community_vid(community_id: str, level: int) -> str:
     """Stable 128-bit VID (32-hex-char) for a community, scoped by level.
@@ -141,10 +150,23 @@ class NebulaCommunityWriteback:
         # GO|DELETE pipe on the main write path.)
         if not members:
             return
-        values = ", ".join(
-            f"{_q(entity_vid(m))}->{_q(cvid)}:({int(level)})" for m in members
-        )
-        self._exec(f"INSERT EDGE `IN_COMMUNITY` (level) VALUES {values};")
+        # Batch by RENDERED SIZE, not member count: one statement per
+        # `_MAX_STMT_CHARS` worth of VALUES, so a root community with every
+        # entity in it can't exceed nebula's max query size (see the constant).
+        head = "INSERT EDGE `IN_COMMUNITY` (level) VALUES "
+        budget = _MAX_STMT_CHARS - len(head) - 1        # -1 for the ';'
+        batch: list[str] = []
+        used = 0
+        for m in members:
+            val = f"{_q(entity_vid(m))}->{_q(cvid)}:({int(level)})"
+            add = len(val) + (2 if batch else 0)        # ", " separator
+            if batch and used + add > budget:
+                self._exec(head + ", ".join(batch) + ";")
+                batch, used, add = [], 0, len(val)
+            batch.append(val)
+            used += add
+        if batch:
+            self._exec(head + ", ".join(batch) + ";")
 
     def merge_community(self, *, community_id, level, member_count,
                         members_hash, members, carry) -> None:

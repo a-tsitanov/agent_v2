@@ -535,7 +535,13 @@ async def detect_communities(
                 members=comm_ref.members, carry=None,
             )
     except Exception as exc:
-        logger.warning("communities: :Community write failed: {e}", e=exc)
+        # NOT fail-open: without :Community nodes the refs we'd return are
+        # unusable — the caller fans out one summarize per ref and every report
+        # write then fails ("Vertex or edge not found"), burning an LLM call
+        # each.  Fail loudly so the build retries instead of silently
+        # producing nothing.  The `finally` below still drops the projection.
+        logger.error("communities: :Community write failed: {e}", e=exc)
+        raise
     finally:
         # Only the GDS path allocates an in-memory projection to drop.
         if settings.temporal.community_backend not in ("leidenalg", "graphscope"):
@@ -693,7 +699,11 @@ async def detect_hierarchy(
                     carry=carry_clean,
                 )
     except Exception as exc:
-        logger.warning("communities: :Community hierarchy write failed: {e}", e=exc)
+        # NOT fail-open — see the single-level path above.  A partially written
+        # hierarchy is worse still: communities are written coarsest-first, so
+        # an abort leaves the root vertex in place and EVERY descendant missing.
+        logger.error("communities: :Community hierarchy write failed: {e}", e=exc)
+        raise
     finally:
         if settings.temporal.community_backend != "leidenalg":
             with contextlib.suppress(Exception):

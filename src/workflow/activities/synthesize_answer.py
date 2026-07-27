@@ -17,6 +17,14 @@ from src.retrieval.answer_template import build_query
 from src.workflow._search_deps import get_synthesis_synthesizer, get_synthesizer
 from src.workflow._search_serde import serialized_to_node
 from src.workflow.contracts import SerializedNode, SynthesizeParams, SynthesizeResult
+from src.workflow.heartbeat import heartbeat_every
+
+# Pulse interval inside the synthesis call.  Compact-and-refine issues one LLM
+# request per refinement, so a single ``asynthesize`` await spans minutes and
+# used to pass with NO heartbeat at all — a wedged attempt was indistinguishable
+# from a slow one and burned the full 1h ``LLM_START_TO_CLOSE`` before Temporal
+# reclaimed it, blocking the whole search chain behind it.
+_HEARTBEAT_INTERVAL_S = 30.0
 
 
 def with_group_prefix(sn: SerializedNode) -> SerializedNode:
@@ -47,7 +55,8 @@ async def synthesize_answer(params: SynthesizeParams) -> SynthesizeResult:
         else await get_synthesizer()
     )
     activity.heartbeat({"stage": "plain_synth"})
-    response = await synthesizer.asynthesize(query=query, nodes=nodes)
+    async with heartbeat_every(_HEARTBEAT_INTERVAL_S, {"stage": "plain_synth"}):
+        response = await synthesizer.asynthesize(query=query, nodes=nodes)
     text = getattr(response, "response", None) or str(response)
     activity.logger.info(
         "synthesize_answer (%s)  text_len=%d", params.mode, len(text or ""),

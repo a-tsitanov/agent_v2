@@ -56,6 +56,7 @@ with workflow.unsafe.imports_passed_through():
     from src.workflow.search._merge import merge_subquery_sources
     from src.workflow.search._retry import (
         FAST_RETRY,
+        LLM_HEARTBEAT_TIMEOUT,
         LLM_SCHEDULE_TO_CLOSE,
         LLM_START_TO_CLOSE,
     )
@@ -282,6 +283,7 @@ class GlobalSearchWorkflow:
             result_type=SynthesizeResult,
             start_to_close_timeout=LLM_START_TO_CLOSE,
             schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+            heartbeat_timeout=LLM_HEARTBEAT_TIMEOUT,
             retry_policy=FAST_RETRY,
         )
 

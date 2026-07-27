@@ -559,3 +559,48 @@ def test_detect_communities_routes_writeback_through_seam(monkeypatch):
     assert ("prune_level", 0) in fake.calls
     assert kinds.count("merge_community") == 2      # two cliques, single level
     assert "prune_all" not in kinds
+
+
+# ── write-back failure must ABORT detection, not be swallowed ──────────────
+#
+# Regression: a failing :Community write was logged at WARNING and detection
+# returned the refs anyway.  The caller (detect_communities_activity) then fanned
+# out one summarize_community_activity per ref — 1891 LLM calls whose reports
+# could not persist, because `UPDATE VERTEX ON Community` needs a vertex the
+# aborted write never inserted.  Silent, expensive, total data loss.
+
+
+class _ExplodingWriteback(_FakeWriteback):
+    def merge_community(self, **kw):
+        raise RuntimeError("nGQL failed: SyntaxError: Query is too large")
+    def merge_subcommunity(self, **kw):
+        raise RuntimeError("nGQL failed: SyntaxError: Query is too large")
+
+
+def _patch_two_cliques(monkeypatch, writeback):
+    monkeypatch.setattr(comm.settings.temporal, "community_backend", "leidenalg")
+
+    def fake_extract(store, *, batch_size=50_000):
+        edges = [("a", "b", 5.0), ("b", "c", 5.0), ("a", "c", 5.0),
+                 ("x", "y", 5.0), ("y", "z", 5.0), ("x", "z", 5.0), ("c", "x", 0.1)]
+        return edges, list("abcxyz")
+    monkeypatch.setattr(comm, "extract_entity_edges", fake_extract)
+    import src.graph.community_writeback as community_writeback
+    monkeypatch.setattr(
+        community_writeback, "build_community_writeback", lambda store: writeback)
+
+    class _Store:
+        def structured_query(self, cypher, param_map=None): return []
+    return _Store()
+
+
+def test_detect_communities_raises_when_writeback_fails(monkeypatch):
+    store = _patch_two_cliques(monkeypatch, _ExplodingWriteback())
+    with pytest.raises(RuntimeError, match="Query is too large"):
+        asyncio.run(comm.detect_communities(store, min_size=2, level=0))
+
+
+def test_detect_hierarchy_raises_when_writeback_fails(monkeypatch):
+    store = _patch_two_cliques(monkeypatch, _ExplodingWriteback())
+    with pytest.raises(RuntimeError, match="Query is too large"):
+        asyncio.run(comm.detect_hierarchy(store, max_levels=2, min_size=2))

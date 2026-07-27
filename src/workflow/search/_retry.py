@@ -30,6 +30,14 @@ FAST_RETRY = RetryPolicy(
 LLM_START_TO_CLOSE = timedelta(hours=1)
 LLM_SCHEDULE_TO_CLOSE = timedelta(hours=3)
 
+# Heartbeat window for the final synthesis.  The activity pulses every 30s
+# THROUGH the compact-and-refine call (``heartbeat_every``), so a wedged
+# attempt now surfaces in minutes instead of consuming the whole 1h
+# start-to-close while the search chain waits behind it.  5m — wide enough
+# that event-loop contention on a saturated worker cannot false-positive a
+# healthy generation; the 1h ceiling is still the real upper bound.
+LLM_HEARTBEAT_TIMEOUT = timedelta(minutes=5)
+
 # Timeouts for detect_communities_activity.  The leidenalg backend clusters
 # in a C extension (leidenalg/igraph ``find_partition``) that HOLDS the GIL
 # for the entire compute, so the ``heartbeat_every`` background pulse cannot

@@ -104,6 +104,52 @@ def test_nebula_merge_community_inserts_vertex_and_member_edges():
     assert f'"{entity_vid("Bob")}"->"{cvid}"' in joined
 
 
+def _edge_stmts(stmts):
+    return [q for q in stmts if 'INSERT EDGE `IN_COMMUNITY`' in q]
+
+
+def test_nebula_member_edges_are_batched_under_the_statement_budget(monkeypatch):
+    """One giant INSERT EDGE ... VALUES blows nebula's max query size (4 MiB)
+    and takes the WHOLE hierarchy write down with it.  Members must be split
+    into <=budget statements — every member edge still written exactly once."""
+    monkeypatch.setattr(cw, "_MAX_STMT_CHARS", 300)
+    s = _RecSession()
+    wb = cw.NebulaCommunityWriteback(s)
+    members = [f"Entity{i:04d}" for i in range(200)]
+    wb.merge_community(community_id="7", level=0, member_count=len(members),
+                       members_hash="h", members=members, carry=None)
+
+    edge_stmts = _edge_stmts(s.stmts)
+    assert len(edge_stmts) > 1, "expected the member edges to be split"
+    assert all(len(q) <= 300 for q in edge_stmts)
+    cvid = cw.community_vid("7", 0)
+    joined = "\n".join(edge_stmts)
+    for m in members:
+        assert joined.count(f'"{entity_vid(m)}"->"{cvid}"') == 1
+
+
+def test_nebula_member_edges_respect_nebula_4mib_limit_for_a_root_community():
+    """Regression: the level-0 root community held 60117 members and produced a
+    4568933-char statement — `SyntaxError: Query is too large (> 4194304)`."""
+    s = _RecSession()
+    wb = cw.NebulaCommunityWriteback(s)
+    members = [f"Entity{i}" for i in range(60117)]
+    wb.merge_community(community_id="0", level=0, member_count=len(members),
+                       members_hash="h", members=members, carry=None)
+    edge_stmts = _edge_stmts(s.stmts)
+    assert edge_stmts
+    assert max(len(q) for q in edge_stmts) < 4_194_304
+
+
+def test_nebula_member_edges_single_batch_when_small():
+    """Fast path unchanged: a small community still emits ONE statement."""
+    s = _RecSession()
+    wb = cw.NebulaCommunityWriteback(s)
+    wb.merge_community(community_id="7", level=0, member_count=2,
+                       members_hash="h", members=["Alice", "Bob"], carry=None)
+    assert len(_edge_stmts(s.stmts)) == 1
+
+
 def test_nebula_merge_subcommunity_adds_parent_of_edge():
     s = _RecSession()
     wb = cw.NebulaCommunityWriteback(s)
