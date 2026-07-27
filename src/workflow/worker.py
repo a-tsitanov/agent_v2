@@ -47,6 +47,7 @@ from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.worker import Worker
 
 from src.config import settings
+from src.utils.logging import configure_logging
 from src.workflow.activities import (
     EXTRACT_ACTIVITIES,
     MAIN_ACTIVITIES,
@@ -289,6 +290,17 @@ async def _run_one(group: str) -> None:
 
 def _child_main(group: str) -> None:
     """multiprocessing child entrypoint (must be top-level for spawn)."""
+    # Every pool is a FRESH spawned process, so each must configure logging
+    # itself.  Without this the worker never configured stdlib logging at all
+    # (only api/main.py and ingestion/run.py did), leaving the root logger at
+    # its WARNING default: `activity.logger.info` from every activity was
+    # dropped unless some third-party import happened to call basicConfig in
+    # that particular pool.  That is why a 4.5h community build on
+    # kb-graph-build produced zero activity log lines while kb-ingest produced
+    # thousands.
+    configure_logging(
+        level=settings.api.log_level, json_output=settings.api.log_json,
+    )
     try:
         asyncio.run(_run_one(group))
     except KeyboardInterrupt:
