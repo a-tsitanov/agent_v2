@@ -64,3 +64,28 @@ def test_worker_child_configures_logging_for_every_pool(monkeypatch):
     w._child_main("graph_build")
 
     assert calls == ["configured"]
+
+
+def test_intercepted_records_report_the_real_call_site():
+    """The depth walk must land on the caller, not on `logging`'s own frames.
+
+    A bridged record that reports `logging:callHandlers:1762` as its origin is
+    worse than no location at all — it points every activity log line at the
+    stdlib instead of the code that emitted it.
+    """
+    configure_logging(level="info")
+
+    seen: list[tuple[str, str]] = []
+    sink_id = logger.add(
+        lambda m: seen.append((m.record["name"], m.record["function"])),
+        level="INFO",
+    )
+    try:
+        logging.getLogger("temporalio.activity").info("merge_and_resolve start")
+    finally:
+        logger.remove(sink_id)
+
+    assert seen, "record did not reach the sink"
+    name, func = seen[-1]
+    assert name != "logging", f"call site collapsed to the logging module: {name}:{func}"
+    assert func != "callHandlers"

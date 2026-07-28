@@ -32,9 +32,11 @@ class _InterceptHandler(logging.Handler):
         except ValueError:
             level = record.levelno
         # Walk out of the logging machinery so the reported name/line is the
-        # real call site rather than this handler.
-        frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
+        # real call site rather than `logging:callHandlers`.  Start at depth 0
+        # and always advance once, then keep going while we are still inside
+        # logging's own frames (LoggerAdapter, Logger._log, callHandlers, ...).
+        frame, depth = logging.currentframe(), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
             frame = frame.f_back
             depth += 1
         logger.opt(depth=depth, exception=record.exc_info).log(
