@@ -26,9 +26,25 @@ _RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     maximum_interval=timedelta(seconds=30),
 )
-_START = timedelta(hours=1)
-_S2C = timedelta(hours=3)
-_HB = timedelta(minutes=2)
+# Timeouts for the materialize stages.  `materialize_centrality` computes
+# in-worker with python-igraph, and `g.betweenness` HOLDS THE GIL for its whole
+# run — so the activity's `heartbeat_every(30.0)` pulse cannot fire, exactly as
+# documented for leidenalg in `search/_retry.py`.  `asyncio.to_thread` does not
+# help: the worker thread holds the GIL and the event loop never gets scheduled.
+#
+# Measured on the production graph (V=78829, E=123908): export 5.4s, pagerank
+# 0.8s, eigenvector 0.5s, betweenness 1877.3s (31.3 min).  The old 2-minute
+# heartbeat window meant the activity died at exactly 120s on EVERY run — three
+# consecutive workflow failures, all `activity Heartbeat timeout`, never once
+# reaching link-prediction or risk.
+#
+# Heartbeating THROUGH a single GIL-held C call is impossible, so the window
+# must simply exceed the compute; start-to-close stays the real bound on a
+# genuinely stuck run.  betweenness is O(V*E) — doubling the graph roughly
+# quadruples it — hence the deliberately generous start-to-close headroom.
+_START = timedelta(hours=3)
+_S2C = timedelta(hours=7)
+_HB = timedelta(minutes=45)
 
 
 @workflow.defn
