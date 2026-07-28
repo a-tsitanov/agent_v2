@@ -13,7 +13,17 @@ Failure handling per message:
 * unparseable payload      → reject(requeue=False) → dead-letter
 * workflow already started → ack (dedup: someone else has the doc)
 * workflow run failed       → reject(requeue=cfg.requeue_on_failure)
+* transient/transport error → reject(requeue=True) → redelivered
 * success                   → ack
+
+Only a ``WorkflowFailureError`` is a verdict about the DOCUMENT — the workflow
+ran and failed.  Everything else (Temporal RPC errors, dropped connections,
+host starvation) breaks the ``execute_workflow`` await while saying nothing
+about the document, so it is requeued rather than discarded.  Treating the two
+alike silently destroyed data: on 2026-07-28 a host stall (postgres logged 15x
+``FATAL: canceling authentication due to timeout``) put 770 messages in the DLQ
+while only 48 workflows had actually Failed — 202 of the dead-lettered docs were
+already ``completed`` and 182 still ``processing``.
 """
 
 from __future__ import annotations
@@ -22,7 +32,7 @@ import asyncio
 
 import aio_pika
 from loguru import logger
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
@@ -61,13 +71,23 @@ async def handle_message(
         logger.warning("duplicate ingest doc={d}; acking", d=params.doc_id)
         await message.ack()
         return
-    except Exception as exc:
+    except WorkflowFailureError as exc:
+        # The workflow RAN and failed — a verdict about this document.
         dest = "requeue" if cfg.requeue_on_failure else "dead-letter"
         logger.error(
             "ingest workflow failed doc={d} ({dest}): {e}",
             d=params.doc_id, dest=dest, e=exc,
         )
         await message.reject(requeue=cfg.requeue_on_failure)
+        return
+    except Exception as exc:
+        # The await broke, not the document: RPC error, dropped connection,
+        # starved host.  Requeue — discarding here loses a good document.
+        logger.error(
+            "ingest transport/transient error doc={d} (requeue): {e!r}",
+            d=params.doc_id, e=exc,
+        )
+        await message.reject(requeue=True)
         return
 
     await message.ack()
