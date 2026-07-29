@@ -5,7 +5,7 @@ client exercise every ack/reject branch of ``handle_message``.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from temporalio.client import WorkflowFailureError
@@ -54,18 +54,80 @@ async def test_poison_payload_dead_lettered_without_workflow() -> None:
     msg.ack.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_duplicate_doc_is_acked() -> None:
-    msg = _FakeMessage(_good_body())
-    client = AsyncMock()
+# ── admission ceiling: a duplicate must be AWAITED, not acked early ────────
+#
+# Admission is enforced by holding the message unacked while the workflow runs
+# (prefetch=K, global).  Acking a redelivered message whose workflow is STILL
+# RUNNING frees the prefetch slot while the load continues, so K stops being a
+# ceiling.  Observed 2026-07-28: 226 concurrent DocumentIngestWorkflow against
+# K=5 (45x), which saturated the host badly enough that postgres logged
+# `FATAL: canceling authentication due to timeout` — that broke more awaits,
+# which produced more redeliveries, which leaked more slots.
+#
+# Redelivery is not exotic: the transient-error branch requeues on purpose, so
+# every transport blip produces a redelivery of a still-running workflow.
+
+
+def _attachable(client: AsyncMock, on_result=None) -> MagicMock:
+    """Make `client` raise AlreadyStarted, and hand back a handle double.
+
+    `get_workflow_handle` is SYNC in temporalio and returns a handle whose
+    `.result()` is async — mirrored here so the double can't pass against an
+    implementation the real client would reject.
+    """
     client.execute_workflow.side_effect = WorkflowAlreadyStartedError(
         "dup", "ingest-d1", run_id="r1",
     )
+    handle = MagicMock()
+    handle.result = AsyncMock(side_effect=on_result)
+    client.get_workflow_handle = MagicMock(return_value=handle)
+    return handle
+
+
+@pytest.mark.asyncio
+async def test_duplicate_doc_attaches_and_awaits_before_acking() -> None:
+    order: list[str] = []
+    msg = _FakeMessage(_good_body())
+    msg.ack = AsyncMock(side_effect=lambda: order.append("ack"))
+    client = AsyncMock()
+    handle = _attachable(client, on_result=lambda: order.append("awaited"))
 
     await handle_message(msg, client, settings.rabbitmq)
 
-    msg.ack.assert_awaited_once()
+    client.get_workflow_handle.assert_called_once_with("ingest-d1")
+    handle.result.assert_awaited_once()
+    # The ack must come AFTER the run finishes — that ordering IS the ceiling.
+    assert order == ["awaited", "ack"]
     msg.reject.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_doc_failure_is_not_acked_as_success(monkeypatch) -> None:
+    """Attaching must not swallow the verdict: if the run we attached to
+    failed, the message follows the workflow-failure path, not the ack path."""
+    monkeypatch.setattr(settings.rabbitmq, "requeue_on_failure", False)
+    msg = _FakeMessage(_good_body())
+    client = AsyncMock()
+    # an exception INSTANCE as side_effect is raised by the mock
+    _attachable(client, on_result=_workflow_failure())
+
+    await handle_message(msg, client, settings.rabbitmq)
+
+    msg.reject.assert_awaited_once_with(requeue=False)
+    msg.ack.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_doc_transient_attach_error_requeues() -> None:
+    """A blip while attaching says nothing about the document either."""
+    msg = _FakeMessage(_good_body())
+    client = AsyncMock()
+    _attachable(client, on_result=ConnectionError("connection reset"))
+
+    await handle_message(msg, client, settings.rabbitmq)
+
+    msg.reject.assert_awaited_once_with(requeue=True)
+    msg.ack.assert_not_awaited()
 
 
 def _workflow_failure() -> WorkflowFailureError:
