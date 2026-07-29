@@ -45,3 +45,17 @@ def test_start_to_close_leaves_room_for_graph_growth():
     # so a ceiling merely above today's 31min would break on the next milestone.
     assert _START.total_seconds() >= 3 * _MEASURED_BETWEENNESS_S
     assert _START <= _S2C
+
+
+def test_heartbeat_window_survives_observed_graph_growth():
+    """A window sized to *today's* compute is stale by the next deploy.
+
+    The graph grew 78829 -> 91023 entities in ONE day (2026-07-28 -> 07-29).
+    betweenness is O(V*E), so ~15% more nodes is ~32% more compute: the same
+    call went from 1877s to roughly 2500s (~42min) against a 45min window —
+    3 minutes of margin left. Require the window to cover at least DOUBLE the
+    last measurement so ordinary growth between deploys cannot resurrect the
+    `activity Heartbeat timeout` failure this file exists to prevent.
+    """
+    assert _HB.total_seconds() >= 2 * _MEASURED_BETWEENNESS_S
+    assert _HB <= _START

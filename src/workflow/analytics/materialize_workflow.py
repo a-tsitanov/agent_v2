@@ -42,9 +42,16 @@ _RETRY = RetryPolicy(
 # must simply exceed the compute; start-to-close stays the real bound on a
 # genuinely stuck run.  betweenness is O(V*E) — doubling the graph roughly
 # quadruples it — hence the deliberately generous start-to-close headroom.
+# The graph grew 78829 -> 91023 entities in ONE day (2026-07-28 -> 07-29).
+# betweenness is O(V*E), so ~15% more nodes is ~32% more compute: the same call
+# went from 1877s to roughly 2500s (~42min).  Against the previous 45min window
+# that left 3 minutes of margin — one more growth step and the
+# `activity Heartbeat timeout` failure comes back.  Size the window to cover
+# DOUBLE the last measurement so ordinary growth between deploys is absorbed;
+# start-to-close stays the real bound on a genuinely stuck run.
 _START = timedelta(hours=3)
 _S2C = timedelta(hours=7)
-_HB = timedelta(minutes=45)
+_HB = timedelta(hours=2)
 
 
 @workflow.defn

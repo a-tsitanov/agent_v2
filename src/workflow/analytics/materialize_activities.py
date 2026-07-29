@@ -34,7 +34,9 @@ async def materialize_centrality(p: CentralityIn) -> StageResult:
     try:
         store = _get_store()
 
-        async def _do(graph_name: str) -> int:
+        async def _do_gds(graph_name: str) -> int:
+            # GDS streams each metric from the SAME projection, so the
+            # per-metric loop costs nothing extra here.
             total = 0
             for metric in p.metrics:
                 total += await mz.write_centrality(store, graph_name, metric)
@@ -42,11 +44,15 @@ async def materialize_centrality(p: CentralityIn) -> StageResult:
 
         async with heartbeat_every(30.0, {"stage": "centrality"}):
             if settings.graph.backend == "nebula":
-                # No GDS projection under nebula; write_centrality computes
-                # in-worker (igraph over the edge-export seam) per metric.
-                written: int | None = await _do("")
+                # No GDS projection under nebula: centrality is computed
+                # in-worker (igraph over the edge-export seam).  ONE call for
+                # ALL metrics — looping per metric recomputed betweenness
+                # (O(V*E), ~31min) once per metric and threw away 2/3 of it.
+                written: int | None = await mz.write_centrality_all(
+                    store, list(p.metrics),
+                )
             else:
-                written = await _with_projection(store, _do)
+                written = await _with_projection(store, _do_gds)
         if written is None:
             return StageResult(error="projection/GDS failed — see worker logs")
         return StageResult(written=written)
