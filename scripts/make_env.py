@@ -332,6 +332,11 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     # ── NebulaSettings (NEBULA_*) — граф (Phase-1 write-path бэкенд) ──
     "NEBULA_HOST": "Хост NebulaGraph graphd.",
     "NEBULA_PASSWORD": "Пароль NebulaGraph. Секрет; в проде сменить дефолт 'nebula'.",
+    "NEBULA_POOL_HEALTH_CHECK_S": (
+        "Период фоновой перепроверки живости graphd пулом соединений (interval_check), сек. "
+        "Без него пул, пометивший graphd мёртвым на время рестарта, не восстанавливается "
+        "до перезапуска процесса. >= 1."
+    ),
     "NEBULA_PORT": "Порт NebulaGraph graphd (по умолчанию 9669).",
     "NEBULA_SPACE": "Имя графового space в NebulaGraph.",
     "NEBULA_USER": "Пользователь NebulaGraph.",

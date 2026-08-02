@@ -171,6 +171,12 @@ class NebulaSettings(BaseSettings):
     # amortises round-trips at ingest scale; see docs/superpowers/specs/
     # 2026-07-11-nebula-ingest-batch-design.md.
     write_batch_size: int = Field(default=256, ge=1)
+    # Seconds between nebula3's background re-probe of graphd liveness
+    # (ConnectionPool interval_check). The library default is -1, which starts
+    # no health thread at all: an address flagged S_BAD while graphd is down is
+    # never cleared, so the pool answers every later get_session with 'No
+    # available server' until the process restarts (2026-08-02 ingest stall).
+    pool_health_check_s: int = Field(default=60, ge=1)
 
 
 class PostgresSettings(BaseSettings):

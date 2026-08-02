@@ -44,6 +44,22 @@ def _is_session_dead(resp: Any) -> bool:
     return any(m in msg for m in _SESSION_DEAD_MARKERS)
 
 
+def _acquire_session(pool: Any, user: str, password: str) -> Any:
+    """Get a session from the pool, re-probing a written-off address first.
+
+    nebula3 marks an address S_BAD as soon as graphd is unreachable and only
+    clears it from the interval_check health thread. That thread is enabled
+    below, but it fires on a timer — a session asked for inside the gap would
+    still hit 'No available server'. Force the re-probe on failure so a
+    restarted graphd is picked up immediately instead of poisoning the pool
+    for the life of the process."""
+    try:
+        return pool.get_session(user, password)
+    except Exception:
+        pool.update_servers_status()
+        return pool.get_session(user, password)
+
+
 def entity_vid(name: str) -> str:
     """Stable 128-bit VID as a 32-char hex string from an entity name.
 
@@ -136,7 +152,7 @@ class NebulaGraphStore:
                     # fail-open-but-logged convention of _exec/_execute_with_retry).
                     logger.warning(
                         "upsert_nodes read-back failed (no first-seen preservation "
-                        "this round): {e}", e=exc,
+                        "this round): {e}", e=repr(exc),
                     )
                     preserved = {}
 
@@ -206,7 +222,7 @@ class NebulaGraphStore:
                 except Exception as exc:
                     logger.warning(
                         "upsert_relations read-back failed (no first-seen preservation "
-                        "this round): {e}", e=exc,
+                        "this round): {e}", e=repr(exc),
                     )
                     preserved = {}
 
@@ -350,7 +366,11 @@ def build_nebula_graph_store() -> NebulaGraphStore:
     otherwise the singleton would fail every query with 'Session not existed'
     for the rest of the process's life (seen on the rarely-used global-search
     path). A fresh session must re-run ``ensure_schema`` because ``USE
-    <space>`` is per-session state."""
+    <space>`` is per-session state.
+
+    Session re-acquisition goes through ``_acquire_session`` so a graphd
+    *restart* (as opposed to an idle-timeout) also heals: the pool writes the
+    address off and, on the library defaults, would never take it back."""
     global _store, _pool
     if _store is not None:
         return _store
@@ -360,13 +380,16 @@ def build_nebula_graph_store() -> NebulaGraphStore:
             from nebula3.gclient.net import ConnectionPool
 
             cfg = settings.nebula
+            pool_config = Config()
+            # Without this the pool never re-checks a graphd it wrote off.
+            pool_config.interval_check = cfg.pool_health_check_s
             pool = ConnectionPool()
-            pool.init([(cfg.host, cfg.port)], Config())
+            pool.init([(cfg.host, cfg.port)], pool_config)
             user = cfg.user
             password = cfg.password.get_secret_value()
 
             def _new_session() -> Any:
-                sess = pool.get_session(user, password)
+                sess = _acquire_session(pool, user, password)
                 ensure_schema(sess)  # selects the space (USE) + idempotent DDL
                 return sess
 

@@ -393,7 +393,7 @@ class GraphRetriever:
                     self._graph_store.subgraph, entity_vid(start_entity), safe_hops,
                 )
             except Exception as exc:
-                logger.warning("graph_walk (nebula) failed: {e}", e=exc)
+                logger.warning("graph_walk (nebula) failed: {e}", e=repr(exc))
                 return RoundGraphData()
             out = self._map_walk_rows(rows)
             if rel_filter:
@@ -418,7 +418,7 @@ class GraphRetriever:
         except Exception as exc:
             logger.warning(
                 "graph_walk: APOC path failed, retrying without APOC: {e}",
-                e=exc,
+                e=repr(exc),
             )
             try:
                 rows = await asyncio.to_thread(
@@ -428,7 +428,7 @@ class GraphRetriever:
                 )
                 return self._map_no_apoc_rows(rows)
             except Exception as exc2:
-                logger.warning("graph_walk failed: {e}", e=exc2)
+                logger.warning("graph_walk failed: {e}", e=repr(exc2))
                 return RoundGraphData()
 
         return self._map_walk_rows(rows)
@@ -452,7 +452,7 @@ class GraphRetriever:
             # EntityCandidate is a TypedDict (a dict), not an attr object.
             names = [c.get("name") for c in cands if isinstance(c, dict) and c.get("name")]
         except Exception as exc:  # embed / vector-store / kNN failure
-            logger.warning("aretrieve (nebula) entity kNN failed: {e}", e=exc)
+            logger.warning("aretrieve (nebula) entity kNN failed: {e}", e=repr(exc))
             return RoundGraphData()
 
         hops = path_depth if path_depth is not None else 1
@@ -485,7 +485,7 @@ class GraphRetriever:
                     self._graph_store.structured_query, ngql,
                 )
             except Exception as exc:
-                logger.warning("find_entities_by_name (nebula) failed: {e}", e=exc)
+                logger.warning("find_entities_by_name (nebula) failed: {e}", e=repr(exc))
                 return RoundGraphData()
             out = RoundGraphData()
             for row in (rows or [])[: int(cap)]:
@@ -511,7 +511,7 @@ class GraphRetriever:
                 {"lucene": lucene, "limit": int(cap)},
             )
         except Exception as exc:  # broad by design — index/store missing, fail-open
-            logger.warning("find_entities_by_name failed: {e}", e=exc)
+            logger.warning("find_entities_by_name failed: {e}", e=repr(exc))
             return RoundGraphData()
         out = RoundGraphData()
         for row in rows or []:
