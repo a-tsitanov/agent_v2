@@ -67,6 +67,16 @@ _REPORT_PROMPT = (
     "{context}\n"
 )
 
+# Max rendered-context size (chars) fed to the small LLM in ONE call.  A
+# root/level-0 community can hold ~all entities → its member context runs to
+# hundreds of thousands of tokens and overflows the small model (gemma
+# 262144).  When the context exceeds this budget we MAP-REDUCE it: split the
+# rendered body into <=budget batches, summarize each into a partial report,
+# then reduce the partials into the final report.  Conservative (well under
+# 262144 tokens even at ~1 token/char for Cyrillic) with headroom for the
+# prompt template + output.  Module-level so tests can monkeypatch it small.
+_CONTEXT_CHAR_BUDGET = 150_000
+
 
 def _parse_report(text: str) -> dict:
     """Tolerantly parse the LLM's structured-report JSON.
@@ -192,6 +202,95 @@ def _build_child_context(rows: list[dict]) -> str:
         else:
             lines.append(f"- {summary}")
     return "Дочерние сообщества (их сводки):\n" + "\n".join(lines)
+
+
+def _split_context_into_batches(context: str, budget: int) -> list[str]:
+    """Split a rendered context body into ``<=budget``-char batches, each
+    keeping the FIRST (header) line so every map prompt stays well-formed.
+
+    Generic over member- and child-context (both are ``header\\n- item…``).
+    A single item line longer than the budget still forms its own batch
+    (never dropped) — member/child lines are bounded (desc[:400] /
+    summary[:600]) so this is a safety net, not the common path."""
+    lines = context.split("\n")
+    if not lines:
+        return []
+    header = lines[0]
+    items = [ln for ln in lines[1:] if ln.strip()]
+    base = len(header) + 1
+    batches: list[str] = []
+    cur: list[str] = []
+    cur_len = base
+    for ln in items:
+        add = len(ln) + 1
+        if cur and cur_len + add > budget:
+            batches.append(header + "\n" + "\n".join(cur))
+            cur, cur_len = [], base
+        cur.append(ln)
+        cur_len += add
+    if cur:
+        batches.append(header + "\n" + "\n".join(cur))
+    return batches
+
+
+async def _summarize_once(llm: Any, context: str) -> str:
+    """One structured-report LLM call over a (batch-sized) context body."""
+    resp = await llm.acomplete(_REPORT_PROMPT.format(context=context))
+    return (getattr(resp, "text", None) or str(resp)).strip()
+
+
+async def _reduce_partials(llm: Any, partials: list[dict]) -> str:
+    """Reduce per-batch partial reports into ONE report.  Partials are fed
+    as child-report context (title + summary) — the same shape a level>0
+    community consumes.  If the combined child context itself exceeds the
+    budget (very many batches), reduce HIERARCHICALLY until it fits (bounded
+    by a small guard so a pathological graph can't loop forever)."""
+    guard = 0
+    while True:
+        guard += 1
+        ctx = _build_child_context(partials)
+        if len(ctx) <= _CONTEXT_CHAR_BUDGET or len(partials) <= 1 or guard > 5:
+            return await _summarize_once(llm, ctx)
+        collapsed: list[dict] = []
+        for batch in _split_context_into_batches(ctx, _CONTEXT_CHAR_BUDGET):
+            rep = _parse_report(await _summarize_once(llm, batch))
+            if rep.get("summary") or rep.get("title"):
+                collapsed.append({
+                    "title": rep.get("title", ""),
+                    "summary": rep.get("summary", ""),
+                })
+        partials = collapsed or partials[:1]
+
+
+async def _summarize_context(llm: Any, context: str) -> str:
+    """Produce the report text for ONE community's rendered context.
+
+    Fits the budget → a single LLM call (unchanged fast path).  Over budget
+    → MAP each batch to a partial report, then REDUCE the partials.  Keeps
+    every physical LLM call under the small model's context cap so the build
+    never depends on the large-tier fallback to survive a huge community."""
+    if len(context) <= _CONTEXT_CHAR_BUDGET:
+        return await _summarize_once(llm, context)
+
+    batches = _split_context_into_batches(context, _CONTEXT_CHAR_BUDGET)
+    if len(batches) <= 1:
+        return await _summarize_once(llm, batches[0] if batches else context)
+
+    activity.logger.info(
+        "summarize_community_activity  map-reduce  ctx_chars=%d  batches=%d",
+        len(context), len(batches),
+    )
+    partials: list[dict] = []
+    for batch in batches:
+        rep = _parse_report(await _summarize_once(llm, batch))
+        if rep.get("summary") or rep.get("title"):
+            partials.append({
+                "title": rep.get("title", ""),
+                "summary": rep.get("summary", ""),
+            })
+    if not partials:
+        return ""
+    return await _reduce_partials(llm, partials)
 
 
 @activity.defn
@@ -363,11 +462,11 @@ async def summarize_community_activity(
     context = await _gather_context(store, params)
 
     # 2. Generate the structured report (small tier) + tolerant parse.
+    #    Fits the context budget → one call; over budget (huge root
+    #    community) → map-reduce so no single call overflows the small model.
     try:
         llm = _get_summary_llm()
-        prompt = _REPORT_PROMPT.format(context=context)
-        resp = await llm.acomplete(prompt)
-        text = (getattr(resp, "text", None) or str(resp)).strip()
+        text = await _summarize_context(llm, context)
     except Exception as exc:
         activity.logger.warning(
             "summarize_community_activity  cid=%s  llm err=%s",

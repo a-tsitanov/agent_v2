@@ -75,14 +75,16 @@ def _report_json(title="Группа", summary="Сводка.", findings=None):
 
 
 class _FakeLLM:
-    """Records the prompt; returns a canned structured-report JSON."""
+    """Records the prompt(s); returns a canned structured-report JSON."""
 
     def __init__(self, text=None):
         self.text = text if text is not None else _report_json()
         self.seen_prompt: str | None = None
+        self.prompts: list[str] = []
 
     async def acomplete(self, prompt, **_kw):
         self.seen_prompt = prompt
+        self.prompts.append(prompt)
         return MagicMock(text=self.text)
 
 
@@ -303,6 +305,70 @@ async def test_summarize_failsafe_on_llm_error(monkeypatch):
     ))
     assert out.summary == ""
     assert out.persisted is False
+
+
+# ── map-reduce: huge community context is batched, never one giant call ──
+
+
+def test_split_context_single_batch_when_under_budget():
+    ctx = "Сущности сообщества:\n- A: x\n- B: y"
+    assert community_mod._split_context_into_batches(ctx, budget=10_000) == [ctx]
+
+
+def test_split_context_batches_and_keeps_header():
+    ctx = "H:\n" + "\n".join(f"- item{i} padpadpad" for i in range(10))
+    batches = community_mod._split_context_into_batches(ctx, budget=40)
+    assert len(batches) >= 2
+    # header replicated onto every batch so each map prompt is well-formed
+    assert all(b.startswith("H:\n") for b in batches)
+    # no item lost across the split
+    joined = "\n".join(batches)
+    for i in range(10):
+        assert f"item{i}" in joined
+
+
+@pytest.mark.asyncio
+async def test_summarize_map_reduce_on_large_member_context(monkeypatch):
+    # Tiny budget forces the map-reduce path on a handful of members —
+    # proving a huge root community never sends ONE oversized prompt.
+    monkeypatch.setattr(community_mod, "_CONTEXT_CHAR_BUDGET", 60)
+    members = [{"name": f"E{i}", "description": "d" * 50} for i in range(6)]
+    store = _FakeStore(member_rows=members)
+    llm = _FakeLLM(_report_json(title="Итог", summary="Сводная сводка."))
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="0", level=0, member_count=len(members),
+    ))
+
+    assert out.persisted is True
+    assert out.summary == "Сводная сводка."
+    # map (multiple batches) + reduce → strictly more than one LLM call,
+    # and NO single prompt carried every member at once.
+    assert len(llm.prompts) >= 3
+    assert all("E0" not in p or "E5" not in p for p in llm.prompts)
+    # every member reached some map prompt
+    joined = "\n".join(llm.prompts)
+    for i in range(6):
+        assert f"E{i}" in joined
+
+
+@pytest.mark.asyncio
+async def test_summarize_single_call_when_context_fits(monkeypatch):
+    # Under budget → exactly ONE LLM call (fast path unchanged).
+    store = _FakeStore(member_rows=[
+        {"name": "A", "description": "x"}, {"name": "B", "description": "y"},
+    ])
+    llm = _FakeLLM()
+    monkeypatch.setattr(community_mod, "_get_store", lambda: store)
+    monkeypatch.setattr(community_mod, "_get_summary_llm", lambda: llm)
+
+    out = await summarize_community_activity(SummarizeCommunityParams(
+        community_id="2", level=0, member_count=2,
+    ))
+    assert out.persisted is True
+    assert len(llm.prompts) == 1
 
 
 # ── payload limit: detect result must NOT carry member name lists ───
