@@ -23,11 +23,15 @@ model_list:
       num_ctx: 16384
       think: false
   # ---- LARGE pool ----
+  # deepseek-v4-flash:cloud — 1M context window. Real overflow source is the
+  # small-tier community-report build (summarize_community_activity, cid=0 root
+  # community ~390k tokens > gemma 262144). It requests `small`; on prompt-too-
+  # long litellm spills small->large, so a 1M `large` rescues it via fallback.
   - model_name: large
     litellm_params:
-      model: ollama_chat/gemma4:31b-cloud
+      model: ollama_chat/deepseek-v4-flash:cloud
       api_base: http://host.docker.internal:11434
-      num_ctx: 16384
+      num_ctx: 976000
       think: false
   # ---- Embeddings ----
   # nomic-embed-text (768) is the legacy embedder; bge-m3 (1024) is the
@@ -56,9 +60,11 @@ router_settings:
   # Cross-tier fallback: if every deployment in one alias group fails/times out,
   # spill to the other group (both are real model_names — a fallback to a
   # non-existent group like "gemma4:12b" hard-500s instead of falling back).
-  # small & large are now the SAME model on the SAME endpoint but distinct
-  # deployment entries — cross-fallback both ways so a per-deployment cooldown
-  # spills to its twin instead of hard-failing.
+  # small = gemma4:31b-cloud (262144 ctx), large = deepseek-v4-flash:cloud
+  # (1M ctx) — distinct endpoints/models. Cross-fallback both ways so a
+  # per-deployment cooldown spills to the other instead of hard-failing.
+  # NOTE: large→small downgrades to 262144 ctx, so a >262144-token REDUCE
+  # prompt that fails on large will still prompt-too-long on the small spill.
   fallbacks:
     - large: ["small"]
     - small: ["large"]
