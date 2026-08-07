@@ -21,6 +21,8 @@ _LAST_KINDS = frozenset({"level"})
 
 def period_key(d: date, granularity: str) -> date:
     """Start of the bucket containing ``d``.  Weeks start Monday."""
+    if granularity not in GRANULARITIES:
+        raise ValueError(f"unknown granularity {granularity!r}")
     if granularity == "day":
         return d
     if granularity == "week":
@@ -29,9 +31,7 @@ def period_key(d: date, granularity: str) -> date:
         return date(d.year, d.month, 1)
     if granularity == "quarter":
         return date(d.year, 3 * ((d.month - 1) // 3) + 1, 1)
-    if granularity == "year":
-        return date(d.year, 1, 1)
-    raise ValueError(f"unknown granularity {granularity!r}")
+    return date(d.year, 1, 1)
 
 
 def resample(
@@ -47,6 +47,8 @@ def resample(
     sparsity and warn — silently inventing values would fabricate the
     very numbers this subsystem exists to keep exact.
     """
+    if granularity not in GRANULARITIES:
+        raise ValueError(f"unknown granularity {granularity!r}")
     if value_kind not in VALUE_KINDS:
         raise ValueError(f"unknown value_kind {value_kind!r}")
     buckets: dict[date, list[tuple[date, float]]] = {}

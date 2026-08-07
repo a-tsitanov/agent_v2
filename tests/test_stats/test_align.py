@@ -66,6 +66,20 @@ def test_resample_never_invents_buckets():
     assert len(out) == 2
 
 
+def test_resample_rejects_unknown_granularity():
+    with pytest.raises(ValueError, match="granularity"):
+        resample([(date(2026, 8, 3), 1.0)], granularity="fortnight", value_kind="share")
+
+
+def test_resample_rejects_unknown_granularity_with_empty_points():
+    """Empty points must not mask granularity validation (Finding 1).
+
+    Without eager validation, this silently returns [] instead of raising.
+    """
+    with pytest.raises(ValueError, match="granularity"):
+        resample([], granularity="fortnight", value_kind="share")
+
+
 def test_resample_rejects_unknown_value_kind():
     with pytest.raises(ValueError, match="value_kind"):
         resample([(date(2026, 8, 3), 1.0)], granularity="week", value_kind="ratio")
