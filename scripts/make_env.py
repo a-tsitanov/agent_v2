@@ -431,6 +431,15 @@ _ENV_DESCRIPTIONS: dict[str, str] = {
     "BOT_SEARCH_MODE": "Основной режим поиска бота: auto | local | global | drift.",
     "BOT_SEARCH_TIMEOUT_S": "HTTP-таймаут одного поискового запроса бота, сек (fallback-режимы медленнее основного).",
     "BOT_TOKEN": "Токен Telegram-бота, выданный @BotFather.",
+    # ── StatsSettings (STATS_*) — подсистема внешней статистики (MCP-3) ──
+    "STATS_DEFAULT_GRANULARITY": "Гранулярность периода по умолчанию для запросов статистики "
+    "(day|week|month|quarter|year).",
+    "STATS_DEFAULT_MAX_LAG": "Максимальный лаг (в периодах) для поиска выравнивания рядов по "
+    "умолчанию. >= 0.",
+    "STATS_MIN_OVERLAP": "Минимальное число пересекающихся периодов, требуемое для сравнения/"
+    "выравнивания двух рядов. >= 1.",
+    "STATS_SEARCH_LIMIT": "Лимит результатов при поиске индикаторов (trigram-поиск по title/"
+    "question_text). >= 1.",
 }
 
 

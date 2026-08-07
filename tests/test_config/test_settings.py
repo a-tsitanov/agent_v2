@@ -219,3 +219,12 @@ def test_canonical_embedding_profile_defaults():
     from src.config import LiteLLMSettings, MilvusSettings
     assert MilvusSettings().dim == 1536
     assert LiteLLMSettings().embedding_model == "text-embedding-3-small"
+
+
+def test_stats_settings_defaults():
+    from src.config import settings
+
+    assert settings.stats.default_granularity == "week"
+    assert settings.stats.default_max_lag == 4
+    assert settings.stats.search_limit == 20
+    assert settings.stats.min_overlap == 8

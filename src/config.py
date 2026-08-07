@@ -1160,6 +1160,22 @@ class BotSettings(BaseSettings):
     )
 
 
+class StatsSettings(BaseSettings):
+    """External-statistics subsystem (MCP-3).
+
+    Defaults are read-side only — nothing here changes what is stored.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="STATS_", env_file=".env", extra="ignore",
+    )
+
+    default_granularity: str = "week"
+    default_max_lag: int = 4
+    search_limit: int = 20
+    min_overlap: int = 8
+
+
 class Settings(BaseSettings):
     """Single import surface for the rest of the codebase.
 
@@ -1265,6 +1281,10 @@ class Settings(BaseSettings):
     @cached_property
     def bot(self) -> BotSettings:
         return BotSettings()
+
+    @cached_property
+    def stats(self) -> StatsSettings:
+        return StatsSettings()
 
     @staticmethod
     def preflight(s: Settings) -> list[str]:

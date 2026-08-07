@@ -120,6 +120,61 @@ CREATE INDEX IF NOT EXISTS ingest_metrics_activity_idx
 """
 
 
+_PG_TRGM_DDL = """
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+"""
+
+_STAT_INDICATOR_DDL = """
+CREATE TABLE IF NOT EXISTS stat_indicator (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source         TEXT    NOT NULL,
+    code           TEXT    NOT NULL,
+    title          TEXT    NOT NULL,
+    question_text  TEXT    NOT NULL DEFAULT '',
+    unit           TEXT    NOT NULL,
+    value_kind     TEXT    NOT NULL,
+    granularity    TEXT    NOT NULL,
+    dims_schema    JSONB   NOT NULL DEFAULT '{}'::jsonb,
+    entity_vid     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source, code),
+    CONSTRAINT stat_indicator_value_kind_check
+        CHECK (value_kind IN ('share','level','rate','index')),
+    CONSTRAINT stat_indicator_granularity_check
+        CHECK (granularity IN ('day','week','month','quarter','year'))
+);
+"""
+
+# `entity_vid` and `source_doc_id` are WEAK links on purpose — no
+# foreign keys — so a graph rebuild or a document re-ingest can never
+# invalidate a stored number.
+_STAT_OBSERVATION_DDL = """
+CREATE TABLE IF NOT EXISTS stat_observation (
+    indicator_id   BIGINT  NOT NULL REFERENCES stat_indicator(id) ON DELETE CASCADE,
+    period_start   DATE    NOT NULL,
+    period_end     DATE    NOT NULL,
+    dims           JSONB   NOT NULL DEFAULT '{}'::jsonb,
+    value          NUMERIC NOT NULL,
+    sample_n       INTEGER,
+    revision       INTEGER NOT NULL DEFAULT 0,
+    source_doc_id  UUID,
+    loaded_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (indicator_id, period_start, dims, revision)
+);
+"""
+
+_STAT_INDEXES_DDL = """
+CREATE INDEX IF NOT EXISTS stat_observation_series_idx
+    ON stat_observation (indicator_id, period_start);
+CREATE INDEX IF NOT EXISTS stat_observation_dims_idx
+    ON stat_observation USING GIN (dims);
+CREATE INDEX IF NOT EXISTS stat_indicator_title_trgm_idx
+    ON stat_indicator USING GIN (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS stat_indicator_question_trgm_idx
+    ON stat_indicator USING GIN (question_text gin_trgm_ops);
+"""
+
+
 _ANALYTICS_SEARCH_ATTRS: dict[str, str] = {
     "VersionTag":      "KEYWORD",
     "Model":           "KEYWORD",   # global default snapshot
@@ -240,6 +295,10 @@ def setup_postgres() -> None:
         cur.execute(_DOCUMENTS_DDL)
         cur.execute(_INGEST_METRICS_DDL)
         cur.execute(_BACKFILL_SOURCE_CHANNEL_SQL)
+        cur.execute(_PG_TRGM_DDL)
+        cur.execute(_STAT_INDICATOR_DDL)
+        cur.execute(_STAT_OBSERVATION_DDL)
+        cur.execute(_STAT_INDEXES_DDL)
     logger.info("postgres setup  done")
 
 
