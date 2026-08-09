@@ -26,7 +26,7 @@
 | Server | Tool surface | Транспорт | Идёт через | Кто типично подключается |
 |---|---|---|---|---|
 | **MCP-1** (`src/mcp/search_server.py`) | 5 tools: `kb_search` (local plan-execute), `kb_global_search` (map-reduce по сообществам), `kb_drift_search` (local→global), `kb_auto_search` (роутер), `kb_analyze` (аналитика по графу: 42 примитива, plan→compute→synthesize — см. [`graph-analytics.md`](graph-analytics.md)) | stdio + HTTP/SSE | **Temporal workflows** (search-очередь) | OpenWebUI как готовый ассистент; non-LLM-developer clients |
-| **MCP-2** (`src/mcp/tools_server.py`) | atomic retrieval (8): `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` + read-only GDS analysis (Track 7b, 5): `graph_pagerank`, `graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`, `graph_stats` | stdio + **Streamable HTTP** (`/mcp`) | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
+| **MCP-2** (`src/mcp/tools_server.py`) | atomic retrieval (8): `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` + read-only GDS analysis (Track 7b, 5): `graph_pagerank`, `graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`, `graph_stats` + channel-side series (2, канал-сторона для MCP-3 `stat_align`): `topic_trend`, `polarity_evolution` | stdio + **Streamable HTTP** (`/mcp`) | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
 | **MCP-3** (`src/mcp/stats_server.py`) | exact statistics (3): `stat_indicators_search` (каталог/поиск индикаторов), `stat_series` (значения одного индикатора), `stat_align` (сведение двух рядов на общую сетку — арифметика без LLM) | stdio + **Streamable HTTP** (`/mcp`) | прямой Python in-process, plain Postgres, **никакого LLM** | Claude Desktop / Cursor / любой клиент, которому нужны точные числа, а не синтез |
 
 Запуск одной командой; `--transport` переключает режим: MCP-1 — `stdio|sse`,
@@ -190,6 +190,17 @@ async def vector_search(query: str, top_k: int = 10) -> dict:
 LLM-используют `graph_search` (через LLMSynonymRetriever нормализацию query) и `find_entity_by_id` / `find_neighbours`. Все идут через `BoundedLLM` с семафором `settings.agent.llm_max_concurrent` (default 8). 20 параллельных `graph_search`-вызовов → 8 idёт через GPU, 12 ждут в семафоре.
 
 `vector_search` / `get_chunks_by_doc_id` / `read_full_document` — pure retrieval/IO, не упираются в LLM, идут параллельно (ограничены только Milvus/PG connection pool).
+
+### 4.4 Channel-side series — вход для MCP-3 `stat_align`
+
+| Tool | Сигнатура | Что делает | Файл |
+|---|---|---|---|
+| `topic_trend` | `(topic, granularity="month", since=None, until=None)` | Частота упоминаний темы/сущности по периодам (по дате чанка) — канальный ряд ВНИМАНИЯ | [`dynamics.py`](../../src/analytics/primitives/dynamics.py) |
+| `polarity_evolution` | `(name=None, rel_type=None)` | Как менялась полярность связей сущности во времени — канальный ряд ОЦЕНКИ | [`dynamics.py`](../../src/analytics/primitives/dynamics.py) |
+
+В отличие от §4.1, эти два tool'а — не wrapper'ы над `atomic_tools.py`, а тонкие обёртки над analytics-каталожными примитивами `topic_trend` / `polarity_evolution` из [`src/analytics/primitives/dynamics.py`](../../src/analytics/primitives/dynamics.py) (используют тот же `_deps["graph_store"]`, что и GDS-tools из §4.1, не Milvus/`atomic_tools.py`). Примитив `topic_trend` не принимает границы дат — `since`/`until` фильтруют уже полученные бакеты постфактум (лексикографическое сравнение ISO-строк периода — точное, не эвристика).
+
+Это КАНАЛ-сторона сравнения «о чём писали» vs «что показал опрос»: клиент берёт `rows` отсюда и `rows` из MCP-3 `stat_series`, передаёт оба в MCP-3 `stat_align` (см. §5.1). Не зарегистрированы в analytics `CATALOG`/planner-пути (`kb_analyze`) — вызываются напрямую через MCP-2.
 
 ---
 

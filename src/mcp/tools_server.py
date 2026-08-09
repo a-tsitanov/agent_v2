@@ -446,6 +446,57 @@ async def _timeline(
     }
 
 
+_TREND_GRANULARITIES = ("day", "week", "month", "quarter", "year")
+
+
+def _period_in_window(period: str, since: str | None, until: str | None) -> bool:
+    """`topic_trend` buckets are ISO-ordered strings ("2026-05",
+    "2026-05-04"), so a prefix-safe lexicographic compare is exact."""
+    if since and period < since[: len(period)]:
+        return False
+    return not (until and period > until[: len(period)])
+
+
+async def _topic_trend(
+    store: Any, topic: str, granularity: str,
+    since: str | None, until: str | None, _fn: Any = None,
+) -> dict[str, Any]:
+    from datetime import date
+
+    from src.analytics.primitives.dynamics import topic_trend as _primitive
+
+    if not topic or not topic.strip():
+        return {"error": "topic must be a non-empty string"}
+    if granularity not in _TREND_GRANULARITIES:
+        return {"error": f"granularity must be one of {list(_TREND_GRANULARITIES)}"}
+    for name, value in (("since", since), ("until", until)):
+        if value is not None:
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                return {"error": f"{name} must be ISO YYYY-MM-DD, got {value!r}"}
+    if store is None:
+        return {"error": "graph store unavailable"}
+    fn = _fn or _primitive
+    res = await fn(store, topic=topic.strip(), granularity=granularity)
+    rows = [r for r in res.rows if _period_in_window(r["period"], since, until)]
+    return {"topic": topic.strip(), "granularity": granularity, "rows": rows}
+
+
+async def _polarity_evolution(
+    store: Any, name: str | None, rel_type: str | None, _fn: Any = None,
+) -> dict[str, Any]:
+    from src.analytics.primitives.dynamics import polarity_evolution as _primitive
+
+    if not name and not rel_type:
+        return {"error": "provide at least one of name / rel_type"}
+    if store is None:
+        return {"error": "graph store unavailable"}
+    fn = _fn or _primitive
+    res = await fn(store, name=name, rel_type=rel_type)
+    return {"name": name, "rel_type": rel_type, "rows": res.rows}
+
+
 @mcp.tool(timeout=120)
 async def channel_message_stats(
     group_by: str = "channel",
@@ -488,6 +539,50 @@ async def channel_message_timeline(
     `{date_field, buckets:[{day, count[, key]}]}`, ordered by day.
     NOT FOR: per-channel status totals (use `channel_message_stats`)."""
     return await _timeline(date_field, group_by, channel, group, since, until)
+
+
+@mcp.tool(timeout=1800)
+async def topic_trend(
+    topic: str,
+    granularity: str = "month",
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    """How often a topic is mentioned across ingested documents, per period
+    — the channel-side ATTENTION series.
+
+    USE FOR: "как часто писали про X", and as the channel-side input to
+    the MCP-3 `stat_align` tool when comparing attention against a poll
+    indicator.  `granularity`: day / week / month (default) / quarter /
+    year.  `since` / `until` are ISO `YYYY-MM-DD` bounds applied to the
+    returned buckets.  Returns `{topic, granularity, rows:[{period,
+    mentions}]}`.
+    NOT FOR: ingest volume (use `channel_message_timeline`) or message
+    content (use `vector_search`)."""
+    await _init()
+    return await _topic_trend(
+        _deps.get("graph_store"), topic, granularity, since, until,
+    )
+
+
+@mcp.tool(timeout=1800)
+async def polarity_evolution(
+    name: str | None = None, rel_type: str | None = None,
+) -> dict[str, Any]:
+    """How the polarity of an entity's relations shifts over time — the
+    channel-side VALUATION series.
+
+    USE FOR: "как менялось отношение к X", and as the channel-side input
+    to MCP-3 `stat_align` when comparing tone against poll assessments.
+    Provide at least one of `name` (entity) / `rel_type` (relation type).
+    Polarity is computed over graph EDGES, not per-message sentiment —
+    it is a coarser signal than a poll's rating scale, so read it as
+    direction rather than magnitude.
+    NOT FOR: mention counts (use `topic_trend`)."""
+    await _init()
+    return await _polarity_evolution(
+        _deps.get("graph_store"), name, rel_type,
+    )
 
 
 # Note: filter_by_metadata is not exposed via MCP-2.  It only makes

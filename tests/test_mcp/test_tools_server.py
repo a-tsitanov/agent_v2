@@ -27,6 +27,9 @@ _EXPECTED_TOOLS = {
     # Ingest statistics over the documents pipeline.
     "channel_message_stats",
     "channel_message_timeline",
+    # Channel-side series — inputs to MCP-3's stat_align.
+    "topic_trend",
+    "polarity_evolution",
 }
 
 
