@@ -31,7 +31,7 @@
 - `src/stats/align.py` — pure alignment math. No imports from `src.storage`, `src.graph`, `src.retrieval`.
 - `src/storage/stats.py` — `StatsRepository` + pure SQL builders.
 - `src/mcp/stats_server.py` — MCP-3 server: thin validating helpers + tool wrappers.
-- `scripts/stat_import.py` — CSV loader CLI with a per-source adapter seam.
+- `src/api/routes/stats_data.py` — the write path: `POST /api/v1/statistics/load`.
 - `tests/test_stats/test_align.py`, `tests/test_stats/test_import.py`
 - `tests/test_storage/test_stats_repository.py`
 - `tests/test_mcp/test_stats_server.py`
@@ -1805,260 +1805,389 @@ git commit -m "feat(mcp): add MCP-3 statistics server with search/series/align t
 
 ---
 
-### Task 6: CSV loader CLI
+### Task 6: HTTP load endpoint
+
+Data arrives over HTTP, not as files. Row volumes are small, so a single
+request carrying one indicator and its observations is the whole ingest path —
+no CSV parsing, no per-source adapter, no CLI.
+
+**Route prefix note:** `/stats` is already taken by
+`src/api/routes/stats.py`, which reports *ingest-pipeline* statistics over the
+`documents` table. That is a different meaning of the word. The external
+statistics subsystem gets `/statistics` so the two never blur together in a
+URL.
 
 **Files:**
-- Create: `scripts/stat_import.py`, `tests/test_stats/test_import.py`
-- Create fixture: `tests/test_stats/fixtures/fom_sample.csv`
+- Create: `src/api/routes/stats_data.py`
+- Modify: `src/api/main.py` (register the router)
+- Test: `tests/test_api/test_stats_data.py`
 
 **Interfaces:**
-- Consumes: `StatsRepository.upsert_indicator` / `upsert_observations` (Task 4).
-- Produces: `parse_csv(text: str) -> tuple[list[dict], list[str]]` returning `(rows, errors)`; `main()` CLI entry.
+- Consumes: `StatsRepository.upsert_indicator` / `upsert_observations` (Task 4);
+  `GRANULARITIES`, `VALUE_KINDS` (Task 1).
+- Produces: `POST /api/v1/statistics/load` accepting `LoadRequest`
+  (`indicator: IndicatorIn`, `observations: list[ObservationIn]`) and returning
+  `LoadResponse` (`indicator_id: int`, `observations: int`).
 
-- [ ] **Step 1: Create the fixture**
+- [ ] **Step 1: Write the failing tests**
 
-`tests/test_stats/fixtures/fom_sample.csv`:
-
-```csv
-source,code,title,question_text,unit,value_kind,granularity,entity_vid,period_start,period_end,dims,value,sample_n,revision
-fom,anxiety,Уровень тревожности,"Какое настроение преобладает?",%,share,week,,2026-01-05,2026-01-11,{},57.5,1500,0
-fom,anxiety,Уровень тревожности,"Какое настроение преобладает?",%,share,week,,2026-01-12,2026-01-18,{},54.0,1500,0
-fom,anxiety,Уровень тревожности,"Какое настроение преобладает?",%,share,week,,2026-01-12,2026-01-18,{},55.2,1500,1
-```
-
-- [ ] **Step 2: Write the failing tests**
-
-Create `tests/test_stats/test_import.py`:
+Create `tests/test_api/test_stats_data.py`:
 
 ```python
-from __future__ import annotations
+"""ASGI tests for `POST /api/v1/statistics/load`.
 
-from pathlib import Path
-
-from scripts.stat_import import parse_csv
-
-FIXTURE = Path(__file__).parent / "fixtures" / "fom_sample.csv"
-
-
-def test_parse_csv_reads_all_rows():
-    rows, errors = parse_csv(FIXTURE.read_text(encoding="utf-8"))
-    assert errors == []
-    assert len(rows) == 3
-
-
-def test_parse_csv_keeps_a_restatement_as_a_separate_revision():
-    """A revised value for an already-loaded period must arrive as its
-    own row with revision=1 — history is retained, never overwritten."""
-    rows, _ = parse_csv(FIXTURE.read_text(encoding="utf-8"))
-    week2 = [r for r in rows if r["period_start"].isoformat() == "2026-01-12"]
-    assert sorted(r["revision"] for r in week2) == [0, 1]
-    assert {r["value"] for r in week2} == {54.0, 55.2}
-
-
-def test_parse_csv_normalises_types():
-    rows, _ = parse_csv(FIXTURE.read_text(encoding="utf-8"))
-    r = rows[0]
-    assert r["value"] == 57.5
-    assert r["sample_n"] == 1500
-    assert r["dims"] == {}
-    assert r["value_kind"] == "share"
-
-
-def test_parse_csv_reports_bad_rows_without_aborting():
-    text = (
-        "source,code,title,question_text,unit,value_kind,granularity,"
-        "entity_vid,period_start,period_end,dims,value,sample_n,revision\n"
-        "fom,x,T,,%,share,week,,not-a-date,2026-01-11,{},1.0,10,0\n"
-        "fom,x,T,,%,bogus,week,,2026-01-05,2026-01-11,{},1.0,10,0\n"
-        "fom,x,T,,%,share,week,,2026-01-05,2026-01-11,{},2.0,10,0\n"
-    )
-    rows, errors = parse_csv(text)
-    assert len(rows) == 1
-    assert len(errors) == 2
-    assert any("period_start" in e for e in errors)
-    assert any("value_kind" in e for e in errors)
-
-
-def test_parse_csv_rejects_missing_columns():
-    rows, errors = parse_csv("source,code\nfom,x\n")
-    assert rows == []
-    assert errors and "missing columns" in errors[0]
-```
-
-- [ ] **Step 3: Run tests to verify they fail**
-
-Run: `uv run pytest tests/test_stats/test_import.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.stat_import'`
-
-- [ ] **Step 4: Write the implementation**
-
-Create `scripts/stat_import.py`:
-
-```python
-"""Load external statistics from a flat CSV into `stat_*`.
-
-Raw values are stored EXACTLY as supplied — alignment and normalisation
-happen on read, so changing the normalisation method never requires
-reloading a source.  `entity_vid` is a curated column, not inferred.
-
-Usage::
-
-    uv run python -m scripts.stat_import path/to/fom_dominanty.csv
-    uv run python -m scripts.stat_import path/to/file.csv --dry-run
+`StatsRepository` is patched so the route is exercised end-to-end
+against the real FastAPI app without a live Postgres — same approach as
+`tests/test_api/test_ingest.py`.
 """
 
 from __future__ import annotations
 
-import argparse
-import asyncio
-import csv
-import io
-import json
-import sys
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from src.config import settings
+
+
+def _api_key_header() -> dict[str, str]:
+    return {"X-API-Key": settings.api.keys_list[0]}
+
+
+def _body(**overrides) -> dict:
+    body = {
+        "indicator": {
+            "source": "fom",
+            "code": "anxiety",
+            "title": "Уровень тревожности",
+            "question_text": "Какое настроение преобладает?",
+            "unit": "%",
+            "value_kind": "share",
+            "granularity": "week",
+        },
+        "observations": [
+            {
+                "period_start": "2026-01-05",
+                "period_end": "2026-01-11",
+                "value": 57.5,
+                "sample_n": 1500,
+            },
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
+async def _post(body: dict) -> tuple[int, dict]:
+    from src.api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/statistics/load", json=body, headers=_api_key_header(),
+        )
+    return resp.status_code, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_load_upserts_indicator_then_observations() -> None:
+    from src.storage.stats import StatsRepository
+
+    with (
+        patch.object(
+            StatsRepository, "upsert_indicator", new=AsyncMock(return_value=7),
+        ) as up_ind,
+        patch.object(
+            StatsRepository, "upsert_observations", new=AsyncMock(return_value=1),
+        ) as up_obs,
+    ):
+        code, payload = await _post(_body())
+
+    assert code == 200
+    assert payload == {"indicator_id": 7, "observations": 1}
+    assert up_ind.await_count == 1
+    rows = up_obs.await_args.args[0]
+    assert rows[0]["indicator_id"] == 7
+    assert rows[0]["dims"] == {}
+    assert rows[0]["revision"] == 0
+
+
+@pytest.mark.asyncio
+async def test_load_requires_an_api_key() -> None:
+    from src.api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/api/v1/statistics/load", json=_body())
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_load_rejects_unknown_value_kind() -> None:
+    body = _body()
+    body["indicator"]["value_kind"] = "ratio"
+    code, payload = await _post(body)
+    assert code == 422
+    assert "value_kind" in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_load_rejects_unknown_granularity() -> None:
+    body = _body()
+    body["indicator"]["granularity"] = "fortnight"
+    code, payload = await _post(body)
+    assert code == 422
+    assert "granularity" in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_load_rejects_period_end_before_period_start() -> None:
+    body = _body()
+    body["observations"][0]["period_end"] = "2026-01-01"
+    code, payload = await _post(body)
+    assert code == 422
+    assert "period_end" in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_load_accepts_an_empty_observation_list() -> None:
+    """Registering an indicator before any data exists is legitimate —
+    it is how a source gets seeded, and `list_sources` is built to show
+    such a source with NULL period bounds."""
+    from src.storage.stats import StatsRepository
+
+    with (
+        patch.object(
+            StatsRepository, "upsert_indicator", new=AsyncMock(return_value=7),
+        ),
+        patch.object(
+            StatsRepository, "upsert_observations", new=AsyncMock(return_value=0),
+        ),
+    ):
+        code, payload = await _post(_body(observations=[]))
+
+    assert code == 200
+    assert payload == {"indicator_id": 7, "observations": 0}
+
+
+@pytest.mark.asyncio
+async def test_load_carries_dims_and_revision_through() -> None:
+    from src.storage.stats import StatsRepository
+
+    body = _body(observations=[
+        {
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-30",
+            "value": 8.1,
+            "dims": {"region": "Москва"},
+            "revision": 1,
+        },
+    ])
+    with (
+        patch.object(
+            StatsRepository, "upsert_indicator", new=AsyncMock(return_value=2),
+        ),
+        patch.object(
+            StatsRepository, "upsert_observations", new=AsyncMock(return_value=1),
+        ) as up_obs,
+    ):
+        code, _ = await _post(body)
+
+    assert code == 200
+    row = up_obs.await_args.args[0][0]
+    assert row["dims"] == {"region": "Москва"}
+    assert row["revision"] == 1
+    assert row["sample_n"] is None
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_api/test_stats_data.py -v`
+Expected: FAIL — 404 on the route, because it does not exist yet.
+
+- [ ] **Step 3: Write the route**
+
+Create `src/api/routes/stats_data.py`:
+
+```python
+"""Write path for the external-statistics subsystem.
+
+One endpoint: `POST /api/v1/statistics/load` takes an indicator and its
+observations and upserts both.  Row volumes are small, so there is no
+batching protocol, no file upload and no per-source adapter — a caller
+posts JSON.
+
+The prefix is `/statistics`, not `/stats`: the latter already means
+ingest-pipeline statistics over the `documents` table
+(`src/api/routes/stats.py`), which is a different thing entirely.
+
+Reads do NOT live here — they are served by MCP-3
+(`src/mcp/stats_server.py`), which is the surface agents talk to.
+"""
+
+from __future__ import annotations
+
+import uuid
 from datetime import date
-from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from loguru import logger  # noqa: E402
+from src.api.auth import require_api_key
+from src.stats.align import GRANULARITIES, VALUE_KINDS
+from src.storage.stats import StatsRepository
 
-from src.stats.align import GRANULARITIES, VALUE_KINDS  # noqa: E402
-from src.storage.stats import StatsRepository  # noqa: E402
-from src.utils.logging import configure_logging  # noqa: E402
-
-REQUIRED_COLUMNS = (
-    "source", "code", "title", "question_text", "unit", "value_kind",
-    "granularity", "entity_vid", "period_start", "period_end", "dims",
-    "value", "sample_n", "revision",
+router = APIRouter(
+    prefix="/statistics",
+    tags=["statistics"],
+    dependencies=[Depends(require_api_key)],
 )
 
-
-def parse_csv(text: str) -> tuple[list[dict[str, Any]], list[str]]:
-    """Parse and validate.  Bad rows are collected, not fatal — one
-    malformed line must not cost the whole load."""
-    reader = csv.DictReader(io.StringIO(text))
-    missing = [c for c in REQUIRED_COLUMNS if c not in (reader.fieldnames or [])]
-    if missing:
-        return [], [f"missing columns: {', '.join(missing)}"]
-
-    rows: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for lineno, raw in enumerate(reader, start=2):
-        try:
-            if raw["value_kind"] not in VALUE_KINDS:
-                raise ValueError(f"value_kind {raw['value_kind']!r} is not valid")
-            if raw["granularity"] not in GRANULARITIES:
-                raise ValueError(f"granularity {raw['granularity']!r} is not valid")
-            try:
-                period_start = date.fromisoformat(raw["period_start"])
-            except ValueError:
-                raise ValueError(
-                    f"period_start {raw['period_start']!r} is not ISO YYYY-MM-DD",
-                ) from None
-            period_end = date.fromisoformat(raw["period_end"])
-            sample = raw["sample_n"].strip()
-            rows.append({
-                "source": raw["source"].strip(),
-                "code": raw["code"].strip(),
-                "title": raw["title"].strip(),
-                "question_text": raw["question_text"].strip(),
-                "unit": raw["unit"].strip(),
-                "value_kind": raw["value_kind"].strip(),
-                "granularity": raw["granularity"].strip(),
-                "entity_vid": raw["entity_vid"].strip() or None,
-                "period_start": period_start,
-                "period_end": period_end,
-                "dims": json.loads(raw["dims"] or "{}"),
-                "value": float(raw["value"]),
-                "sample_n": int(sample) if sample else None,
-                "revision": int(raw["revision"] or 0),
-            })
-        except (ValueError, KeyError, json.JSONDecodeError) as exc:
-            errors.append(f"line {lineno}: {exc}")
-    return rows, errors
+# Small by design: the subsystem takes curated series, not bulk dumps.
+_MAX_OBSERVATIONS = 1000
 
 
-async def load(rows: list[dict[str, Any]]) -> tuple[int, int]:
-    """Upsert indicators first, then their observations."""
-    repo = StatsRepository()
-    ids: dict[tuple[str, str], int] = {}
-    for r in rows:
-        key = (r["source"], r["code"])
-        if key not in ids:
-            ids[key] = await repo.upsert_indicator(
-                source=r["source"], code=r["code"], title=r["title"],
-                unit=r["unit"], value_kind=r["value_kind"],
-                granularity=r["granularity"],
-                question_text=r["question_text"], entity_vid=r["entity_vid"],
-            )
-    observations = [
-        {
-            "indicator_id": ids[(r["source"], r["code"])],
-            "period_start": r["period_start"], "period_end": r["period_end"],
-            "dims": r["dims"], "value": r["value"],
-            "sample_n": r["sample_n"], "revision": r["revision"],
-            "source_doc_id": None,
-        }
-        for r in rows
-    ]
-    n = await repo.upsert_observations(observations)
-    return len(ids), n
+class IndicatorIn(BaseModel):
+    source: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    unit: str = Field(min_length=1)
+    value_kind: str
+    granularity: str
+    question_text: str = ""
+    dims_schema: dict[str, Any] = Field(default_factory=dict)
+    entity_vid: str | None = None
+
+    @field_validator("value_kind")
+    @classmethod
+    def _known_value_kind(cls, v: str) -> str:
+        if v not in VALUE_KINDS:
+            raise ValueError(f"value_kind must be one of {sorted(VALUE_KINDS)}")
+        return v
+
+    @field_validator("granularity")
+    @classmethod
+    def _known_granularity(cls, v: str) -> str:
+        if v not in GRANULARITIES:
+            raise ValueError(f"granularity must be one of {sorted(GRANULARITIES)}")
+        return v
 
 
-def main() -> None:
-    configure_logging()
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("path", type=Path)
-    p.add_argument("--dry-run", action="store_true")
-    args = p.parse_args()
+class ObservationIn(BaseModel):
+    period_start: date
+    period_end: date
+    value: float
+    dims: dict[str, Any] = Field(default_factory=dict)
+    sample_n: int | None = None
+    revision: int = Field(default=0, ge=0)
+    source_doc_id: uuid.UUID | None = None
 
-    rows, errors = parse_csv(args.path.read_text(encoding="utf-8"))
-    for e in errors:
-        logger.error("stat_import  {e}", e=e)
-    if not rows:
-        raise SystemExit("nothing to load")
-    if args.dry_run:
-        logger.info(
-            "stat_import  dry-run: {n} rows parsed, {e} rejected",
-            n=len(rows), e=len(errors),
-        )
-        return
-    n_ind, n_obs = asyncio.run(load(rows))
-    logger.info(
-        "stat_import  loaded {i} indicators / {o} observations ({e} rejected)",
-        i=n_ind, o=n_obs, e=len(errors),
+    @model_validator(mode="after")
+    def _ordered_period(self) -> ObservationIn:
+        if self.period_end < self.period_start:
+            raise ValueError("period_end must not precede period_start")
+        return self
+
+
+class LoadRequest(BaseModel):
+    indicator: IndicatorIn
+    observations: list[ObservationIn] = Field(
+        default_factory=list, max_length=_MAX_OBSERVATIONS,
     )
 
 
-if __name__ == "__main__":
-    main()
+class LoadResponse(BaseModel):
+    indicator_id: int
+    observations: int
+
+
+@router.post(
+    "/load",
+    response_model=LoadResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Upsert one indicator and its observations",
+)
+async def load_statistics(req: LoadRequest) -> LoadResponse:
+    """Idempotent: re-posting the same payload changes nothing.
+
+    Values are stored exactly as supplied — alignment and normalisation
+    are computed on read, so changing the normalisation method never
+    requires reloading a source.
+    """
+    repo = StatsRepository()
+    ind = req.indicator
+    try:
+        indicator_id = await repo.upsert_indicator(
+            source=ind.source,
+            code=ind.code,
+            title=ind.title,
+            unit=ind.unit,
+            value_kind=ind.value_kind,
+            granularity=ind.granularity,
+            question_text=ind.question_text,
+            dims_schema=ind.dims_schema,
+            entity_vid=ind.entity_vid,
+        )
+    except ValueError as exc:  # defence in depth; pydantic catches this first
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc),
+        ) from exc
+
+    rows = [
+        {
+            "indicator_id": indicator_id,
+            "period_start": o.period_start,
+            "period_end": o.period_end,
+            "dims": o.dims,
+            "value": o.value,
+            "sample_n": o.sample_n,
+            "revision": o.revision,
+            "source_doc_id": o.source_doc_id,
+        }
+        for o in req.observations
+    ]
+    written = await repo.upsert_observations(rows)
+    return LoadResponse(indicator_id=indicator_id, observations=written)
+```
+
+- [ ] **Step 4: Register the router**
+
+In `src/api/main.py`, import `stats_data` alongside the other route modules and
+register it next to the existing stats router:
+
+```python
+app.include_router(stats_data.router, prefix="/api/v1")
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_stats/test_import.py -v`
-Expected: PASS (5 tests)
+Run: `uv run pytest tests/test_api/test_stats_data.py -v`
+Expected: PASS (7 tests)
 
-- [ ] **Step 6: Verify end to end against the live database**
+- [ ] **Step 6: Verify against the live stack**
 
-Run: `uv run python -m scripts.stat_import tests/test_stats/fixtures/fom_sample.csv`
-Expected: `loaded 1 indicators / 3 observations (0 rejected)`.
+The API container reaches Postgres over the compose network, so this is the
+path to test end-to-end. Post one indicator with two observations, then post
+the identical payload a second time: both must return 200 and the same
+`indicator_id`, and the second must not create duplicate rows — that is what
+the `UNIQUE (indicator_id, period_start, dims, revision)` key is for.
 
-Run it a **second time**: the counts are identical and no error appears — the upsert is idempotent.
+Then post the same period with `"revision": 1` and a different value, and
+confirm a *new* row is added rather than the first being overwritten — history
+is retained.
 
-- [ ] **Step 7: Lint**
+If the API is not currently running, say so in your report rather than
+skipping the check silently.
 
-Run: `uv run ruff check scripts/stat_import.py tests/test_stats`
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Lint and commit**
 
 ```bash
-git add scripts/stat_import.py tests/test_stats/test_import.py tests/test_stats/fixtures
-git commit -m "feat(stats): add CSV import CLI for external statistics"
+uv run ruff check src/api/routes/stats_data.py tests/test_api/test_stats_data.py
+git add src/api/routes/stats_data.py src/api/main.py tests/test_api/test_stats_data.py
+git commit -m "feat(stats): add POST /api/v1/statistics/load"
 ```
-
----
 
 ### Task 7: Expose channel-side series on MCP-2
 
@@ -2255,7 +2384,8 @@ git commit -m "feat(mcp): expose topic_trend and polarity_evolution on MCP-2"
 
 After Task 7, the end-to-end path should be walkable by hand:
 
-1. `uv run python -m scripts.stat_import tests/test_stats/fixtures/fom_sample.csv`
+1. `POST /api/v1/statistics/load` with one indicator and three weekly
+   observations, one of which restates an earlier period at `revision: 1`
 2. Start MCP-3: `uv run python -m src.mcp.stats_server --transport http --port 9003`
 3. From an MCP client: `stat_indicators_search()` with no arguments → the
    catalogue, showing `fom` with its indicator count and covered period. Then

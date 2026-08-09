@@ -282,15 +282,29 @@ exist; the work is the tool surface, docstrings and validation, not the
 computation. This lands in the semantic service, not MCP-3 — but without it
 the comparison use case does not assemble.
 
-### 7. Loader (`scripts/stat_import.py`)
+### 7. Write path (`src/api/routes/stats_data.py`)
 
-CLI, manual CSV/XLSX first. Per-source adapter module producing the two
-canonical row shapes; the CLI validates and upserts. Raw values are stored
-**as loaded** — alignment and normalisation are recomputed on read, so
-changing the normalisation method never requires reloading a source.
+`POST /api/v1/statistics/load` takes one indicator and its observations as
+JSON and upserts both. Row volumes are small and curated, so there is no file
+upload, no CSV parsing and no per-source adapter — whoever has the numbers
+posts them.
 
-`entity_vid` is populated from the registry file at import time (a curated
-column), not inferred. Inference is a later, separate question.
+The prefix is `/statistics` rather than `/stats` because `/stats` already
+means ingest-pipeline statistics over the `documents` table
+(`src/api/routes/stats.py`). Two different meanings of the word must not share
+a URL space.
+
+Raw values are stored **as loaded** — alignment and normalisation are
+recomputed on read, so changing the normalisation method never requires
+reloading a source. The call is idempotent: re-posting the same payload
+changes nothing, while re-posting a period at a higher `revision` adds a row
+rather than overwriting one.
+
+Reads do not live here. They are served by MCP-3, which is the surface agents
+talk to; this endpoint exists for whoever feeds the subsystem.
+
+`entity_vid` is supplied by the caller (a curated value), not inferred.
+Inference is a later, separate question.
 
 A scraper is out of scope here. When it comes, it runs as its own process
 following the `tg_ingest` precedent — never inside an ingest worker.
@@ -311,8 +325,10 @@ main practical benefit of keeping it out of the semantic contour.
 - `tests/test_stats/test_align.py` — resampling per `value_kind`, no upward
   interpolation, z-score, gap, lag search, every `warnings` trigger, and the
   under-8-overlap guard.
-- `tests/test_stats/test_import.py` — adapter parsing on fixtures, including
-  a revision that restates an existing period.
+- `tests/test_api/test_stats_data.py` — the load endpoint against the real
+  FastAPI app with `StatsRepository` patched: auth, rejection of an unknown
+  `value_kind` / `granularity` and of a reversed period, `dims` and `revision`
+  carried through, and an indicator registered with no observations yet.
 - `tests/test_storage/test_stats_repository.py` — upsert idempotency,
   latest-revision selection, `dims` uniqueness including the empty-dims
   case, trigram search ordering.
@@ -356,7 +372,7 @@ New:
 - `src/mcp/stats_server.py`
 - `src/storage/stats.py`
 - `src/stats/__init__.py`, `src/stats/align.py`
-- `scripts/stat_import.py`
+- `src/api/routes/stats_data.py`
 - `tests/test_stats/`, `tests/test_storage/test_stats_repository.py`,
   `tests/test_mcp/test_stats_server.py`
 
