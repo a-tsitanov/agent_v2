@@ -98,7 +98,7 @@ Admin-эндпоинты `/admin/graph/{stats,pagerank,personalized-pagerank,com
 Тяжёлое состояние (ноды, сущности) сериализуется в MinIO и передаётся между активностями по URI; в полезной нагрузке Temporal путешествуют только небольшие контракты; осиротевшие блобы упавших прогонов подметаются. — `workflow/staging.py`
 
 ### MCP-серверы
-Две MCP-поверхности открывают поиск для OpenWebUI / Claude Desktop / Cursor: MCP-1 (`kb_search` через воркфлоу поиска Temporal) и MCP-2 (атомарные инструменты ретрива в процессе). — `runbook/mcp.md`
+Три MCP-поверхности открывают доступ для OpenWebUI / Claude Desktop / Cursor: MCP-1 (`kb_search` через воркфлоу поиска Temporal), MCP-2 (атомарные инструменты ретрива в процессе) и MCP-3 (точные внешние статистики — `stat_indicators_search`/`stat_series`/`stat_align` поверх Postgres, без единого обращения к LLM). — `runbook/mcp.md`
 
 ### Продакшен docker-compose + Dockerfile (Track 1) 🆕
 `docker-compose.prod.yml` поднимает всё приложение (api/worker/mcp + бэкенды + redis) минус litellm/ollama (внешние через `LITELLM_BASE_URL`); wikibase — за `--profile wikibase`. — `docker-compose.prod.yml`

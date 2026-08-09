@@ -5,7 +5,7 @@ Temporal ingest turns heterogeneous documents into a Neo4j property
 graph + Milvus vectors (MinIO claim-check, Postgres statuses, RabbitMQ
 backlog); retrieval comes as four search modes
 (`/api/v1/search/{local,global,drift,auto}`), a graph-analytics layer
-(`/api/v1/analyze` over a 42-primitive catalog), and two MCP servers
+(`/api/v1/analyze` over a 42-primitive catalog), and three MCP servers
 for agent clients.  All LLM traffic goes through a LiteLLM proxy —
 local Ollama models by default (gemma4 QAT tiers + `nomic-embed-text`),
 OpenAI as the canonical cloud profile; per-role tiers in
@@ -138,7 +138,7 @@ docker compose -f docker-compose.prod.yml up -d
 | [`docs/INGEST.md`](docs/INGEST.md) | **Ingest pipeline** — blocks/activities/queues/staging, with Mermaid + D2 diagrams (vector half + graph-build child + identifiers + multimodel) |
 | [`docs/SEARCH-FLOW.md`](docs/SEARCH-FLOW.md) | **Search flow** — local/global/drift/auto + retrieval tools + community selection, with Mermaid + D2 diagrams |
 | [`docs/runbook/README.md`](docs/runbook/README.md) | Index of operator runbooks (**mcp**, search, multimodel, analytics, graph-analytics, wikibase, wiki-editor, er-native-vector-knn) |
-| [`docs/runbook/mcp.md`](docs/runbook/mcp.md) | Two MCP servers — MCP-1 `kb_search` (Temporal-backed, high-level) and MCP-2 atomic retrieval tools (in-process, GPU-protected via BoundedLLM semaphore).  Stdio + HTTP/SSE transports.  Configuring OpenWebUI / Claude Desktop / Cursor / Continue. |
+| [`docs/runbook/mcp.md`](docs/runbook/mcp.md) | Three MCP servers — MCP-1 `kb_search` (Temporal-backed, high-level), MCP-2 atomic retrieval tools (in-process, GPU-protected via BoundedLLM semaphore), and MCP-3 exact-statistics tools (`stat_indicators_search` / `stat_series` / `stat_align`, plain Postgres, no LLM).  Stdio + HTTP/SSE transports.  Configuring OpenWebUI / Claude Desktop / Cursor / Continue. |
 | [`docs/SEARCH.md`](docs/SEARCH.md) | Deep search reference — modes (local/global/drift/auto), orchestrator + coverage loop, dynamic community selection, rerank, knob table (companion to SEARCH-FLOW.md diagrams) |
 | [`docs/runbook/search-usage.md`](docs/runbook/search-usage.md) | Operator search usage — request shapes, conversation history, source download, wiki rebuild |
 | [`docs/runbook/multimodel.md`](docs/runbook/multimodel.md) | Per-role LLM (extraction/judge/search) + child workflow + per-activity model in `ingest_metrics`.  Detailed reading guide with code excerpts. |
@@ -176,6 +176,7 @@ kb-llamaindex/
 │   ├── workflow/                # Temporal: ingest, search, analytics,
 │   │                            #   wiki, monitor + worker launcher
 │   ├── mcp/                     # MCP-1 (search/analyze) + MCP-2 (atomic+GDS)
+│   │                            #   + MCP-3 (exact stats, no LLM)
 │   ├── observability/           # metrics, role map, litellm model validator
 │   ├── models/                  # Pydantic request/response shapes
 │   └── storage/                 # Postgres clients, chunk repository

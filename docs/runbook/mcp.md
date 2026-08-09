@@ -1,6 +1,6 @@
 # MCP servers runbook
 
-Гид по двум MCP-серверам (Model Context Protocol) которые экспозируют kb-llamaindex как tool-source для внешних LLM-клиентов (OpenWebUI, Claude Desktop, Cursor, Continue, …).
+Гид по трём MCP-серверам (Model Context Protocol) которые экспозируют kb-llamaindex как tool-source для внешних LLM-клиентов (OpenWebUI, Claude Desktop, Cursor, Continue, …).
 
 > **⚠️ ОБНОВЛЕНО (R7b cutover) — MCP-1 раздел частично устарел.** MCP-1
 > `kb_search` теперь submit'ит **`SearchOrchestratorWorkflow`** (plan-execute,
@@ -11,7 +11,7 @@
 > [`../SEARCH.md`](../SEARCH.md). Раздел MCP-2 (atomic tools) ниже актуален.
 > (Полная переработка MCP-1 прозы — TODO.)
 
-> **Цель архитектуры:** дать оператору два режима интеграции — "получить готовый ответ" (MCP-1) или "взять примитивы и собрать loop своим LLM" (MCP-2). Защита GPU реализована на двух уровнях: Temporal-queue для MCP-1, BoundedLLM-семафор для MCP-2.
+> **Цель архитектуры:** дать оператору три режима интеграции — "получить готовый ответ" (MCP-1), "взять примитивы и собрать loop своим LLM" (MCP-2), или "точные внешние цифры без единого обращения к LLM" (MCP-3). Защита GPU реализована на двух уровнях (MCP-3 GPU не использует вовсе — только Postgres): Temporal-queue для MCP-1, BoundedLLM-семафор для MCP-2.
 
 Связанные runbook'и:
 - [`search-usage.md`](search-usage.md) — текущие режимы `/search/{local,global,drift,auto}`, параметры, тюнинг
@@ -21,15 +21,16 @@
 
 ---
 
-## 1. Two-server overview
+## 1. Three-server overview
 
 | Server | Tool surface | Транспорт | Идёт через | Кто типично подключается |
 |---|---|---|---|---|
 | **MCP-1** (`src/mcp/search_server.py`) | 5 tools: `kb_search` (local plan-execute), `kb_global_search` (map-reduce по сообществам), `kb_drift_search` (local→global), `kb_auto_search` (роутер), `kb_analyze` (аналитика по графу: 42 примитива, plan→compute→synthesize — см. [`graph-analytics.md`](graph-analytics.md)) | stdio + HTTP/SSE | **Temporal workflows** (search-очередь) | OpenWebUI как готовый ассистент; non-LLM-developer clients |
 | **MCP-2** (`src/mcp/tools_server.py`) | atomic retrieval (8): `vector_search`, `graph_search`, `graph_walk`, `find_entity_by_id`, `find_entity_by_name`, `find_neighbours`, `get_chunks_by_doc_id`, `read_full_document` + read-only GDS analysis (Track 7b, 5): `graph_pagerank`, `graph_personalized_pagerank`, `graph_components`, `graph_shortest_path`, `graph_stats` | stdio + **Streamable HTTP** (`/mcp`) | прямой Python in-process | Claude Desktop / Cursor / Continue с собственным LLM-loop'ом |
+| **MCP-3** (`src/mcp/stats_server.py`) | exact statistics (3): `stat_indicators_search` (каталог/поиск индикаторов), `stat_series` (значения одного индикатора), `stat_align` (сведение двух рядов на общую сетку — арифметика без LLM) | stdio + **Streamable HTTP** (`/mcp`) | прямой Python in-process, plain Postgres, **никакого LLM** | Claude Desktop / Cursor / любой клиент, которому нужны точные числа, а не синтез |
 
 Запуск одной командой; `--transport` переключает режим: MCP-1 — `stdio|sse`,
-MCP-2 — `stdio|http` (Streamable HTTP, эндпоинт `/mcp`; SSE здесь заменён).
+MCP-2 / MCP-3 — `stdio|http` (Streamable HTTP, эндпоинт `/mcp`; SSE здесь заменён).
 
 ---
 
@@ -63,6 +64,17 @@ MCP-2 — `stdio|http` (Streamable HTTP, эндпоинт `/mcp`; SSE здесь
       "env": {
         "KB_MCP_REQUIRE_AUTH": "false"
       }
+    },
+    "kb-stats": {
+      "command": "uv",
+      "args": [
+        "run", "python", "-m", "src.mcp.stats_server",
+        "--transport", "stdio"
+      ],
+      "cwd": "/path/to/kb-llamaindex",
+      "env": {
+        "KB_MCP_REQUIRE_AUTH": "false"
+      }
     }
   }
 }
@@ -77,10 +89,13 @@ MCP-2 — `stdio|http` (Streamable HTTP, эндпоинт `/mcp`; SSE здесь
 uv run python -m src.mcp.search_server --transport sse  --host 0.0.0.0 --port 9001
 # MCP-2 (tools)  — Streamable HTTP (эндпоинт /mcp)
 uv run python -m src.mcp.tools_server  --transport http --host 0.0.0.0 --port 9002
+# MCP-3 (stats)  — Streamable HTTP (эндпоинт /mcp)
+uv run python -m src.mcp.stats_server  --transport http --host 0.0.0.0 --port 9003
 ```
 
 OpenWebUI Admin Settings → MCP servers → URL `http://localhost:9001/sse`
-(search, SSE) и `http://localhost:9002/mcp` (tools, Streamable HTTP).
+(search, SSE), `http://localhost:9002/mcp` (tools, Streamable HTTP) и
+`http://localhost:9003/mcp` (stats, Streamable HTTP).
 
 ### Docker (recommended для prod)
 
@@ -178,9 +193,36 @@ LLM-используют `graph_search` (через LLMSynonymRetriever норм
 
 ---
 
-## 5. Auth
+## 5. MCP-3: 3 exact-statistics tools
 
-Оба сервера используют тот же `API_KEYS` env что и FastAPI route handlers (см. [`src/api/auth.py`](../../src/api/auth.py) и [`src/config.py:ApiSettings.keys_list`](../../src/config.py)).
+**Назначение:** точные внешние числа (опросы, официальные ряды) — без синтеза, без единого обращения к LLM, без чтения графа или Milvus. MCP-3 читает только таблицы `stat_indicator` / `stat_observation` в Postgres напрямую через [`src/storage/stats.py:StatsRepository`](../../src/storage/stats.py). Контракт числовых данных отличается от семантического: там «немного не то» — приемлемый ответ, здесь — нет, поэтому арифметика (`stat_align`) намеренно живёт отдельно от модели, в чистых функциях [`src/stats/align.py`](../../src/stats/align.py).
+
+### 5.1 Tools
+
+| Tool | Сигнатура | Что делает | Файл |
+|---|---|---|---|
+| `stat_indicators_search` | `(query=None, source=None, limit=20)` | Каталог источников (без аргументов) → список индикаторов источника (`source`) → триграм-поиск по названию/вопросу (`query`) | [`stats_server.py`](../../src/mcp/stats_server.py) |
+| `stat_series` | `(indicator_id, since=None, until=None, dims=None)` | Значения одного индикатора по времени, последняя ревизия на период | [`stats_server.py`](../../src/mcp/stats_server.py) |
+| `stat_align` | `(series_a, series_b, granularity="week", value_kind_a="share", value_kind_b="share", max_lag=4)` | Сведение двух рядов на общую сетку, z-score, поиск лучшего лага, `gap`/`divergence`/`correlation` | [`stats_server.py`](../../src/mcp/stats_server.py) |
+
+**`stat_indicators_search` — три режима намеренно за одним tool'ом.** Пустой `query` и пустой `source` — не ошибка, а вызов "я ещё не знаю, что тут есть": ответ — каталог источников. Триграм-поиск находит опечатки/варианты написания, но не синонимы, поэтому неудачно угаданный `query` возвращает пусто и неотличим от "такой статистики нет" — заранее показать каталог для клиента дешевле, чем гадать.
+
+**`stat_align` ничего не читает** — оба ряда приходят аргументами. Клиент сам достаёт канал-сторону через MCP-2 (`topic_trend` / `polarity_evolution`) и подтягивает индикаторную сторону отсюда (`stat_series`), затем передаёт оба в `stat_align`. Это держит границу чистой и не подпускает модель к арифметике.
+
+### 5.2 Запуск
+
+```bash
+uv run python -m src.mcp.stats_server --transport stdio
+uv run python -m src.mcp.stats_server --transport http --port 9003
+```
+
+Порт по умолчанию — **9003** (MCP-1 = 9001, MCP-2 = 9002). Таймаут на tool — 120s (не 1800s как у MCP-2: это тонкий Postgres-read, не тяжёлый graph walk).
+
+---
+
+## 6. Auth
+
+Все три сервера используют тот же `API_KEYS` env что и FastAPI route handlers (см. [`src/api/auth.py`](../../src/api/auth.py) и [`src/config.py:ApiSettings.keys_list`](../../src/config.py)).
 
 **Stdio**: env-vars передаются через конфиг клиента (Claude Desktop "env" поле). API_KEYS не нужен если `KB_MCP_REQUIRE_AUTH=false`.
 
@@ -201,7 +243,7 @@ uv run python -m src.mcp.tools_server --transport http --port 9002
 
 ---
 
-## 6. Тюнинг — где какой knob
+## 7. Тюнинг — где какой knob
 
 | Knob | Где | Default | Эффект |
 |---|---|---|---|
@@ -219,7 +261,7 @@ uv run python -m src.mcp.tools_server --transport http --port 9002
 
 ---
 
-## 7. Live smoke
+## 8. Live smoke
 
 ```bash
 # 1. Pre-flight: основной стек (Temporal, Milvus, Neo4j, Postgres, MinIO)
@@ -239,13 +281,18 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
 #                  "find_neighbours", "get_chunks_by_doc_id",
 #                  "read_full_document"]
 
-# 4. HTTP smoke (после ingest какого-нибудь doc'а)
+# 4. MCP-3 stdio smoke — 3 tools должны быть в списке
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
+  KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.stats_server --transport stdio
+# Expect: tools = ["stat_indicators_search", "stat_series", "stat_align"]
+
+# 5. HTTP smoke (после ingest какого-нибудь doc'а)
 KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.tools_server \
   --transport http --host 127.0.0.1 --port 9002 &
 curl -X POST http://127.0.0.1:9002/mcp  # Streamable HTTP endpoint
 kill %1
 
-# 5. End-to-end через MCP-1 → Temporal:
+# 6. End-to-end через MCP-1 → Temporal:
 KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.search_server \
   --transport sse --host 127.0.0.1 --port 9001 &
 # в браузере открыть http://localhost:8080 (Temporal UI) → submit query через
@@ -254,7 +301,7 @@ KB_MCP_REQUIRE_AUTH=false uv run python -m src.mcp.search_server \
 
 ---
 
-## 8. Tests
+## 9. Tests
 
 ```bash
 # Unit suites (no Temporal needed)
@@ -268,7 +315,7 @@ uv run pytest tests/test_workflow/test_search_workflow.py -v
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Симптом | Причина | Действие |
 |---|---|---|
@@ -279,15 +326,18 @@ uv run pytest tests/test_workflow/test_search_workflow.py -v
 | `kb_search` возвращает пустой answer для нормального query | `simple` mode и vector retriever пустой (нет docs) или semafor пустой | Sanity: `curl /api/v1/search` напрямую с тем же query — должен дать тот же результат |
 | OpenWebUI не видит MCP server в Settings | URL не правильный или transport mismatch | OpenWebUI ждёт `/sse` endpoint. `http://host:9001/sse` (не `http://host:9001` голый) |
 | MCP-1 progress notifications не приходят клиенту | fastmcp version mismatch или транспорт не поддерживает | stdio: некоторые клиенты игнорят progress. HTTP/SSE: должно работать. Проверить `pip show fastmcp` ≥ 2.0 |
+| `stat_indicators_search` без аргументов возвращает пустой каталог | В `stat_indicator`/`stat_observation` ещё ничего не загружено | Проверить загрузчик статистики (Task 4 ingest); `SELECT count(*) FROM stat_indicator` |
+| `stat_align` возвращает `low_overlap:*` в `warnings` | Меньше `STATS_MIN_OVERLAP` (default 8) общих периодов после ресемплинга | Ожидаемо для коротких/редких рядов — корреляция намеренно не считается, не баг |
 
 ---
 
-## 10. Cross-references
+## 11. Cross-references
 
 - **Search subsystem deep-dive**: [`search-usage.md`](search-usage.md)
 - **Per-role LLM (search role)**: [`multimodel.md`](multimodel.md)
 - **`atomic_tools.py` reference**: `src/retrieval/atomic_tools.py` (290 строк, 7 функций + dispatch)
 - **`SearchWorkflow`**: `src/workflow/search_workflow.py`
 - **`BoundedLLM`**: `src/retrieval/llm_semaphore.py`
+- **Stats subsystem**: `src/stats/align.py` (чистая арифметика), `src/storage/stats.py` (`StatsRepository`), `src/mcp/stats_server.py`
 - **MCP protocol spec**: https://spec.modelcontextprotocol.io/specification/
 - **fastmcp docs**: https://gofastmcp.com/
