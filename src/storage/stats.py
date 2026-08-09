@@ -87,6 +87,38 @@ def build_search_query(
     return sql, params
 
 
+def build_sources_query() -> tuple[str, list[Any]]:
+    """One row per source: how many indicators it has and the span its
+    observations cover.  The entry point for a caller that does not yet
+    know what the subsystem holds."""
+    sql = (
+        "SELECT i.source, count(DISTINCT i.id) AS indicators, "
+        "min(o.period_start) AS earliest, max(o.period_start) AS latest "
+        "FROM stat_indicator i "
+        "LEFT JOIN stat_observation o ON o.indicator_id = i.id "
+        "GROUP BY i.source ORDER BY i.source"
+    )
+    return sql, []
+
+
+def build_indicators_query(
+    source: str | None, limit: int,
+) -> tuple[str, list[Any]]:
+    """The registry itself, optionally scoped to one source."""
+    params: list[Any] = []
+    where = ""
+    if source is not None:
+        where = "WHERE source = %s "
+        params.append(source)
+    params.append(limit)
+    sql = (
+        "SELECT id, source, code, title, question_text, unit, value_kind, "
+        "granularity, dims_schema, entity_vid FROM stat_indicator "
+        f"{where}ORDER BY source, title LIMIT %s"
+    )
+    return sql, params
+
+
 def _row_out(row: dict[str, Any]) -> dict[str, Any]:
     """JSON-safe projection: dates to ISO, NUMERIC to float, UUID to str."""
     return {
@@ -136,6 +168,31 @@ class StatsRepository:
                 [indicator_id],
             )
             return await cur.fetchone()
+
+    async def list_sources(self) -> list[dict[str, Any]]:
+        sql, params = build_sources_query()
+        async with self._conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        # LEFT JOIN: a registered indicator with no observations yet yields
+        # NULL bounds rather than dropping the source from the catalogue.
+        return [
+            {
+                "source": r["source"],
+                "indicators": int(r["indicators"]),
+                "earliest": r["earliest"].isoformat() if r["earliest"] else None,
+                "latest": r["latest"].isoformat() if r["latest"] else None,
+            }
+            for r in rows
+        ]
+
+    async def list_indicators(
+        self, *, source: str | None = None, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql, params = build_indicators_query(source, limit)
+        async with self._conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            return list(await cur.fetchall())
 
     async def series(
         self,

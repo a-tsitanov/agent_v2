@@ -12,8 +12,10 @@ import pytest
 
 from src.storage.stats import (
     StatsRepository,
+    build_indicators_query,
     build_search_query,
     build_series_query,
+    build_sources_query,
 )
 
 # ── stubs ────────────────────────────────────────────────────────────
@@ -142,3 +144,87 @@ async def test_upsert_observations_commits_once():
     sql, _ = conn.cur.executed[0]
     assert "ON CONFLICT (indicator_id, period_start, dims, revision)" in sql
     assert "DO UPDATE" in sql
+
+
+# ── registry discovery ───────────────────────────────────────────────
+
+
+def test_sources_query_rolls_up_indicator_count_and_period_bounds():
+    sql, params = build_sources_query()
+    assert "LEFT JOIN stat_observation" in sql
+    assert "count(DISTINCT i.id) AS indicators" in sql
+    assert "min(o.period_start) AS earliest" in sql
+    assert "max(o.period_start) AS latest" in sql
+    assert "GROUP BY i.source" in sql
+    assert params == []
+
+
+def test_indicators_query_without_source_has_no_where_clause():
+    sql, params = build_indicators_query(None, 100)
+    assert "WHERE" not in sql
+    assert params == [100]
+
+
+def test_indicators_query_filters_by_source():
+    sql, params = build_indicators_query("fom", 50)
+    assert "WHERE source = %s" in sql
+    assert params == ["fom", 50]
+
+
+async def test_list_sources_isoformats_period_bounds():
+    repo, _ = _repo_with([
+        {"source": "fom", "indicators": 3,
+         "earliest": date(2026, 1, 5), "latest": date(2026, 6, 1)},
+    ])
+    assert await repo.list_sources() == [
+        {"source": "fom", "indicators": 3,
+         "earliest": "2026-01-05", "latest": "2026-06-01"},
+    ]
+
+
+async def test_list_sources_survives_a_source_with_no_observations():
+    """A registered indicator with no rows yet must still be listed —
+    otherwise a freshly seeded source looks like it does not exist."""
+    repo, _ = _repo_with([
+        {"source": "rosstat", "indicators": 1, "earliest": None, "latest": None},
+    ])
+    assert await repo.list_sources() == [
+        {"source": "rosstat", "indicators": 1, "earliest": None, "latest": None},
+    ]
+
+
+async def test_upsert_indicator_rejects_unknown_value_kind():
+    repo, conn = _repo_with([])
+    with pytest.raises(ValueError, match="value_kind"):
+        await repo.upsert_indicator(
+            source="fom", code="x", title="T", unit="%",
+            value_kind="ratio", granularity="week",
+        )
+    assert conn.cur.executed == []
+
+
+async def test_upsert_indicator_rejects_unknown_granularity():
+    repo, conn = _repo_with([])
+    with pytest.raises(ValueError, match="granularity"):
+        await repo.upsert_indicator(
+            source="fom", code="x", title="T", unit="%",
+            value_kind="share", granularity="fortnight",
+        )
+    assert conn.cur.executed == []
+
+
+async def test_search_indicators_casts_score_to_float():
+    repo, _ = _repo_with([
+        {"id": 1, "source": "fom", "code": "anxiety", "title": "Тревожность",
+         "question_text": "", "unit": "%", "value_kind": "share",
+         "granularity": "week", "dims_schema": {}, "entity_vid": None,
+         "score": 1},
+    ])
+    rows = await repo.search_indicators("тревожность")
+    assert rows[0]["score"] == 1.0
+    assert isinstance(rows[0]["score"], float)
+
+
+async def test_get_indicator_returns_none_when_absent():
+    repo, _ = _repo_with([])
+    assert await repo.get_indicator(999) is None
