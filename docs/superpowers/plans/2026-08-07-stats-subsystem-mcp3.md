@@ -1407,11 +1407,25 @@ import pytest
 from src.mcp.stats_server import _align_tool, _indicators_search, _series
 
 
+_UNSET = object()
+
+_DEFAULT_INDICATOR = {
+    "value_kind": "share", "unit": "%", "granularity": "week",
+    "title": "t", "source": "fom", "code": "c", "question_text": "",
+    "dims_schema": {}, "entity_vid": None,
+}
+
+
 class _StubRepo:
-    def __init__(self, rows=None, indicators=None, sources=None):
+    def __init__(self, rows=None, indicators=None, sources=None,
+                 indicator=_UNSET):
         self.rows = rows or []
         self.indicators = indicators or []
         self.sources = sources or []
+        # `indicator=None` simulates an id that does not exist.
+        self.indicator = (
+            _DEFAULT_INDICATOR if indicator is _UNSET else indicator
+        )
         self.calls: list[tuple] = []
 
     async def search_indicators(self, query, *, source=None, limit=20):
@@ -1432,16 +1446,26 @@ class _StubRepo:
         return self.rows
 
     async def get_indicator(self, indicator_id):
-        return {"id": indicator_id, "value_kind": "share", "unit": "%",
-                "granularity": "week", "title": "t", "source": "fom",
-                "code": "c", "question_text": "", "dims_schema": {},
-                "entity_vid": None}
+        if self.indicator is None:
+            return None
+        return {**self.indicator, "id": indicator_id}
 
 
 async def test_series_rejects_bad_date():
     out = await _series(_StubRepo(), 1, "not-a-date", None, None)
     assert "error" in out
     assert "YYYY-MM-DD" in out["error"]
+
+
+async def test_series_errors_on_an_unknown_indicator():
+    """An unknown id must say so.  Returning an empty series instead
+    would read as "this indicator has no data", which is a different
+    and much more misleading answer."""
+    repo = _StubRepo(rows=[{"period_start": "2026-01-05", "value": 1.0}],
+                     indicator=None)
+    out = await _series(repo, 999, None, None, None)
+    assert out == {"error": "no indicator with id 999"}
+    assert not any(c[0] == "series" for c in repo.calls)
 
 
 async def test_series_returns_rows_with_indicator_metadata():
