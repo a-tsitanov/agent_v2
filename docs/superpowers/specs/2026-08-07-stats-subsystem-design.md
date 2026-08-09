@@ -199,6 +199,11 @@ Notes that matter:
 One query layer, so MCP-3 and the CLI report identical numbers — the same
 discipline `_stats_by` follows today.
 
+- `list_sources()` — one row per source: indicator count and the earliest /
+  latest period any of its indicators covers. This is the entry point for a
+  caller who does not yet know what the subsystem holds.
+- `list_indicators(source=None, limit=100)` — the registry itself, optionally
+  scoped to one source.
 - `search_indicators(query, source=None, limit=20)` — trigram similarity
   over `title` and `question_text`, ordered by score.
 - `get_indicator(indicator_id)`
@@ -238,9 +243,20 @@ Built on the `channel_message_stats` template: thin validating helpers that
 are unit-testable without FastMCP, no retriever/graph bootstrap, plain
 Postgres, and a **120 s** timeout rather than 1800 s.
 
-- `stat_indicators_search(query, source=None, limit=20)` — discovery: which
-  indicators exist, with unit / value_kind / granularity / coverage so the
-  agent can decide what is comparable.
+- `stat_indicators_search(query=None, source=None, limit=20)` — discovery.
+  **`query` is optional on purpose.** Called with no arguments it returns the
+  catalog — the sources, how many indicators each holds, and the period they
+  cover. Called with `source` alone it lists that source's indicators. Called
+  with `query` it runs the trigram search. Without the no-argument mode a
+  caller has to guess a search term before it can learn anything, and a
+  trigram miss is indistinguishable from "no such data" — so an agent that
+  guessed wrong would confidently report that the statistic does not exist.
+  Every hit carries unit / value_kind / granularity, which is what tells the
+  caller whether two indicators are comparable.
+
+  The server's FastMCP `instructions` must state the discovery-first order
+  explicitly: call `stat_indicators_search` with no arguments to see what
+  exists, then narrow. The tool list alone does not teach that.
 - `stat_series(indicator_id, since=None, until=None, dims=None)` — the
   values, plus indicator metadata and `source_doc_id` per point for
   provenance back to the bulletin.

@@ -1186,6 +1186,201 @@ git commit -m "feat(stats): add StatsRepository with pure query builders"
 
 ---
 
+### Task 4 — Amendment (approved 2026-08-09, after the Task 4 review)
+
+Two things, both landing in the same two files.
+
+**(a) Registry discovery.** `search_indicators` requires the caller to already
+know a search term, and trigram matching does not find synonyms — so a caller
+that guesses wrong cannot distinguish "no match" from "no such data" and will
+confidently report the statistic does not exist. The registry needs a way to
+answer "what is in here at all".
+
+**(b) Validation coverage.** The Task 4 review found — correctly, and it is the
+plan's fault, not the implementer's — that `upsert_indicator`'s `value_kind` /
+`granularity` validation ships with no test at all, and that 3 of 5 repository
+methods are never exercised. That validation is the gate keeping a malformed
+source out of the registry, and more sources are expected.
+
+**Interfaces added:**
+- `build_sources_query() -> tuple[str, list]`
+- `build_indicators_query(source: str | None, limit: int) -> tuple[str, list]`
+- `StatsRepository.list_sources() -> list[dict]`
+- `StatsRepository.list_indicators(*, source=None, limit=100) -> list[dict]`
+
+- [ ] **Step A1: Write the failing tests**
+
+Append to `tests/test_storage/test_stats_repository.py`, extending the existing
+top-level import to include `build_indicators_query` and `build_sources_query`:
+
+```python
+def test_sources_query_rolls_up_indicator_count_and_period_bounds():
+    sql, params = build_sources_query()
+    assert "LEFT JOIN stat_observation" in sql
+    assert "count(DISTINCT i.id) AS indicators" in sql
+    assert "min(o.period_start) AS earliest" in sql
+    assert "max(o.period_start) AS latest" in sql
+    assert "GROUP BY i.source" in sql
+    assert params == []
+
+
+def test_indicators_query_without_source_has_no_where_clause():
+    sql, params = build_indicators_query(None, 100)
+    assert "WHERE" not in sql
+    assert params == [100]
+
+
+def test_indicators_query_filters_by_source():
+    sql, params = build_indicators_query("fom", 50)
+    assert "WHERE source = %s" in sql
+    assert params == ["fom", 50]
+
+
+async def test_list_sources_isoformats_period_bounds():
+    repo, _ = _repo_with([
+        {"source": "fom", "indicators": 3,
+         "earliest": date(2026, 1, 5), "latest": date(2026, 6, 1)},
+    ])
+    assert await repo.list_sources() == [
+        {"source": "fom", "indicators": 3,
+         "earliest": "2026-01-05", "latest": "2026-06-01"},
+    ]
+
+
+async def test_list_sources_survives_a_source_with_no_observations():
+    """A registered indicator with no rows yet must still be listed —
+    otherwise a freshly seeded source looks like it does not exist."""
+    repo, _ = _repo_with([
+        {"source": "rosstat", "indicators": 1, "earliest": None, "latest": None},
+    ])
+    assert await repo.list_sources() == [
+        {"source": "rosstat", "indicators": 1, "earliest": None, "latest": None},
+    ]
+
+
+async def test_upsert_indicator_rejects_unknown_value_kind():
+    repo, conn = _repo_with([])
+    with pytest.raises(ValueError, match="value_kind"):
+        await repo.upsert_indicator(
+            source="fom", code="x", title="T", unit="%",
+            value_kind="ratio", granularity="week",
+        )
+    assert conn.cur.executed == []
+
+
+async def test_upsert_indicator_rejects_unknown_granularity():
+    repo, conn = _repo_with([])
+    with pytest.raises(ValueError, match="granularity"):
+        await repo.upsert_indicator(
+            source="fom", code="x", title="T", unit="%",
+            value_kind="share", granularity="fortnight",
+        )
+    assert conn.cur.executed == []
+
+
+async def test_search_indicators_casts_score_to_float():
+    repo, _ = _repo_with([
+        {"id": 1, "source": "fom", "code": "anxiety", "title": "Тревожность",
+         "question_text": "", "unit": "%", "value_kind": "share",
+         "granularity": "week", "dims_schema": {}, "entity_vid": None,
+         "score": 1},
+    ])
+    rows = await repo.search_indicators("тревожность")
+    assert rows[0]["score"] == 1.0
+    assert isinstance(rows[0]["score"], float)
+
+
+async def test_get_indicator_returns_none_when_absent():
+    repo, _ = _repo_with([])
+    assert await repo.get_indicator(999) is None
+```
+
+- [ ] **Step A2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_storage/test_stats_repository.py -v`
+Expected: FAIL — `ImportError: cannot import name 'build_sources_query'`
+
+- [ ] **Step A3: Implement**
+
+Add to `src/storage/stats.py`, beside the existing builders:
+
+```python
+def build_sources_query() -> tuple[str, list[Any]]:
+    """One row per source: how many indicators it has and the span its
+    observations cover.  The entry point for a caller that does not yet
+    know what the subsystem holds."""
+    sql = (
+        "SELECT i.source, count(DISTINCT i.id) AS indicators, "
+        "min(o.period_start) AS earliest, max(o.period_start) AS latest "
+        "FROM stat_indicator i "
+        "LEFT JOIN stat_observation o ON o.indicator_id = i.id "
+        "GROUP BY i.source ORDER BY i.source"
+    )
+    return sql, []
+
+
+def build_indicators_query(
+    source: str | None, limit: int,
+) -> tuple[str, list[Any]]:
+    """The registry itself, optionally scoped to one source."""
+    params: list[Any] = []
+    where = ""
+    if source is not None:
+        where = "WHERE source = %s "
+        params.append(source)
+    params.append(limit)
+    sql = (
+        "SELECT id, source, code, title, question_text, unit, value_kind, "
+        "granularity, dims_schema, entity_vid FROM stat_indicator "
+        f"{where}ORDER BY source, title LIMIT %s"
+    )
+    return sql, params
+```
+
+And the two repository methods:
+
+```python
+    async def list_sources(self) -> list[dict[str, Any]]:
+        sql, params = build_sources_query()
+        async with self._conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+        # LEFT JOIN: a registered indicator with no observations yet yields
+        # NULL bounds rather than dropping the source from the catalogue.
+        return [
+            {
+                "source": r["source"],
+                "indicators": int(r["indicators"]),
+                "earliest": r["earliest"].isoformat() if r["earliest"] else None,
+                "latest": r["latest"].isoformat() if r["latest"] else None,
+            }
+            for r in rows
+        ]
+
+    async def list_indicators(
+        self, *, source: str | None = None, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql, params = build_indicators_query(source, limit)
+        async with self._conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(sql, params)
+            return list(await cur.fetchall())
+```
+
+- [ ] **Step A4: Run tests to verify they pass**
+
+Run: `uv run pytest tests/test_storage/test_stats_repository.py -v`
+Expected: PASS — the 8 original tests plus 9 new ones.
+
+- [ ] **Step A5: Lint and commit**
+
+```bash
+uv run ruff check src/storage/stats.py tests/test_storage/test_stats_repository.py
+git add src/storage/stats.py tests/test_storage/test_stats_repository.py
+git commit -m "feat(stats): add registry discovery queries and validation coverage"
+```
+
+---
+
 ### Task 5: MCP-3 server
 
 **Files:**
@@ -1213,13 +1408,22 @@ from src.mcp.stats_server import _align_tool, _indicators_search, _series
 
 
 class _StubRepo:
-    def __init__(self, rows=None, indicators=None):
+    def __init__(self, rows=None, indicators=None, sources=None):
         self.rows = rows or []
         self.indicators = indicators or []
+        self.sources = sources or []
         self.calls: list[tuple] = []
 
     async def search_indicators(self, query, *, source=None, limit=20):
         self.calls.append(("search", query, source, limit))
+        return self.indicators
+
+    async def list_sources(self):
+        self.calls.append(("list_sources",))
+        return self.sources
+
+    async def list_indicators(self, *, source=None, limit=100):
+        self.calls.append(("list_indicators", source, limit))
         return self.indicators
 
     async def series(self, indicator_id, *, since=None, until=None,
@@ -1247,9 +1451,40 @@ async def test_series_returns_rows_with_indicator_metadata():
     assert out["indicator"]["unit"] == "%"
 
 
-async def test_indicators_search_rejects_empty_query():
-    out = await _indicators_search(_StubRepo(), "  ", None, 10)
-    assert "error" in out
+async def test_indicators_search_without_query_returns_the_catalogue():
+    """No query and no source means the caller does not yet know what
+    exists — answer with the catalogue rather than an error, or the
+    caller has to guess a search term to learn anything."""
+    repo = _StubRepo(sources=[
+        {"source": "fom", "indicators": 3,
+         "earliest": "2026-01-05", "latest": "2026-06-01"},
+    ])
+    out = await _indicators_search(repo, None, None, 20)
+    assert out["sources"] == repo.sources
+    assert repo.calls == [("list_sources",)]
+    assert "error" not in out
+
+
+async def test_indicators_search_blank_query_is_treated_as_absent():
+    repo = _StubRepo(sources=[])
+    out = await _indicators_search(repo, "   ", None, 20)
+    assert "sources" in out
+    assert repo.calls == [("list_sources",)]
+
+
+async def test_indicators_search_with_source_only_lists_that_source():
+    repo = _StubRepo(indicators=[{"id": 1, "source": "fom"}])
+    out = await _indicators_search(repo, None, "fom", 20)
+    assert out["source"] == "fom"
+    assert out["indicators"] == repo.indicators
+    assert repo.calls == [("list_indicators", "fom", 20)]
+
+
+async def test_indicators_search_with_query_runs_the_trigram_search():
+    repo = _StubRepo(indicators=[{"id": 1}])
+    out = await _indicators_search(repo, "тревожность", None, 20)
+    assert out["query"] == "тревожность"
+    assert repo.calls[0][0] == "search"
 
 
 async def test_indicators_search_caps_limit():
@@ -1326,10 +1561,16 @@ mcp = FastMCP(
     name="kb-llamaindex-stats",
     instructions=(
         "Exact external statistics (polls, official series).  Every tool "
-        "returns data, never a written answer.  Typical flow: "
-        "stat_indicators_search to find an indicator, stat_series to get "
-        "its values, then stat_align to compare it against a channel-side "
-        "series fetched from the MCP-2 server."
+        "returns data, never a written answer.  "
+        "START by calling stat_indicators_search with NO arguments — it "
+        "returns the catalogue of sources and what each covers.  Do not "
+        "guess a search term before you have seen it: matching is "
+        "trigram-based, so a wrong guess returns nothing and looks "
+        "exactly like the data not existing.  "
+        "Then stat_series for one indicator's values, and stat_align to "
+        "compare it against a channel-side series fetched from the MCP-2 "
+        "server (topic_trend / polarity_evolution).  stat_align is the "
+        "arithmetic — do not compute gaps, correlations or lags yourself."
     ),
     auth=build_sse_auth(),
 )
@@ -1367,11 +1608,24 @@ def _points(raw: list[dict[str, Any]], label: str) -> tuple[list, str | None]:
 
 
 async def _indicators_search(
-    repo: Any, query: str, source: str | None, limit: int,
+    repo: Any, query: str | None, source: str | None, limit: int,
 ) -> dict[str, Any]:
-    if not query or not query.strip():
-        return {"error": "query must be a non-empty string"}
+    """Three modes, deliberately behind one tool.
+
+    No query and no source is not an error — it is a caller that does
+    not yet know what exists.  Answering it with the catalogue is the
+    only way such a caller can learn anything: trigram matching finds
+    spelling variants but not synonyms, so a wrong guess is
+    indistinguishable from "no such data" and would be reported as the
+    statistic not existing.
+    """
     capped = max(1, min(int(limit), _MAX_SEARCH_LIMIT))
+    blank = not query or not query.strip()
+    if blank and source is None:
+        return {"sources": await repo.list_sources()}
+    if blank:
+        rows = await repo.list_indicators(source=source, limit=capped)
+        return {"source": source, "indicators": rows}
     rows = await repo.search_indicators(
         query.strip(), source=source, limit=capped,
     )
@@ -1440,17 +1694,23 @@ def _align_tool(
 
 @mcp.tool(timeout=120)
 async def stat_indicators_search(
-    query: str, source: str | None = None, limit: int = 20,
+    query: str | None = None, source: str | None = None, limit: int = 20,
 ) -> dict[str, Any]:
-    """Find external statistical indicators by name or poll wording.
+    """Discover what external statistics exist, then narrow to one indicator.
 
-    USE FOR: "какие есть показатели про тревожность", discovering what
-    can be compared before calling `stat_series`.  Each hit carries
-    `unit`, `value_kind` and `granularity`, which is what tells you
-    whether two indicators are comparable at all.  Optional `source`
-    filters to one provider (e.g. "fom").  Matching is trigram-based,
-    so it finds spelling variants but NOT synonyms — try the actual
-    wording you expect on the bulletin.
+    CALL THIS FIRST, WITH NO ARGUMENTS — you get the catalogue: every
+    source, how many indicators it holds, and the period it covers.
+    Then either pass `source` to list that provider's indicators, or
+    pass `query` to search by name and poll wording.
+
+    Do not guess a `query` before you have seen the catalogue.  Matching
+    is trigram-based: it finds spelling variants but NOT synonyms, so a
+    wrong guess returns nothing and is indistinguishable from the data
+    not existing.
+
+    Every indicator carries `unit`, `value_kind` and `granularity` —
+    that is what tells you whether two series are comparable at all, and
+    it is what `stat_align` needs.
     NOT FOR: values (use `stat_series`) or document text (use MCP-2
     `vector_search`)."""
     return await _indicators_search(_repo(), query, source, limit)
@@ -1997,7 +2257,9 @@ After Task 7, the end-to-end path should be walkable by hand:
 
 1. `uv run python -m scripts.stat_import tests/test_stats/fixtures/fom_sample.csv`
 2. Start MCP-3: `uv run python -m src.mcp.stats_server --transport http --port 9003`
-3. From an MCP client: `stat_indicators_search("тревожность")` → note the `id`
+3. From an MCP client: `stat_indicators_search()` with no arguments → the
+   catalogue, showing `fom` with its indicator count and covered period. Then
+   `stat_indicators_search("тревожность")` → note the `id`
 4. `stat_series(<id>)` → three rows, the 2026-01-12 period showing revision 1 (`55.2`), not revision 0
 5. From MCP-2: `topic_trend("тревожность", granularity="week")`
 6. `stat_align(<channel rows>, <indicator rows>, granularity="week", value_kind_a="level", value_kind_b="share", max_lag=4)` → a `warnings` list containing `low_overlap:…` for the three-point fixture, which is the correct answer for that little data.
