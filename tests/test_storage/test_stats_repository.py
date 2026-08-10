@@ -4,6 +4,7 @@ lives in thin functions so it stays testable without a live Postgres."""
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date
@@ -95,6 +96,37 @@ def test_series_query_applies_date_bounds_and_dims():
     assert params[0] == 7
     assert date(2026, 1, 1) in params
     assert date(2026, 6, 1) in params
+
+
+def test_series_query_empty_dims_means_strictly_undimensioned():
+    """`dims={}` is "the rows carrying NO dimensions", not "any row".
+
+    Containment (`@>`) with an empty object matches EVERY row, so an
+    explicit empty cut used to be no filter at all: DISTINCT ON returned
+    one row per regional cut and `resample` averaged them into a single
+    number presented as exact.
+    """
+    sql, params = build_series_query(7, None, None, {}, None)
+    assert "dims = %s" in sql
+    assert "dims @> %s" not in sql
+    assert params == [7, "{}"]
+
+
+def test_series_query_omits_the_dims_filter_only_when_dims_is_none():
+    sql, params = build_series_query(7, None, None, None, None)
+    assert "dims = %s" not in sql
+    assert "dims @> %s" not in sql
+    assert params == [7]
+
+
+def test_series_query_non_empty_dims_still_uses_containment():
+    """A partial cut must stay a containment match — asking for
+    `{"region": "Москва"}` should not require naming every other
+    dimension the indicator happens to carry."""
+    sql, params = build_series_query(7, None, None, {"region": "Москва"}, None)
+    assert "dims @> %s" in sql
+    assert "dims = %s" not in sql
+    assert params[-1] == json.dumps({"region": "Москва"})
 
 
 def test_search_query_uses_trigram_similarity_and_caps_limit():

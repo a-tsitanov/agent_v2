@@ -18,6 +18,7 @@ Run::
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Any
 
@@ -108,6 +109,18 @@ async def _indicators_search(
     return {"query": query.strip(), "source": source, "indicators": rows}
 
 
+def _dims_cuts(rows: list[dict[str, Any]]) -> int:
+    """How many distinct `dims` values the rows span.
+
+    Serialised with sorted keys because `jsonb` normalises key order:
+    two rows written `{a,b}` and `{b,a}` are the SAME cut, and counting
+    them as two would raise a warning nobody can act on.
+    """
+    return len({
+        json.dumps(r.get("dims") or {}, sort_keys=True) for r in rows
+    })
+
+
 async def _series(
     repo: Any,
     indicator_id: int,
@@ -127,7 +140,11 @@ async def _series(
     if indicator is None:
         return {"error": f"no indicator with id {indicator_id}"}
     rows = await repo.series(indicator_id, since=s, until=u, dims=dims)
-    return {"indicator": indicator, "rows": rows}
+    # Several cuts mean several numbers per period, and `stat_align`
+    # averages within a bucket — so an unnarrowed panel would be reported
+    # as one exact value for the whole indicator.  Say so instead.
+    warnings = ["multiple_dims_cuts"] if _dims_cuts(rows) > 1 else []
+    return {"indicator": indicator, "rows": rows, "warnings": warnings}
 
 
 def _align_tool(
@@ -203,10 +220,15 @@ async def stat_series(
 
     USE FOR: "как менялась тревожность", fetching the poll side before
     a comparison.  `since` / `until` are ISO `YYYY-MM-DD` bounds on
-    `period_start`; `dims` filters a panel cut, e.g.
-    `{"region": "Москва"}`.  Each row carries `source_doc_id` — the
-    ingested bulletin the number came from, so a claim can be traced
-    back.
+    `period_start`.  Each row carries `source_doc_id` — the ingested
+    bulletin the number came from, so a claim can be traced back.
+
+    `dims` picks a panel cut: `{"region": "Москва"}` matches every row
+    carrying that region, and `{}` means specifically the rows with NO
+    dimensions at all.  Omitting `dims` returns EVERY cut, which for a
+    dimensioned indicator is several numbers per period, not a series —
+    then `warnings` contains `multiple_dims_cuts` and you must narrow
+    `dims` before aligning.  READ `warnings`.
     NEXT STEP: to compare against channel attention, fetch a series
     with MCP-2 `topic_trend` and pass both to `stat_align`."""
     return await _series(_repo(), indicator_id, since, until, dims)

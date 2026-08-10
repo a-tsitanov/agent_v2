@@ -75,6 +75,53 @@ async def test_series_returns_rows_with_indicator_metadata():
     assert out["indicator"]["unit"] == "%"
 
 
+async def test_series_warns_when_the_result_spans_several_dims_cuts():
+    """Three regional cuts on one period are three numbers, not one.
+
+    Without the warning a caller hands them to `stat_align`, which
+    averages the cuts inside the bucket and reports the mean as an exact
+    value for the whole indicator.
+    """
+    repo = _StubRepo(rows=[
+        {"period_start": "2026-01-05", "value": 10.0, "dims": {"region": "Москва"}},
+        {"period_start": "2026-01-05", "value": 20.0, "dims": {"region": "СПб"}},
+        {"period_start": "2026-01-05", "value": 60.0, "dims": {"region": "Урал"}},
+    ])
+    out = await _series(repo, 1, None, None, None)
+    assert out["warnings"] == ["multiple_dims_cuts"]
+
+
+async def test_series_does_not_warn_on_a_single_cut():
+    repo = _StubRepo(rows=[
+        {"period_start": "2026-01-05", "value": 10.0, "dims": {"region": "Москва"}},
+        {"period_start": "2026-01-12", "value": 20.0, "dims": {"region": "Москва"}},
+    ])
+    out = await _series(repo, 1, None, None, None)
+    assert out["warnings"] == []
+
+
+async def test_series_does_not_warn_on_undimensioned_rows():
+    repo = _StubRepo(rows=[
+        {"period_start": "2026-01-05", "value": 10.0, "dims": {}},
+        {"period_start": "2026-01-12", "value": 20.0, "dims": {}},
+    ])
+    out = await _series(repo, 1, None, None, None)
+    assert out["warnings"] == []
+
+
+async def test_series_dims_key_order_is_not_a_second_cut():
+    """`jsonb` normalises key order, so two rows differing only in the
+    order they were written are the SAME cut and must not warn."""
+    repo = _StubRepo(rows=[
+        {"period_start": "2026-01-05", "value": 1.0,
+         "dims": {"region": "Москва", "age": "18-30"}},
+        {"period_start": "2026-01-12", "value": 2.0,
+         "dims": {"age": "18-30", "region": "Москва"}},
+    ])
+    out = await _series(repo, 1, None, None, None)
+    assert out["warnings"] == []
+
+
 async def test_indicators_search_without_query_returns_the_catalogue():
     """No query and no source means the caller does not yet know what
     exists — answer with the catalogue rather than an error, or the

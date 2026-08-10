@@ -42,8 +42,15 @@ def build_series_query(
     if until is not None:
         where.append("period_start <= %s")
         params.append(until)
-    if dims:
-        where.append("dims @> %s")
+    if dims is not None:
+        # `{}` means "the rows carrying NO dimensions" — NOT "no filter".
+        # Containment (`@>`) with an empty object matches every row, so an
+        # `if dims:` test silently turned an explicit undimensioned request
+        # into an unfiltered one: DISTINCT ON then returned one row per cut
+        # and the caller's resampling averaged the cuts into a single number
+        # presented as exact.  jsonb normalises key order, so `=` is a
+        # well-defined test for "this exact cut".
+        where.append("dims = %s" if not dims else "dims @> %s")
         params.append(json.dumps(dims))
     if revision is not None:
         where.append("revision = %s")
