@@ -489,6 +489,19 @@ def _period_in_window(
     return not (until and start > date.fromisoformat(until))
 
 
+# Backends whose store cannot serve `topic_trend` AT ALL.  The primitive
+# calls `run_rows(store, cypher, {"topic": topic})`; nebula's
+# `structured_query` raises NotImplementedError on a non-empty `param_map`
+# (src/graph/nebula_store.py:268-272) and `run_rows` fail-softs every
+# exception to `[]` (src/analytics/store_query.py:23-25).  The tool would
+# therefore answer "0 mentions, ever" for every topic — indistinguishable
+# from a real zero.  A missing answer is honest; a silent zero is not.
+#
+# DELETE THIS GUARD (and this constant) as soon as NebulaGraphStore binds
+# nGQL parameters.  Nothing else needs to change.
+_TOPIC_TREND_UNSUPPORTED_BACKENDS = frozenset({"nebula"})
+
+
 async def _topic_trend(
     store: Any, topic: str, granularity: str,
     since: str | None, until: str | None, _fn: Any = None,
@@ -509,18 +522,44 @@ async def _topic_trend(
                 return {"error": f"{name} must be ISO YYYY-MM-DD, got {value!r}"}
     if store is None:
         return {"error": "graph store unavailable"}
+    if settings.graph.backend in _TOPIC_TREND_UNSUPPORTED_BACKENDS:
+        return {"error": (
+            f"topic_trend is unavailable on the {settings.graph.backend} graph "
+            "backend: its query binds a parameter, which NebulaGraphStore "
+            "does not support yet, and the analytics layer degrades that to "
+            "an empty result — which would be reported as 'never mentioned'. "
+            "No trend can be returned for any topic on this backend."
+        )}
     fn = _fn or _primitive
     res = await fn(store, topic=topic.strip(), granularity=granularity)
-    rows = [
-        r for r in res.rows
-        if _period_in_window(r["period"], granularity, since, until)
-    ]
+    rows = []
+    for r in res.rows:
+        if not _period_in_window(r["period"], granularity, since, until):
+            continue
+        # `period` is a LABEL (`"2026-Q1"`, `"2026-03"`, `"2026"`), which
+        # `date.fromisoformat` cannot parse.  MCP-3's `stat_align` wants
+        # `{period_start, value}`, so emit those too — additively, and
+        # from here, because this module is the one that knows both the
+        # label format and the granularity.  MCP-3 must not learn either.
+        rows.append({
+            **r,
+            "period_start": _period_bounds(r["period"], granularity)[0].isoformat(),
+            "value": r["mentions"],
+        })
     return {"topic": topic.strip(), "granularity": granularity, "rows": rows}
 
 
 async def _polarity_evolution(
     store: Any, name: str | None, rel_type: str | None, _fn: Any = None,
 ) -> dict[str, Any]:
+    """No `period_start`/`value` here, deliberately — see the tool docstring.
+
+    Rows come from `build_dynamics_graph_ops(store).polarity_evolution`,
+    which returns one row per (period, polarity) pair, not a series.  Its
+    nebula implementation inlines literals into nGQL and passes no
+    `param_map`, so it does NOT share `topic_trend`'s backend fault and
+    is not guarded.
+    """
     from src.analytics.primitives.dynamics import polarity_evolution as _primitive
 
     if not name and not rel_type:
@@ -591,7 +630,13 @@ async def topic_trend(
     indicator.  `granularity`: day / week / month (default) / quarter /
     year.  `since` / `until` are ISO `YYYY-MM-DD` bounds applied to the
     returned buckets.  Returns `{topic, granularity, rows:[{period,
-    mentions}]}`.
+    mentions, period_start, value}]}`, where `period` is a human label
+    (`"2026-Q1"`, `"2026-03"`) and `period_start` is that bucket's first
+    day as an ISO date.  PASS THE ROWS STRAIGHT TO `stat_align`: it reads
+    `period_start` and `value`, which is why both are here.
+    If the graph backend cannot serve this query, you get `{"error": …}`
+    rather than an empty series — do not read a missing answer as "this
+    topic was never mentioned".
     NOT FOR: ingest volume (use `channel_message_timeline`) or message
     content (use `vector_search`)."""
     await _init()
@@ -607,13 +652,23 @@ async def polarity_evolution(
     """How the polarity of an entity's relations shifts over time — the
     channel-side VALUATION series.
 
-    USE FOR: "как менялось отношение к X", and as the channel-side input
-    to MCP-3 `stat_align` when comparing tone against poll assessments.
-    Provide at least one of `name` (entity) / `rel_type` (relation type).
-    Polarity is computed over graph EDGES, not per-message sentiment —
-    it is a coarser signal than a poll's rating scale, so read it as
-    direction rather than magnitude.
-    NOT FOR: mention counts (use `topic_trend`)."""
+    USE FOR: "как менялось отношение к X". Provide at least one of
+    `name` (entity) / `rel_type` (relation type).  Polarity is computed
+    over graph EDGES, not per-message sentiment — it is a coarser signal
+    than a poll's rating scale, so read it as direction rather than
+    magnitude.
+
+    NOT DIRECTLY USABLE BY `stat_align`, unlike `topic_trend`.  Rows are
+    `{period, polarity, n}` — a per-polarity BREAKDOWN with several rows
+    per period, not one series, and `period` is always a month label
+    (`"2026-03"`) regardless of what you asked for.  There is no single
+    `value` to align: which polarity counts as "the" series is a
+    judgement, so this tool does not make it for you.  To compare tone
+    against a poll you must pick one polarity, decide whether you want
+    its count or its share of the period, and build `{period_start,
+    value}` points yourself.
+    NOT FOR: mention counts (use `topic_trend`, whose rows DO feed
+    `stat_align` unchanged)."""
     await _init()
     return await _polarity_evolution(
         _deps.get("graph_store"), name, rel_type,
