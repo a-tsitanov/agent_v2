@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from math import isfinite
 from typing import Any
 
 from fastmcp import FastMCP
@@ -80,6 +81,12 @@ def _points(raw: list[dict[str, Any]], label: str) -> tuple[list, str | None]:
             v = float(p["value"])
         except (ValueError, TypeError) as exc:
             return [], f"{label}[{i}] is malformed: {exc}"
+        # NaN/Infinity parse as floats and then propagate silently: one of
+        # them makes `divergence` NaN with no warning, and NaN is not valid
+        # JSON, so the answer could not be returned even if it meant
+        # anything.  Refuse the input instead of returning a broken number.
+        if not isfinite(v):
+            return [], f"{label}[{i}] value must be a finite number, got {v!r}"
         out.append((d, v))
     return out, None
 

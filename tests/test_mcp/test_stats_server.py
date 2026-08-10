@@ -3,6 +3,8 @@ exercised, same convention as the other MCP tests."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.mcp.stats_server import _align_tool, _indicators_search, _series
@@ -176,6 +178,28 @@ def test_align_tool_is_json_safe_and_reports_warnings():
 def test_align_tool_rejects_malformed_points():
     out = _align_tool([{"value": 1.0}], [], "week", "share", "share", 0)
     assert "error" in out
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_align_tool_rejects_non_finite_values(bad: float):
+    """`float("nan")` parses fine and then silently poisons the result:
+    `divergence` comes back as `nan`, no warning is raised, and `nan` is
+    not valid JSON so the payload cannot even be serialised."""
+    a = [{"period_start": "2026-01-05", "value": bad},
+         {"period_start": "2026-01-12", "value": 2.0}]
+    out = _align_tool(a, a, "week", "share", "share", 0)
+    assert "error" in out
+    assert "series_a[0]" in out["error"]
+    assert "finite" in out["error"]
+
+
+def test_align_tool_output_is_strictly_json_serialisable():
+    """`json.dumps(..., allow_nan=False)` is what a strict JSON encoder
+    on the wire does; if it raises, the tool cannot answer at all."""
+    a = [{"period_start": f"2026-01-{d:02d}", "value": float(d)}
+         for d in (5, 12, 19, 26)]
+    out = _align_tool(a, a, "week", "share", "share", 0)
+    assert json.dumps(out, allow_nan=False)
 
 
 def test_align_tool_rejects_unknown_granularity():

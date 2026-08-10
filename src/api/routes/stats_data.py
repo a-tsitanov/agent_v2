@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from math import isfinite
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -65,11 +66,36 @@ class IndicatorIn(BaseModel):
 class ObservationIn(BaseModel):
     period_start: date
     period_end: date
-    value: float
+    # `NaN` / `Infinity` are not JSON, but `json.loads` — which is what
+    # Starlette calls — accepts the literals, and a plain `float` accepts
+    # what it hands over.  Stored, they poison the read side silently:
+    # `align` returns `divergence: NaN` with no warning, and `nan` cannot
+    # be serialised back out as JSON at all.  This subsystem exists to
+    # keep numbers exact; a non-number is not a value.
+    value: float = Field(allow_inf_nan=False)
     dims: dict[str, Any] = Field(default_factory=dict)
-    sample_n: int | None = None
+    # A respondent count.  Negative is not a small sample, it is corrupt
+    # input; zero is legitimate (a published cut with nobody in it).
+    sample_n: int | None = Field(default=None, ge=0)
     revision: int = Field(default=0, ge=0)
     source_doc_id: uuid.UUID | None = None
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _non_finite_is_not_a_value(cls, v: Any) -> Any:
+        """Swap a non-finite float for text BEFORE pydantic records it.
+
+        `allow_inf_nan=False` above is what rejects it, but pydantic
+        echoes the offending input back inside the 422 body, and
+        Starlette's `JSONResponse.render` serialises with
+        `allow_nan=False` — so rendering the validation error would
+        itself raise and the caller would get a 500, not a rejection.
+        Replacing the value with a string keeps the refusal serialisable
+        and puts the reason where the caller reads it.
+        """
+        if isinstance(v, float) and not isfinite(v):
+            return f"non-finite value ({v!r}) is not a number"
+        return v
 
     @model_validator(mode="after")
     def _ordered_period(self) -> ObservationIn:
@@ -119,7 +145,7 @@ async def load_statistics(req: LoadRequest) -> LoadResponse:
         )
     except ValueError as exc:  # defence in depth; pydantic catches this first
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc),
+            status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc),
         ) from exc
 
     rows = [

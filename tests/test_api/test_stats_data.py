@@ -7,6 +7,7 @@ against the real FastAPI app without a live Postgres — same approach as
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -50,6 +51,25 @@ async def _post(body: dict) -> tuple[int, dict]:
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await ac.post(
             "/api/v1/statistics/load", json=body, headers=_api_key_header(),
+        )
+    return resp.status_code, resp.json()
+
+
+async def _post_raw(raw: str) -> tuple[int, dict]:
+    """Post a body verbatim.
+
+    `NaN` / `Infinity` are not JSON, but Python's `json.loads` — which is
+    what Starlette calls — accepts them, so they cannot be reproduced by
+    building a dict and letting the client serialise it.
+    """
+    from src.api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/statistics/load",
+            content=raw.encode(),
+            headers={**_api_key_header(), "Content-Type": "application/json"},
         )
     return resp.status_code, resp.json()
 
@@ -112,6 +132,57 @@ async def test_load_rejects_period_end_before_period_start() -> None:
     code, payload = await _post(body)
     assert code == 422
     assert "period_end" in str(payload)
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.asyncio
+async def test_load_rejects_non_finite_values(literal: str) -> None:
+    """A stored NaN poisons everything downstream: `align` yields
+    `divergence: NaN` with no warning, and `nan` is not valid JSON on the
+    way out — the response cannot even be serialised.  Reject at the
+    door."""
+    raw = json.dumps(_body())
+    raw = raw.replace('"value": 57.5', f'"value": {literal}')
+    code, payload = await _post_raw(raw)
+    assert code == 422
+    assert payload["detail"][0]["loc"] == ["body", "observations", 0, "value"]
+    assert "non-finite" in payload["detail"][0]["input"]
+    # The REJECTION must itself be serialisable.  Echoing the offending
+    # value back would make Starlette's renderer (allow_nan=False) raise
+    # and turn a validation error into a 500.
+    assert json.dumps(payload, allow_nan=False)
+
+
+@pytest.mark.asyncio
+async def test_load_rejects_a_negative_sample_n() -> None:
+    """`sample_n` is a respondent count.  A negative one is not a small
+    sample, it is a corrupt payload."""
+    body = _body()
+    body["observations"][0]["sample_n"] = -5
+    code, payload = await _post(body)
+    assert code == 422
+    assert "sample_n" in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_load_accepts_a_zero_sample_n() -> None:
+    """Zero is legitimate — a published cut with no respondents in it."""
+    from src.storage.stats import StatsRepository
+
+    body = _body()
+    body["observations"][0]["sample_n"] = 0
+    with (
+        patch.object(
+            StatsRepository, "upsert_indicator", new=AsyncMock(return_value=7),
+        ),
+        patch.object(
+            StatsRepository, "upsert_observations", new=AsyncMock(return_value=1),
+        ) as up_obs,
+    ):
+        code, _ = await _post(body)
+
+    assert code == 200
+    assert up_obs.await_args.args[0][0]["sample_n"] == 0
 
 
 @pytest.mark.asyncio
