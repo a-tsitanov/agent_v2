@@ -208,6 +208,23 @@ services:
       nebula-graphd: {condition: service_healthy}
     restart: unless-stopped
 
+  # MCP-3: exact external statistics.  Deliberately the thinnest of the
+  # three — it reads the two `stat_*` tables over plain Postgres and holds
+  # no LLM, no retriever and no graph client, which is why it waits only on
+  # postgres where mcp-tools waits on milvus + nebula.  Do NOT add those
+  # here: the missing dependencies ARE the boundary this subsystem is built
+  # around, and a statistics answer must not become unavailable because the
+  # semantic side is down.
+  mcp-stats:
+    <<: [*app-build]
+    command: ["python", "-m", "src.mcp.stats_server", "--transport", "http", "--port", "9003"]
+    environment: *app-env
+    ports:
+      - "${MCP_STATS_PORT:-9003}:9003"
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+
   # ───────────────────────── backing services ────────────────────────
 
   # ── Graph DB: NebulaGraph cluster (sole graph backend post-cutover) ──

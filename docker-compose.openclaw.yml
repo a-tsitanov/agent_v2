@@ -1,8 +1,9 @@
 # OpenClaw agent gateway as ONE extra container, layered on the production stack.
 # Extension of docker-compose.prod.yml — replaces the self-written src/bot as the
-# Telegram-facing agentic layer. OpenClaw talks to the KB's two MCP servers
-# (kb-search :9001, kb-tools :9002) over streamable-http + Bearer, runs an agentic
-# tool-use loop on the local litellm LLM, and speaks Telegram natively.
+# Telegram-facing agentic layer. OpenClaw talks to the KB's three MCP servers
+# (kb-search :9001, kb-tools :9002, kb-stats :9003) over streamable-http + Bearer,
+# runs an agentic tool-use loop on the local litellm LLM, and speaks Telegram
+# natively.
 #
 #   docker compose -f docker-compose.prod.yml -f docker-compose.litellm.yml \
 #     -f docker-compose.openclaw.yml up -d openclaw
@@ -19,6 +20,7 @@
 #     openclaw config set agents.defaults.model litellm/gemma4:12b
 #     openclaw mcp add kb-search --url http://mcp-search:9001/mcp --transport streamable-http --header "Authorization=Bearer $API_KEY"
 #     openclaw mcp add kb-tools  --url http://mcp-tools:9002/mcp  --transport streamable-http --header "Authorization=Bearer $API_KEY"
+#     openclaw mcp add kb-stats  --url http://mcp-stats:9003/mcp  --transport streamable-http --header "Authorization=Bearer $API_KEY"
 #     openclaw channels add --channel telegram --token "$OPENCLAW_TELEGRAM_TOKEN"
 #   '
 # Verify: `openclaw mcp probe kb-tools --json` (should list the KB tools).
@@ -56,4 +58,8 @@ services:
       - litellm
       - mcp-search
       - mcp-tools
+      # MCP-3: exact statistics.  Without it wired, the agent can reach the
+      # semantic side only and will answer number questions from the contour
+      # that is allowed to approximate.
+      - mcp-stats
     restart: unless-stopped
