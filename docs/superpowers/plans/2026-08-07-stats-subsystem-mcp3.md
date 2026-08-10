@@ -2404,6 +2404,255 @@ git commit -m "feat(mcp): expose topic_trend and polarity_evolution on MCP-2"
 
 ---
 
+### Task 7 — Amendment (approved 2026-08-10, after the Task 7 review)
+
+The review found two silent-wrong-answer defects, both mine, both traced to this
+plan's own code.
+
+**(a) `_period_in_window` is wrong for `quarter`.** `epoch_days_to_period`
+emits `"2026-Q2"`, and `'Q'` (0x51) sorts after every digit, so a quarter key is
+lexicographically greater than every `"YYYY-MM"` string. Verified empirically by
+the reviewer: a `since`-only bound admits every quarter unfiltered; any `until`
+bound drops every quarter. No error — just wrong rows feeding the comparison the
+subsystem exists for.
+
+**(b) `day` and `week` are advertised but do not exist.**
+`epoch_days_to_period` only branches on `year` and `quarter`; everything else,
+including `day` and `week`, falls through to the month format. A request for
+`granularity="day"` returns month-resolution buckets while the response still
+says `"granularity": "day"`.
+
+The human partner chose to implement the missing granularities rather than trim
+the advertised list. **Week is implemented alongside day**: `stat_align` defaults
+to weekly and ФОМ waves are weekly, so leaving `week` silently degrading would
+break the subsystem's primary use case while looking like it worked.
+
+**Week buckets start Monday**, matching `period_key` in `src/stats/align.py`. The
+two halves of a comparison must bucket weeks identically or `stat_align` aligns
+series that are a few days out of phase — an error that would look like a real
+lag.
+
+**Interfaces changed:**
+- `epoch_days_to_period(epoch, granularity)` gains `day` → `"2026-05-04"` and
+  `week` → the Monday of that week, also `"2026-05-04"`. `year`, `quarter` and
+  `month` formats are unchanged.
+- `_period_bounds(period: str, granularity: str) -> tuple[date, date]` — new.
+- `_period_in_window(period, granularity, since, until) -> bool` — gains the
+  `granularity` argument; the string-prefix compare is gone.
+
+- [ ] **Step A1: Write the failing tests**
+
+Append to `tests/test_analytics/test_ids.py`:
+
+```python
+def test_epoch_days_to_period_day_and_week():
+    # 19797 = 2024-03-15, a Friday; its week bucket is Monday 2024-03-11.
+    assert epoch_days_to_period(19797, "day") == "2024-03-15"
+    assert epoch_days_to_period(19797, "week") == "2024-03-11"
+    # A Monday buckets to itself.
+    assert epoch_days_to_period(19793, "week") == "2024-03-11"
+
+
+def test_epoch_days_to_period_unknown_granularity_still_falls_back_to_month():
+    """Unchanged behaviour for unknown input — callers validate upstream."""
+    assert epoch_days_to_period(19797, "fortnight") == "2024-03"
+```
+
+Append to `tests/test_mcp/test_tools_server_trend.py`:
+
+```python
+from datetime import date
+
+from src.mcp.tools_server import _period_bounds, _period_in_window
+
+
+def test_period_bounds_per_granularity():
+    assert _period_bounds("2026", "year") == (date(2026, 1, 1), date(2026, 12, 31))
+    assert _period_bounds("2026-Q2", "quarter") == (
+        date(2026, 4, 1), date(2026, 6, 30),
+    )
+    assert _period_bounds("2026-02", "month") == (
+        date(2026, 2, 1), date(2026, 2, 28),
+    )
+    assert _period_bounds("2024-02", "month") == (
+        date(2024, 2, 1), date(2024, 2, 29),
+    )
+    assert _period_bounds("2026-05-04", "week") == (
+        date(2026, 5, 4), date(2026, 5, 10),
+    )
+    assert _period_bounds("2026-05-04", "day") == (
+        date(2026, 5, 4), date(2026, 5, 4),
+    )
+
+
+def test_period_in_window_keeps_quarters_that_overlap():
+    """The bug this replaces: 'Q' sorts after every digit, so a prefix
+    compare admitted every quarter under `since` and dropped every
+    quarter under `until`."""
+    keep = [
+        q for q in ("2026-Q1", "2026-Q2", "2026-Q3", "2026-Q4")
+        if _period_in_window(q, "quarter", "2026-04-01", "2026-09-30")
+    ]
+    assert keep == ["2026-Q2", "2026-Q3"]
+
+
+def test_period_in_window_overlap_not_containment():
+    """A bucket straddling the boundary still carries mentions from
+    inside the window; dropping it would silently lose them."""
+    assert _period_in_window("2026-Q2", "quarter", "2026-06-25", None)
+    assert _period_in_window("2026", "year", None, "2026-01-02")
+
+
+def test_period_in_window_open_bounds():
+    assert _period_in_window("2026-05", "month", None, None)
+    assert not _period_in_window("2026-05", "month", "2026-07-01", None)
+    assert not _period_in_window("2026-05", "month", None, "2026-04-30")
+
+
+async def test_topic_trend_filters_quarter_buckets():
+    async def fake(store, *, topic, granularity):
+        from src.analytics.catalog import PrimitiveResult
+        return PrimitiveResult(cypher="", params={}, rows=[
+            {"period": "2026-Q1", "mentions": 3},
+            {"period": "2026-Q2", "mentions": 9},
+            {"period": "2026-Q4", "mentions": 1},
+        ])
+
+    out = await _topic_trend(
+        object(), "инфляция", "quarter", "2026-04-01", "2026-09-30", _fn=fake,
+    )
+    assert out["rows"] == [{"period": "2026-Q2", "mentions": 9}]
+
+
+async def test_topic_trend_argument_checks_run_before_the_store_check():
+    """With a real store present, a bad argument must still be reported
+    as a bad argument — the previous tests passed a None store, so they
+    could not tell the two branches apart."""
+    out = await _topic_trend(object(), "  ", "month", None, None)
+    assert "topic" in out["error"]
+    out = await _topic_trend(object(), "инфляция", "fortnight", None, None)
+    assert "granularity" in out["error"]
+    out = await _polarity_evolution(object(), None, None)
+    assert "rel_type" in out["error"]
+```
+
+- [ ] **Step A2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_analytics/test_ids.py tests/test_mcp/test_tools_server_trend.py -v`
+Expected: FAIL — `ImportError: cannot import name '_period_bounds'`, plus the
+`epoch_days_to_period` day/week assertions failing with month-format values.
+
+- [ ] **Step A3: Add the missing granularities**
+
+In `src/analytics/ids.py`, replace `epoch_days_to_period` with:
+
+```python
+def epoch_days_to_period(epoch: int, granularity: str = "month") -> str:
+    """Bucket an epoch-day integer into a period label.
+
+    granularity: ``year`` → ``"2024"`` · ``quarter`` → ``"2024-Q1"`` ·
+    ``month`` (default) → ``"2024-03"`` · ``week`` → the Monday of that
+    week, ``"2024-03-11"`` · ``day`` → ``"2024-03-15"``.
+
+    Weeks start Monday to match ``period_key`` in ``src/stats/align.py``:
+    the two sides of a statistical comparison must bucket weeks the same
+    way, or aligned series sit a few days out of phase and the offset
+    reads as a real lag.
+    """
+    d = _EPOCH + timedelta(days=int(epoch))
+    if granularity == "year":
+        return f"{d.year:04d}"
+    if granularity == "quarter":
+        return f"{d.year:04d}-Q{(d.month - 1) // 3 + 1}"
+    if granularity == "day":
+        return d.isoformat()
+    if granularity == "week":
+        return (d - timedelta(days=d.weekday())).isoformat()
+    return f"{d.year:04d}-{d.month:02d}"
+```
+
+- [ ] **Step A4: Replace the window filter**
+
+In `src/mcp/tools_server.py`, replace `_period_in_window` with:
+
+```python
+def _period_bounds(period: str, granularity: str) -> tuple[date, date]:
+    """First and last day covered by a bucket key from
+    ``epoch_days_to_period``."""
+    if granularity == "year":
+        y = int(period)
+        return date(y, 1, 1), date(y, 12, 31)
+    if granularity == "quarter":
+        y, q = int(period[:4]), int(period[-1])
+        m0 = 3 * (q - 1) + 1
+        m1 = m0 + 2
+        return date(y, m0, 1), date(y, m1, monthrange(y, m1)[1])
+    if granularity == "month":
+        y, m = int(period[:4]), int(period[5:7])
+        return date(y, m, 1), date(y, m, monthrange(y, m)[1])
+    start = date.fromisoformat(period)
+    if granularity == "week":
+        return start, start + timedelta(days=6)
+    return start, start
+
+
+def _period_in_window(
+    period: str, granularity: str, since: str | None, until: str | None,
+) -> bool:
+    """Keep a bucket that OVERLAPS the window.
+
+    Overlap rather than containment: a coarse bucket straddling a
+    boundary still carries mentions from inside the window, and dropping
+    it would silently lose them.  The previous implementation compared
+    truncated ISO strings, which broke on quarter keys — ``'Q'`` sorts
+    after every digit, so ``"2026-Q2"`` compared greater than every
+    ``"YYYY-MM"`` bound.
+    """
+    start, end = _period_bounds(period, granularity)
+    if since and end < date.fromisoformat(since):
+        return False
+    return not (until and start > date.fromisoformat(until))
+```
+
+`monthrange` comes from the stdlib `calendar` module; `date` and `timedelta`
+from `datetime`. Add the imports where the file's other imports live — this
+file keeps some imports function-local, so match whatever the surrounding
+helpers do rather than moving anything.
+
+Then update the one call site inside `_topic_trend` to pass `granularity`:
+
+```python
+    rows = [
+        r for r in res.rows
+        if _period_in_window(r["period"], granularity, since, until)
+    ]
+```
+
+- [ ] **Step A5: Run tests to verify they pass**
+
+Run: `uv run pytest tests/test_analytics/test_ids.py tests/test_mcp/test_tools_server_trend.py -v`
+Expected: PASS.
+
+Then confirm nothing regressed in the analytics primitives that share the
+bucketing function:
+`uv run pytest tests/test_analytics tests/test_mcp tests/test_stats tests/test_storage -q`
+
+- [ ] **Step A6: Update the tool docstring**
+
+`topic_trend`'s docstring lists the granularities. It is now accurate for all
+five — leave the list, but make sure nothing in it still implies day/week are
+approximate.
+
+- [ ] **Step A7: Lint and commit**
+
+```bash
+uv run ruff check src/analytics/ids.py src/mcp/tools_server.py tests/test_analytics/test_ids.py tests/test_mcp/test_tools_server_trend.py
+git add src/analytics/ids.py src/mcp/tools_server.py tests/test_analytics/test_ids.py tests/test_mcp/test_tools_server_trend.py
+git commit -m "fix(analytics): add day/week buckets and fix quarter date filtering"
+```
+
+---
+
 ## Verification
 
 After Task 7, the end-to-end path should be walkable by hand:
