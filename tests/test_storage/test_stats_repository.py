@@ -260,3 +260,96 @@ async def test_search_indicators_casts_score_to_float():
 async def test_get_indicator_returns_none_when_absent():
     repo, _ = _repo_with([])
     assert await repo.get_indicator(999) is None
+
+
+def test_trigram_operator_survives_psycopg_placeholder_expansion():
+    """`%` is psycopg's placeholder marker, so the trigram operator has
+    to be written `%%` — and that escaping is invisible until runtime.
+
+    Asserted through psycopg's OWN converter rather than by eyeballing
+    the string: it is the component that collapses `%%` to `%` and
+    numbers the real placeholders, so this pins the query as actually
+    sent.  Writing a single `%` instead passes every other test in this
+    file and fails only against a live database.
+    """
+    from psycopg._queries import PostgresQuery
+    from psycopg.adapt import Transformer
+
+    sql, params = build_search_query("тревожность", None, 20)
+    assert "title %% %s" in sql
+    assert "question_text %% %s" in sql
+
+    q = PostgresQuery(Transformer())
+    q.convert(sql, params)
+    sent = q.query.decode()
+    # Collapsed to the single-character trigram operator...
+    assert "(title % $3 OR question_text % $4)" in sent
+    # ...and no doubled `%` survived into the wire query.
+    assert "%%" not in sent
+    # Exactly five real placeholders: two similarity() scores, two match
+    # terms, LIMIT.  A `%` miscounted as one would shift the numbering.
+    assert all(f"${i}" in sent for i in range(1, 6))
+    assert "$6" not in sent
+
+
+def test_search_query_single_percent_would_not_survive_conversion():
+    """The counter-proof: with one `%` psycopg reads `% %s` as a broken
+    placeholder, which is why the escape cannot be dropped."""
+    import psycopg
+    from psycopg._queries import PostgresQuery
+    from psycopg.adapt import Transformer
+
+    sql, params = build_search_query("тревожность", None, 20)
+    broken = sql.replace("%%", "%")
+    q = PostgresQuery(Transformer())
+    with pytest.raises(psycopg.ProgrammingError, match="incomplete placeholder"):
+        q.convert(broken, params)
+
+
+async def test_upsert_indicator_returns_the_id_and_commits():
+    """The success path: neither the RETURNING handling nor the commit
+    was executed by any test, so an id read from the wrong column would
+    not have been noticed."""
+    repo, conn = _repo_with([{"id": 7}])
+    got = await repo.upsert_indicator(
+        source="fom", code="anxiety", title="Тревожность", unit="%",
+        value_kind="share", granularity="week",
+        question_text="Какое настроение преобладает?",
+        dims_schema={"region": "str"}, entity_vid="ent-1",
+    )
+    assert got == 7
+    assert conn.committed == 1
+
+    sql, sent = conn.cur.executed[0]
+    assert "INSERT INTO stat_indicator" in sql
+    assert "ON CONFLICT (source, code) DO UPDATE SET" in sql
+    assert "RETURNING id" in sql
+    # Column order is positional here; a swapped pair would be silently
+    # written to the wrong column.
+    assert sent == (
+        "fom", "anxiety", "Тревожность", "Какое настроение преобладает?",
+        "%", "share", "week", json.dumps({"region": "str"}), "ent-1",
+    )
+
+
+async def test_upsert_indicator_reads_the_id_from_a_tuple_row_too():
+    """`_conn()` yields a pooled connection whose default row factory is
+    NOT dict_row, so the RETURNING row can arrive as a plain tuple."""
+    repo, conn = _repo_with([(11,)])
+    assert await repo.upsert_indicator(
+        source="rosstat", code="cpi", title="ИПЦ", unit="index",
+        value_kind="index", granularity="month",
+    ) == 11
+    assert conn.committed == 1
+
+
+async def test_upsert_indicator_defaults_question_text_and_dims_schema():
+    repo, conn = _repo_with([{"id": 3}])
+    await repo.upsert_indicator(
+        source="fom", code="x", title="T", unit="%",
+        value_kind="share", granularity="week",
+    )
+    _, sent = conn.cur.executed[0]
+    assert sent[3] == ""          # question_text
+    assert sent[7] == "{}"        # dims_schema
+    assert sent[8] is None        # entity_vid

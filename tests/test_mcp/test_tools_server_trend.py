@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from src.mcp.tools_server import (
     _period_bounds,
@@ -86,6 +86,52 @@ def test_period_in_window_overlap_not_containment():
     inside the window; dropping it would silently lose them."""
     assert _period_in_window("2026-Q2", "quarter", "2026-06-25", None)
     assert _period_in_window("2026", "year", None, "2026-01-02")
+
+
+def test_period_in_window_keeps_a_bucket_ending_exactly_on_since():
+    """The boundary day itself is inside the window.
+
+    `end < since` must drop; `end == since` must keep — a bucket whose
+    last day IS `since` contains one day of the requested window, and
+    losing it loses those mentions.  Swapping `<` for `<=` here survives
+    every other window test, so this case has to be pinned explicitly.
+    """
+    # January's bucket ends 2026-01-31; a window opening that same day
+    # still overlaps it by exactly one day.
+    assert _period_in_window("2026-01", "month", "2026-01-31", None)
+    # One day later there is no overlap left at all.
+    assert not _period_in_window("2026-01", "month", "2026-02-01", None)
+
+
+def test_period_in_window_keeps_a_bucket_starting_exactly_on_until():
+    """Mirror case: `start > until` must drop, `start == until` keep."""
+    # February's bucket starts 2026-02-01; a window closing that day
+    # overlaps it by exactly one day.
+    assert _period_in_window("2026-02", "month", None, "2026-02-01")
+    # A day earlier, the bucket is entirely outside.
+    assert not _period_in_window("2026-02", "month", None, "2026-01-31")
+
+
+def test_period_in_window_exact_boundaries_per_granularity():
+    """Same two boundaries across every bucket shape, since each one
+    computes its bounds by a different branch of `_period_bounds`."""
+    for period, granularity, last_day, first_day in (
+        ("2026", "year", "2026-12-31", "2026-01-01"),
+        ("2026-Q2", "quarter", "2026-06-30", "2026-04-01"),
+        ("2026-05", "month", "2026-05-31", "2026-05-01"),
+        ("2026-05-04", "week", "2026-05-10", "2026-05-04"),
+        ("2026-05-04", "day", "2026-05-04", "2026-05-04"),
+    ):
+        assert _period_in_window(period, granularity, last_day, None), period
+        assert _period_in_window(period, granularity, None, first_day), period
+        after = date.fromisoformat(last_day) + timedelta(days=1)
+        before = date.fromisoformat(first_day) - timedelta(days=1)
+        assert not _period_in_window(
+            period, granularity, after.isoformat(), None,
+        ), period
+        assert not _period_in_window(
+            period, granularity, None, before.isoformat(),
+        ), period
 
 
 def test_period_in_window_open_bounds():

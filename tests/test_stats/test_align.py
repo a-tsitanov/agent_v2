@@ -11,7 +11,15 @@ from datetime import date
 
 import pytest
 
-from src.stats.align import MIN_OVERLAP, align, pearson, period_key, resample, zscore
+from src.stats.align import (
+    MIN_OVERLAP,
+    VALUE_KINDS,
+    align,
+    pearson,
+    period_key,
+    resample,
+    zscore,
+)
 
 
 def test_period_key_week_starts_monday():
@@ -198,3 +206,63 @@ def test_align_rejects_unknown_granularity():
     with pytest.raises(ValueError, match="granularity"):
         align([], [], granularity="fortnight",
               value_kind_a="share", value_kind_b="share")
+
+
+def test_value_kind_families_partition_the_enumeration():
+    """`_MEAN_KINDS` and `_LAST_KINDS` must cover `VALUE_KINDS` exactly.
+
+    Before, the dispatch in `resample` was `if last: … else: mean`, so a
+    new `value_kind` added to `VALUE_KINDS` and to neither family would
+    have been averaged silently.  For anything stock-like that is a
+    wrong number — the one failure mode this subsystem exists to
+    prevent.
+    """
+    from src.stats.align import _LAST_KINDS, _MEAN_KINDS
+
+    assert _MEAN_KINDS | _LAST_KINDS == VALUE_KINDS
+    assert not _MEAN_KINDS & _LAST_KINDS
+
+
+@pytest.mark.parametrize(
+    ("value_kind", "expected"),
+    [("share", 15.0), ("rate", 15.0), ("index", 15.0), ("level", 20.0)],
+)
+def test_every_value_kind_dispatches_to_its_declared_family(value_kind, expected):
+    """Pins each member to mean-or-last, so a member silently moving
+    family shows up here rather than in a published number."""
+    points = [(date(2026, 8, 3), 10.0), (date(2026, 8, 5), 20.0)]
+    assert resample(points, granularity="week", value_kind=value_kind) == [
+        (date(2026, 8, 3), expected),
+    ]
+
+
+def test_align_warns_when_the_two_value_kinds_disagree():
+    """The spec names this warning as the guard against a confidently
+    wrong divergence: a `share` and a `level` are aggregated by DIFFERENT
+    rules inside a bucket (mean vs last), so the comparison is between
+    two things that were not built the same way.  The warning must name
+    both kinds, in a/b order, or a caller cannot tell which side is
+    which."""
+    start = date(2026, 1, 5)
+    vals = [1.0, 3.0, 2.0, 6.0, 4.0, 9.0, 5.0, 11.0]
+    res = align(
+        _weekly(start, vals), _weekly(start, vals),
+        granularity="week", value_kind_a="share", value_kind_b="level",
+    )
+    assert "value_kind_mismatch:share/level" in res.warnings
+
+    swapped = align(
+        _weekly(start, vals), _weekly(start, vals),
+        granularity="week", value_kind_a="level", value_kind_b="share",
+    )
+    assert "value_kind_mismatch:level/share" in swapped.warnings
+
+
+def test_align_does_not_warn_when_the_value_kinds_agree():
+    start = date(2026, 1, 5)
+    vals = [1.0, 3.0, 2.0, 6.0, 4.0, 9.0, 5.0, 11.0]
+    res = align(
+        _weekly(start, vals), _weekly(start, vals),
+        granularity="week", value_kind_a="index", value_kind_b="index",
+    )
+    assert not [w for w in res.warnings if w.startswith("value_kind_mismatch")]

@@ -8,6 +8,7 @@ against the real FastAPI app without a live Postgres — same approach as
 from __future__ import annotations
 
 import json
+from datetime import date
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -90,11 +91,34 @@ async def test_load_upserts_indicator_then_observations() -> None:
 
     assert code == 200
     assert payload == {"indicator_id": 7, "observations": 1}
+    # The route hand-maps nine fields onto keyword arguments.  Counting
+    # the call only proved it happened; swapping `title` and `unit` — both
+    # plain strings — would have passed.  Assert the whole mapping.
     assert up_ind.await_count == 1
+    assert up_ind.await_args.kwargs == {
+        "source": "fom",
+        "code": "anxiety",
+        "title": "Уровень тревожности",
+        "unit": "%",
+        "value_kind": "share",
+        "granularity": "week",
+        "question_text": "Какое настроение преобладает?",
+        "dims_schema": {},
+        "entity_vid": None,
+    }
+    assert up_ind.await_args.args == ()
+
     rows = up_obs.await_args.args[0]
-    assert rows[0]["indicator_id"] == 7
-    assert rows[0]["dims"] == {}
-    assert rows[0]["revision"] == 0
+    assert rows == [{
+        "indicator_id": 7,
+        "period_start": date(2026, 1, 5),
+        "period_end": date(2026, 1, 11),
+        "dims": {},
+        "value": 57.5,
+        "sample_n": 1500,
+        "revision": 0,
+        "source_doc_id": None,
+    }]
 
 
 @pytest.mark.asyncio

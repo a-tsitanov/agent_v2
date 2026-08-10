@@ -19,6 +19,19 @@ VALUE_KINDS = frozenset({"share", "level", "rate", "index"})
 _MEAN_KINDS = frozenset({"share", "rate", "index"})
 _LAST_KINDS = frozenset({"level"})
 
+# The two families must PARTITION `VALUE_KINDS` — checked here, at import,
+# rather than trusted.  A new value_kind added to `VALUE_KINDS` and to
+# neither family would otherwise fall through `resample`'s dispatch into
+# the mean branch and be silently averaged; for anything stock-like that
+# is a wrong number, which is the one failure this subsystem exists to
+# prevent.  A plain `assert` would vanish under `python -O`.
+if _MEAN_KINDS | _LAST_KINDS != VALUE_KINDS or _MEAN_KINDS & _LAST_KINDS:
+    raise AssertionError(
+        "aggregation families must partition VALUE_KINDS: "
+        f"mean={sorted(_MEAN_KINDS)} last={sorted(_LAST_KINDS)} "
+        f"kinds={sorted(VALUE_KINDS)}"
+    )
+
 
 def period_key(d: date, granularity: str) -> date:
     """Start of the bucket containing ``d``.  Weeks start Monday."""
@@ -60,8 +73,12 @@ def resample(
         items = sorted(buckets[key])
         if value_kind in _LAST_KINDS:
             out.append((key, items[-1][1]))
-        else:
+        elif value_kind in _MEAN_KINDS:
             out.append((key, sum(v for _, v in items) / len(items)))
+        else:  # pragma: no cover — the import-time partition check forbids it
+            raise AssertionError(
+                f"value_kind {value_kind!r} has no aggregation family"
+            )
     return out
 
 

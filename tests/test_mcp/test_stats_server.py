@@ -161,9 +161,38 @@ async def test_indicators_search_with_query_runs_the_trigram_search():
 
 
 async def test_indicators_search_caps_limit():
+    """`== 100`, not `<= 100`: the old assertion held for any value the
+    cap might have produced, including 1 or 0, so a broken cap that
+    returned nothing would have passed."""
     repo = _StubRepo(indicators=[])
     await _indicators_search(repo, "тревожность", None, 10_000)
-    assert repo.calls[0][3] <= 100
+    assert repo.calls[0] == ("search", "тревожность", None, 100)
+
+
+async def test_indicators_search_caps_limit_on_the_list_branch_too():
+    """The `source`-only branch takes a different path to the repo and
+    was not covered at all."""
+    repo = _StubRepo(indicators=[])
+    await _indicators_search(repo, None, "fom", 10_000)
+    assert repo.calls[0] == ("list_indicators", "fom", 100)
+
+
+async def test_indicators_search_floors_a_nonsense_limit_at_one():
+    """A zero or negative limit must not become "return nothing" —
+    an empty result is read as "no such data"."""
+    repo = _StubRepo(indicators=[])
+    await _indicators_search(repo, "тревожность", None, 0)
+    assert repo.calls[0] == ("search", "тревожность", None, 1)
+
+    repo = _StubRepo(indicators=[])
+    await _indicators_search(repo, None, "fom", -5)
+    assert repo.calls[0] == ("list_indicators", "fom", 1)
+
+
+async def test_indicators_search_passes_a_reasonable_limit_through():
+    repo = _StubRepo(indicators=[])
+    await _indicators_search(repo, "тревожность", None, 20)
+    assert repo.calls[0] == ("search", "тревожность", None, 20)
 
 
 def test_align_tool_is_json_safe_and_reports_warnings():
