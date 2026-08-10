@@ -198,9 +198,18 @@ LLM-используют `graph_search` (через LLMSynonymRetriever норм
 | `topic_trend` | `(topic, granularity="month", since=None, until=None)` | Частота упоминаний темы/сущности по периодам (по дате чанка) — канальный ряд ВНИМАНИЯ | [`dynamics.py`](../../src/analytics/primitives/dynamics.py) |
 | `polarity_evolution` | `(name=None, rel_type=None)` | Как менялась полярность связей сущности во времени — канальный ряд ОЦЕНКИ | [`dynamics.py`](../../src/analytics/primitives/dynamics.py) |
 
-В отличие от §4.1, эти два tool'а — не wrapper'ы над `atomic_tools.py`, а тонкие обёртки над analytics-каталожными примитивами `topic_trend` / `polarity_evolution` из [`src/analytics/primitives/dynamics.py`](../../src/analytics/primitives/dynamics.py) (используют тот же `_deps["graph_store"]`, что и GDS-tools из §4.1, не Milvus/`atomic_tools.py`). Примитив `topic_trend` не принимает границы дат — `since`/`until` фильтруют уже полученные бакеты постфактум (лексикографическое сравнение ISO-строк периода — точное, не эвристика).
+В отличие от §4.1, эти два tool'а — не wrapper'ы над `atomic_tools.py`, а тонкие обёртки над analytics-каталожными примитивами `topic_trend` / `polarity_evolution` из [`src/analytics/primitives/dynamics.py`](../../src/analytics/primitives/dynamics.py) (используют тот же `_deps["graph_store"]`, что и GDS-tools из §4.1, не Milvus/`atomic_tools.py`). Не зарегистрированы в analytics `CATALOG`/planner-пути (`kb_analyze`) — вызываются напрямую через MCP-2.
 
-Это КАНАЛ-сторона сравнения «о чём писали» vs «что показал опрос»: клиент берёт `rows` отсюда и `rows` из MCP-3 `stat_series`, передаёт оба в MCP-3 `stat_align` (см. §5.1). Не зарегистрированы в analytics `CATALOG`/planner-пути (`kb_analyze`) — вызываются напрямую через MCP-2.
+**⚠️ `topic_trend` не работает на nebula — а nebula это прод-дефолт (`GRAPH_BACKEND`).** Примитив вызывает `run_rows(store, cypher, {"topic": ...})`, а `NebulaGraphStore.structured_query` бросает `NotImplementedError` на непустом `param_map` ([`nebula_store.py:268-272`](../../src/graph/nebula_store.py)); `run_rows` fail-soft'ит любое исключение в `[]` ([`store_query.py:23-25`](../../src/analytics/store_query.py)). Раньше это давало `rows: []` для ЛЮБОЙ темы — неотличимо от «про это никогда не писали». Теперь tool возвращает `{"error": ...}` с явным упоминанием бэкенда: отсутствующий ответ честен, тихий ноль — нет. Снять ограничение = научить nebula биндить nGQL-параметры, после чего guard (`_TOPIC_TREND_UNSUPPORTED_BACKENDS` в `tools_server.py`) удаляется целиком. `polarity_evolution` этим НЕ затронут: он идёт через `build_dynamics_graph_ops`, чья nebula-реализация подставляет литералы в nGQL и `param_map` не передаёт.
+
+**Фильтр `since`/`until`.** Примитив не принимает границы дат — окно применяется к уже полученным бакетам, по **пересечению границ бакета с окном**, а не сравнением строк. Для каждого ключа периода `_period_bounds(period, granularity)` даёт первый и последний день бакета, и бакет остаётся, если он с окном пересекается (`end >= since` и `start <= until`). Два следствия, оба намеренные:
+
+- Пересечение, а не вложенность: бакет, наполовину торчащий за границу окна, всё равно содержит упоминания изнутри окна, и выбросить его значило бы молча их потерять. Квартал `2026-Q2` попадает в окно `since=2026-06-25` целиком.
+- Сравнение идёт по датам, а не по ISO-строкам. Прежняя реализация сравнивала обрезанные строки периода и ломалась на кварталах: `'Q'` сортируется после всех цифр, поэтому `"2026-Q2"` оказывался больше любой границы вида `"YYYY-MM"` — под `since` проходили все кварталы, под `until` не проходил ни один. Исправлено в `8d2a1dc`; регрессия закрыта тестами в `tests/test_mcp/test_tools_server_trend.py`.
+
+Это КАНАЛ-сторона сравнения «о чём писали» vs «что показал опрос»: клиент берёт `rows` отсюда и `rows` из MCP-3 `stat_series`, передаёт оба в MCP-3 `stat_align` (см. §5.1). Строки `topic_trend` отдаются в `stat_align` **как есть**: помимо `period` (человекочитаемая метка — `"2026-Q1"`, `"2026-03"`) и `mentions` каждая строка несёт `period_start` (первый день бакета, ISO-дата) и `value` (= `mentions`) — ровно те два ключа, которые читает `stat_align`. Преобразование живёт здесь, потому что формат метки и granularity знает этот модуль; MCP-3 знать чужой формат меток не должен.
+
+`polarity_evolution` в `stat_align` **напрямую не подаётся**: его строки — `{period, polarity, n}`, то есть разбивка по полярностям (несколько строк на период), а не ряд, и `period` там всегда месяц. Единого `value` в них нет; какую полярность считать «рядом» — решение клиента, и tool его за клиента не принимает.
 
 ---
 
@@ -213,10 +222,12 @@ LLM-используют `graph_search` (через LLMSynonymRetriever норм
 | Tool | Сигнатура | Что делает | Файл |
 |---|---|---|---|
 | `stat_indicators_search` | `(query=None, source=None, limit=20)` | Каталог источников (без аргументов) → список индикаторов источника (`source`) → триграм-поиск по названию/вопросу (`query`) | [`stats_server.py`](../../src/mcp/stats_server.py) |
-| `stat_series` | `(indicator_id, since=None, until=None, dims=None)` | Значения одного индикатора по времени, последняя ревизия на период | [`stats_server.py`](../../src/mcp/stats_server.py) |
+| `stat_series` | `(indicator_id, since=None, until=None, dims=None)` | Значения одного индикатора по времени, последняя ревизия на период; плюс `warnings` | [`stats_server.py`](../../src/mcp/stats_server.py) |
 | `stat_align` | `(series_a, series_b, granularity="week", value_kind_a="share", value_kind_b="share", max_lag=4)` | Сведение двух рядов на общую сетку, z-score, поиск лучшего лага, `gap`/`divergence`/`correlation` | [`stats_server.py`](../../src/mcp/stats_server.py) |
 
 **`stat_indicators_search` — три режима намеренно за одним tool'ом.** Пустой `query` и пустой `source` — не ошибка, а вызов "я ещё не знаю, что тут есть": ответ — каталог источников. Триграм-поиск находит опечатки/варианты написания, но не синонимы, поэтому неудачно угаданный `query` возвращает пусто и неотличим от "такой статистики нет" — заранее показать каталог для клиента дешевле, чем гадать.
+
+**`dims` в `stat_series` — три разных запроса, не два.** `dims={"region": "Москва"}` — вхождение (`jsonb @>`): строки, несущие этот разрез, независимо от прочих измерений. `dims={}` — строгое равенство: **только безразмерные** строки. `dims` не передан — вообще без фильтра, то есть ВСЕ разрезы сразу; для размерного индикатора это несколько чисел на период, а не ряд, и тогда в `warnings` приходит `multiple_dims_cuts`. Раньше `{}` и «не передан» вели себя одинаково, и `stat_align` усреднял разрезы внутри бакета, выдавая среднее как точное значение индикатора.
 
 **`stat_align` ничего не читает** — оба ряда приходят аргументами. Клиент сам достаёт канал-сторону через MCP-2 (`topic_trend` / `polarity_evolution`) и подтягивает индикаторную сторону отсюда (`stat_series`), затем передаёт оба в `stat_align`. Это держит границу чистой и не подпускает модель к арифметике.
 
@@ -337,8 +348,10 @@ uv run pytest tests/test_workflow/test_search_workflow.py -v
 | `kb_search` возвращает пустой answer для нормального query | `simple` mode и vector retriever пустой (нет docs) или semafor пустой | Sanity: `curl /api/v1/search` напрямую с тем же query — должен дать тот же результат |
 | OpenWebUI не видит MCP server в Settings | URL не правильный или transport mismatch | OpenWebUI ждёт `/sse` endpoint. `http://host:9001/sse` (не `http://host:9001` голый) |
 | MCP-1 progress notifications не приходят клиенту | fastmcp version mismatch или транспорт не поддерживает | stdio: некоторые клиенты игнорят progress. HTTP/SSE: должно работать. Проверить `pip show fastmcp` ≥ 2.0 |
-| `stat_indicators_search` без аргументов возвращает пустой каталог | В `stat_indicator`/`stat_observation` ещё ничего не загружено | Проверить загрузчик статистики (Task 4 ingest); `SELECT count(*) FROM stat_indicator` |
+| `stat_indicators_search` без аргументов возвращает пустой каталог | В `stat_indicator`/`stat_observation` ещё ничего не загружено | Данные заливаются только через `POST /api/v1/statistics/load` ([`src/api/routes/stats_data.py`](../../src/api/routes/stats_data.py)) — отдельного загрузчика/скрапера в проекте нет. Проверить: `SELECT count(*) FROM stat_indicator` |
 | `stat_align` возвращает `low_overlap:*` в `warnings` | Меньше `STATS_MIN_OVERLAP` (default 8) общих периодов после ресемплинга | Ожидаемо для коротких/редких рядов — корреляция намеренно не считается, не баг |
+| `stat_series` возвращает `multiple_dims_cuts` в `warnings` | У индикатора есть разрезы (`dims`), а запрос их не сузил — на один период приходится несколько строк | Это НЕ ряд: передав такое в `stat_align`, вы получите среднее по разрезам, поданное как точное число. Сузить: `dims={"region": "Москва"}`, либо `dims={}` — строго безразмерные строки |
+| `topic_trend` отвечает `{"error": "... nebula ..."}` | Ожидаемо: на nebula (прод-дефолт) tool не работает вовсе — см. §4.4 | Не «нет данных». Либо `GRAPH_BACKEND=neo4j`, либо канальную сторону сравнения брать иначе. Пустой `rows` тут был бы хуже ошибки |
 
 ---
 
