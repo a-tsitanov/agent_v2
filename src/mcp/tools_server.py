@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from calendar import monthrange
+from datetime import date, timedelta
 from typing import Any
 
 from fastmcp import FastMCP
@@ -449,12 +451,42 @@ async def _timeline(
 _TREND_GRANULARITIES = ("day", "week", "month", "quarter", "year")
 
 
-def _period_in_window(period: str, since: str | None, until: str | None) -> bool:
-    """`topic_trend` buckets are ISO-ordered strings ("2026-05",
-    "2026-05-04"), so a prefix-safe lexicographic compare is exact."""
-    if since and period < since[: len(period)]:
+def _period_bounds(period: str, granularity: str) -> tuple[date, date]:
+    """First and last day covered by a bucket key from
+    ``epoch_days_to_period``."""
+    if granularity == "year":
+        y = int(period)
+        return date(y, 1, 1), date(y, 12, 31)
+    if granularity == "quarter":
+        y, q = int(period[:4]), int(period[-1])
+        m0 = 3 * (q - 1) + 1
+        m1 = m0 + 2
+        return date(y, m0, 1), date(y, m1, monthrange(y, m1)[1])
+    if granularity == "month":
+        y, m = int(period[:4]), int(period[5:7])
+        return date(y, m, 1), date(y, m, monthrange(y, m)[1])
+    start = date.fromisoformat(period)
+    if granularity == "week":
+        return start, start + timedelta(days=6)
+    return start, start
+
+
+def _period_in_window(
+    period: str, granularity: str, since: str | None, until: str | None,
+) -> bool:
+    """Keep a bucket that OVERLAPS the window.
+
+    Overlap rather than containment: a coarse bucket straddling a
+    boundary still carries mentions from inside the window, and dropping
+    it would silently lose them.  The previous implementation compared
+    truncated ISO strings, which broke on quarter keys — ``'Q'`` sorts
+    after every digit, so ``"2026-Q2"`` compared greater than every
+    ``"YYYY-MM"`` bound.
+    """
+    start, end = _period_bounds(period, granularity)
+    if since and end < date.fromisoformat(since):
         return False
-    return not (until and period > until[: len(period)])
+    return not (until and start > date.fromisoformat(until))
 
 
 async def _topic_trend(
@@ -479,7 +511,10 @@ async def _topic_trend(
         return {"error": "graph store unavailable"}
     fn = _fn or _primitive
     res = await fn(store, topic=topic.strip(), granularity=granularity)
-    rows = [r for r in res.rows if _period_in_window(r["period"], since, until)]
+    rows = [
+        r for r in res.rows
+        if _period_in_window(r["period"], granularity, since, until)
+    ]
     return {"topic": topic.strip(), "granularity": granularity, "rows": rows}
 
 

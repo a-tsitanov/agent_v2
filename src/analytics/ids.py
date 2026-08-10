@@ -100,11 +100,21 @@ def epoch_days_to_period(epoch: int, granularity: str = "month") -> str:
     """Bucket an epoch-day integer into a period label.
 
     granularity: ``year`` → ``"2024"`` · ``quarter`` → ``"2024-Q1"`` ·
-    ``month`` (default) → ``"2024-03"``.
+    ``month`` (default) → ``"2024-03"`` · ``week`` → the Monday of that
+    week, ``"2024-03-11"`` · ``day`` → ``"2024-03-15"``.
+
+    Weeks start Monday to match ``period_key`` in ``src/stats/align.py``:
+    the two sides of a statistical comparison must bucket weeks the same
+    way, or aligned series sit a few days out of phase and the offset
+    reads as a real lag.
     """
     d = _EPOCH + timedelta(days=int(epoch))
     if granularity == "year":
         return f"{d.year:04d}"
     if granularity == "quarter":
         return f"{d.year:04d}-Q{(d.month - 1) // 3 + 1}"
+    if granularity == "day":
+        return d.isoformat()
+    if granularity == "week":
+        return (d - timedelta(days=d.weekday())).isoformat()
     return f"{d.year:04d}-{d.month:02d}"

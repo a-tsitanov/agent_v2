@@ -20,3 +20,16 @@ def test_epoch_days_to_period():
     assert epoch_days_to_period(19797, "year") == "2024"
     assert epoch_days_to_period(19797, "quarter") == "2024-Q1"
     assert epoch_days_to_period(0, "month") == "1970-01"  # epoch origin
+
+
+def test_epoch_days_to_period_day_and_week():
+    # 19797 = 2024-03-15, a Friday; its week bucket is Monday 2024-03-11.
+    assert epoch_days_to_period(19797, "day") == "2024-03-15"
+    assert epoch_days_to_period(19797, "week") == "2024-03-11"
+    # A Monday buckets to itself.
+    assert epoch_days_to_period(19793, "week") == "2024-03-11"
+
+
+def test_epoch_days_to_period_unknown_granularity_still_falls_back_to_month():
+    """Unchanged behaviour for unknown input — callers validate upstream."""
+    assert epoch_days_to_period(19797, "fortnight") == "2024-03"
