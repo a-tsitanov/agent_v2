@@ -177,6 +177,44 @@ async def test_load_rejects_non_finite_values(literal: str) -> None:
     assert json.dumps(payload, allow_nan=False)
 
 
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.asyncio
+async def test_load_rejects_non_finite_values_inside_dims(literal: str) -> None:
+    """`dims` is `dict[str, Any]` — pydantic never looks inside it.  A
+    NaN/Infinity nested anywhere in there reaches
+    `json.dumps(dims)` in `StatsRepository.upsert_observations` and
+    produces a bare `NaN`/`Infinity` token, which Postgres rejects as
+    invalid jsonb: a 500, not a 422.  Nest it two levels down (inside a
+    dict inside a list) to prove the walk isn't just top-level."""
+    body = _body()
+    body["observations"][0]["dims"] = {"region": "Москва", "cuts": [{"weight": literal}]}
+    raw = json.dumps(body)
+    raw = raw.replace(f'"weight": "{literal}"', f'"weight": {literal}')
+    code, payload = await _post_raw(raw)
+    assert code == 422
+    assert payload["detail"][0]["loc"] == ["body", "observations", 0, "dims"]
+    # The REJECTION must itself be serialisable.  Echoing the offending
+    # NaN back inside `dims` would make Starlette's renderer
+    # (allow_nan=False) raise and turn a validation error into a 500.
+    assert json.dumps(payload, allow_nan=False)
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.asyncio
+async def test_load_rejects_non_finite_values_inside_dims_schema(literal: str) -> None:
+    """`IndicatorIn.dims_schema` is the same shape (`dict[str, Any]`) and
+    the same exposure: it reaches `json.dumps(dims_schema)` in
+    `StatsRepository.upsert_indicator`."""
+    body = _body()
+    body["indicator"]["dims_schema"] = {"region": literal}
+    raw = json.dumps(body)
+    raw = raw.replace(f'"region": "{literal}"', f'"region": {literal}')
+    code, payload = await _post_raw(raw)
+    assert code == 422
+    assert payload["detail"][0]["loc"] == ["body", "indicator", "dims_schema"]
+    assert json.dumps(payload, allow_nan=False)
+
+
 @pytest.mark.asyncio
 async def test_load_rejects_a_negative_sample_n() -> None:
     """`sample_n` is a respondent count.  A negative one is not a small

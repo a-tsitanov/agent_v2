@@ -37,6 +37,49 @@ router = APIRouter(
 _MAX_OBSERVATIONS = 1000
 
 
+def _first_non_finite_float(obj: Any) -> float | None:
+    """DFS through nested dicts/lists for the first non-finite float.
+
+    `dims` / `dims_schema` are `dict[str, Any]` — pydantic never looks
+    inside `Any`, so a `NaN`/`Infinity` can hide at any depth (a value,
+    or nested inside a dict/list value) and still reach
+    `json.dumps(...)` in `StatsRepository`, producing a bare `NaN` token
+    that Postgres rejects as invalid jsonb.
+    """
+    if isinstance(obj, float):
+        return obj if not isfinite(obj) else None
+    if isinstance(obj, dict):
+        for v in obj.values():
+            found = _first_non_finite_float(v)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _first_non_finite_float(v)
+            if found is not None:
+                return found
+    return None
+
+
+def _non_finite_anywhere_is_not_a_value(v: Any) -> Any:
+    """Same rationale as `ObservationIn._non_finite_is_not_a_value`, applied
+    to a whole `dict[str, Any]` rather than a single `float` field.
+
+    A NaN/Infinity nested anywhere inside `dims` / `dims_schema` reaches
+    `json.dumps(...)` in `StatsRepository` and produces a bare `NaN` /
+    `Infinity` token, which Postgres rejects as invalid jsonb — a 500,
+    not a 422.  Swapping the whole dict for text (instead of raising with
+    the original dict as `input`) makes pydantic's own dict-type check
+    reject it naturally, which keeps the 422 body serialisable: the
+    offending float never reaches the error payload.
+    """
+    if isinstance(v, dict):
+        bad = _first_non_finite_float(v)
+        if bad is not None:
+            return f"non-finite value ({bad!r}) is not allowed anywhere in this object"
+    return v
+
+
 class IndicatorIn(BaseModel):
     source: str = Field(min_length=1)
     code: str = Field(min_length=1)
@@ -61,6 +104,11 @@ class IndicatorIn(BaseModel):
         if v not in GRANULARITIES:
             raise ValueError(f"granularity must be one of {sorted(GRANULARITIES)}")
         return v
+
+    @field_validator("dims_schema", mode="before")
+    @classmethod
+    def _non_finite_dims_schema_is_not_a_value(cls, v: Any) -> Any:
+        return _non_finite_anywhere_is_not_a_value(v)
 
 
 class ObservationIn(BaseModel):
@@ -96,6 +144,11 @@ class ObservationIn(BaseModel):
         if isinstance(v, float) and not isfinite(v):
             return f"non-finite value ({v!r}) is not a number"
         return v
+
+    @field_validator("dims", mode="before")
+    @classmethod
+    def _non_finite_dims_is_not_a_value(cls, v: Any) -> Any:
+        return _non_finite_anywhere_is_not_a_value(v)
 
     @model_validator(mode="after")
     def _ordered_period(self) -> ObservationIn:
