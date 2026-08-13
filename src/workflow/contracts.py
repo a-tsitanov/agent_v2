@@ -492,6 +492,10 @@ class OrchestratorParams(_Frozen):
     # Channel-group filter (include / exclude lists; empty = all groups).
     groups: list[str] = Field(default_factory=list)
     exclude_groups: list[str] = Field(default_factory=list)
+    # When false, step 4 (`synthesize_answer`, large model) is skipped and
+    # the outcome's `answer` comes back "". Retrieval, the coverage loop
+    # and reranking are unaffected — same sources either way.
+    synthesize: bool = True
 
 
 class SearchOutcome(_Frozen):

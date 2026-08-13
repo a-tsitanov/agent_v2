@@ -81,6 +81,14 @@ class SearchRequest(BaseModel):
         default=None,
         description="Exclude-list of channel groups (mutually exclusive with groups).",
     )
+    # When false the final large-model synthesis is skipped and `answer`
+    # comes back empty; everything else in the response is unchanged.
+    # For callers that compose their own answer from `sources` and only
+    # pay for retrieval.
+    synthesize: bool = Field(
+        default=True,
+        description="Run the final answer synthesis (default). False returns retrieval only.",
+    )
 
     @field_validator(
         "created_after", "created_before", "doc_date_after", "doc_date_before",

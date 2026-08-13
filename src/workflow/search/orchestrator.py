@@ -337,23 +337,29 @@ class SearchOrchestratorWorkflow:
         # (TEMPORAL_LARGE_ACTIVITY_CONCURRENCY).  The call spec (queue +
         # use_synthesis_llm=True) comes from the pure ``build_synthesize_call``
         # helper so it's unit-testable outside Temporal.
-        self._state["phase"] = "synthesize"
-        synth_queue, synth_params = build_synthesize_call(
-            query=params.query,
-            sources=synth_sources,
-            max_refinements=params.max_refinements,
-            answer_template=params.answer_template,
-        )
-        synth: SynthesizeResult = await workflow.execute_activity(
-            "synthesize_answer",
-            synth_params,
-            task_queue=synth_queue,
-            result_type=SynthesizeResult,
-            start_to_close_timeout=LLM_START_TO_CLOSE,
-            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
-            heartbeat_timeout=LLM_HEARTBEAT_TIMEOUT,
-            retry_policy=FAST_RETRY,
-        )
+        if params.synthesize:
+            self._state["phase"] = "synthesize"
+            synth_queue, synth_params = build_synthesize_call(
+                query=params.query,
+                sources=synth_sources,
+                max_refinements=params.max_refinements,
+                answer_template=params.answer_template,
+            )
+            synth: SynthesizeResult = await workflow.execute_activity(
+                "synthesize_answer",
+                synth_params,
+                task_queue=synth_queue,
+                result_type=SynthesizeResult,
+                start_to_close_timeout=LLM_START_TO_CLOSE,
+                schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+                heartbeat_timeout=LLM_HEARTBEAT_TIMEOUT,
+                retry_policy=FAST_RETRY,
+            )
+        else:
+            # Retrieval-only: the caller composes its own answer from
+            # `sources`. Everything else in the outcome is unchanged.
+            self._state["phase"] = "skip-synthesize"
+            synth = SynthesizeResult(text="")
 
         self._state["phase"] = "done"
         latency_ms = int((workflow.now() - t_start).total_seconds() * 1000)

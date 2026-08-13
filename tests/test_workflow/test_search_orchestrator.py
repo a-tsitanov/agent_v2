@@ -173,6 +173,41 @@ async def test_orchestrator_plans_fans_out_merges_synth_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_skips_synthesis_when_flag_false(monkeypatch):
+    """synthesize=False → synthesize_answer is NEVER invoked; the outcome
+    still carries the retrieved+reranked sources with answer == ""."""
+
+    @activity.defn(name="plan_subquestions")
+    async def _plan(params: PlanParams) -> PlanResult:
+        return PlanResult(subquestions=[params.query])
+
+    @activity.defn(name="retrieve_subquestion")
+    async def _retrieve(params: RetrieveParams) -> RetrieveResult:
+        return RetrieveResult(subquestion=params.subquestion,
+                              sources=[_node("only")])
+
+    @activity.defn(name="synthesize_answer")
+    async def _synth(params: SynthesizeParams) -> SynthesizeResult:
+        raise AssertionError("synthesize_answer must not be invoked")
+
+    client = await _connect()
+    queue = f"orch-test-{uuid.uuid4()}"
+    _pin_large_queue(monkeypatch, queue)
+    async with Worker(
+        client, task_queue=queue,
+        workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+        activities=[_plan, _retrieve, _rerank_passthrough, _synth],
+    ):
+        out: SearchOutcome = await client.execute_workflow(
+            SearchOrchestratorWorkflow.run,
+            OrchestratorParams(query="кто такой Иванов?", synthesize=False),
+            id=f"orch-{uuid.uuid4()}", task_queue=queue,
+        )
+    assert out.answer == ""
+    assert [n.chunk_id for n in out.sources] == ["only"]
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_atomic_single_child(monkeypatch):
     """Atomic question → planner returns [query] → one child runs."""
 

@@ -90,6 +90,7 @@ def _local_params(req: SearchRequest) -> OrchestratorParams:
         inserted_before_epoch=b.ins_before,
         groups=req.groups or [],
         exclude_groups=req.exclude_groups or [],
+        synthesize=req.synthesize,
     )
 
 
