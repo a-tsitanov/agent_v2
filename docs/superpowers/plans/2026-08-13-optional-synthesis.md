@@ -147,9 +147,21 @@ git commit -m "feat(search): add a synthesize flag and short-circuit the local f
 - Consumes: Task 1's `SearchRequest.synthesize`.
 - Produces: `GlobalSearchParams.synthesize: bool = True`; `_global_params` threads it.
 
+**Also fixes a finding from the Task 1 review.** `_drift_local_fallback`
+(`src/workflow/search/router_wf.py:86-90`) and the `except` branch of
+`DriftSearchWorkflow.run` (`:146-150`) return the *local* outcome relabelled
+`mode="drift"` when the global expansion pass fails. After Task 1, a caller
+who sets `synthesize=False` on `/search/drift` gets a real answer on the happy
+path (the global leg still defaults to `True`) but `answer=""` on the
+degradation path — the same request behaving two different ways depending on
+whether an internal step failed. Threading the flag through global/drift is
+what makes the two paths agree; there must be a test pinning that they do.
+
 - [ ] **Step 1: Write the failing tests**
 
 Add to `tests/test_workflow/test_search_global.py`, following that file's existing stubbing style: with `synthesize=False`, the global flow does not invoke the synthesis activity, returns `answer == ""`, and still returns its reduce sources and `step_stats`.
+
+Add a drift test pinning consistency across the fallback: with `synthesize=False`, the happy path and the global-failure fallback must agree on whether `answer` is empty. With `synthesize=True` (the default), the fallback must still carry a real answer exactly as it does today.
 
 Add to `tests/test_api/test_search_v2_synthesize.py`:
 
