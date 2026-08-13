@@ -10,6 +10,16 @@
 > больше нет). Текущая модель поиска: [`search-usage.md`](search-usage.md) +
 > [`../SEARCH.md`](../SEARCH.md). Раздел MCP-2 (atomic tools) ниже актуален.
 > (Полная переработка MCP-1 прозы — TODO.)
+>
+> **`synthesize: bool = True`** — все четыре orchestrated tools (`kb_search`,
+> `kb_global_search`, `kb_drift_search`, `kb_auto_search`) принимают этот
+> параметр, зеркалящий `SearchRequest.synthesize` из HTTP-слоя (см.
+> [`../SEARCH.md`](../SEARCH.md)). `False` пропускает финальный large-model
+> синтез — `answer` возвращается `""`, `sources`/`citations`/`step_stats`
+> не меняются. Смысл: клиент, который сам собирает ответ из `sources`,
+> перестаёт платить (временем и токенами large-tier модели) за синтез,
+> который всё равно выбросит. По умолчанию `True` — существующие клиенты
+> поведения не меняют.
 
 > **Цель архитектуры:** дать оператору три режима интеграции — "получить готовый ответ" (MCP-1), "взять примитивы и собрать loop своим LLM" (MCP-2), или "точные внешние цифры без единого обращения к LLM" (MCP-3). Защита GPU реализована на двух уровнях (MCP-3 GPU не использует вовсе — только Postgres): Temporal-queue для MCP-1, BoundedLLM-семафор для MCP-2.
 

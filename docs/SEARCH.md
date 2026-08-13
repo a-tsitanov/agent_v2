@@ -33,6 +33,7 @@
 | `top_k` | `int` | 10 | top-k чанков (переопределяет `AGENT_TOP_K`) |
 | `history` | `list[ConversationTurn]` | `[]` | предыдущие ходы (управляются клиентом); пусто = single-shot, без контекстуализации |
 | `answer_template` | `str \| None` | `None` | формирует ФОРМУ синтезированного ответа — именованный или инлайновый шаблон; пусто/None → дефолтная русскоязычная преамбула (поведение без изменений) — см. [Шаблоны ответа](#шаблоны-ответа-answer_template) |
+| `synthesize` | `bool` | `True` | `False` пропускает финальный large-model синтез — `answer` возвращается `""`, всё остальное (`sources`, `citations`, `step_stats`, …) не меняется. Для клиента, который сам собирает ответ из `sources` и не хочет платить за синтез, который всё равно выбросит |
 
 Остальные поля (`mode`, `department`, `doc_type_filter`, `created_after`
 / `created_before`, `response_type`, `include_references`, …) сохранены

@@ -79,6 +79,8 @@ def _local_params(
     query: str,
     max_refinements: int = 3,
     bounds: DateBounds | None = None,
+    *,
+    synthesize: bool = True,
 ) -> OrchestratorParams:
     """Build OrchestratorParams for the local plan-execute flow,
     mirroring the FastAPI ``/search/local`` route defaults.
@@ -89,7 +91,11 @@ def _local_params(
 
     ``bounds`` carries the epoch-day date filters (already converted from
     ISO strings by ``_bounds_or_error`` — see the date-filters spec); None
-    means "no filter set" (all four epoch fields stay None)."""
+    means "no filter set" (all four epoch fields stay None).
+
+    ``synthesize`` mirrors ``SearchRequest.synthesize`` / the FastAPI
+    route's ``_local_params`` — False skips the large-model write-up and
+    the tool returns retrieval only (``answer == ""``)."""
     b = bounds or DateBounds()
     return OrchestratorParams(
         query=query,
@@ -101,6 +107,7 @@ def _local_params(
         doc_date_before_epoch=b.doc_before,
         inserted_after_epoch=b.ins_after,
         inserted_before_epoch=b.ins_before,
+        synthesize=synthesize,
     )
 
 
@@ -146,14 +153,20 @@ def _bounds_or_error(
         return {"error": "invalid date format, expected YYYY-MM-DD", "field": "unknown"}
 
 
-def _global_params(query: str, *, drift_mode: bool = False) -> GlobalSearchParams:
+def _global_params(
+    query: str, *, drift_mode: bool = False, synthesize: bool = True,
+) -> GlobalSearchParams:
     """Build GlobalSearchParams, mirroring the FastAPI ``/search/global``
-    and ``/search/drift`` route defaults."""
+    and ``/search/drift`` route defaults.
+
+    ``synthesize`` mirrors ``OrchestratorParams.synthesize`` — False skips
+    the REDUCE step's large-model write-up (``answer == ""``)."""
     return GlobalSearchParams(
         query=query,
         level=0,
         max_communities=settings.agent.global_max_communities,
         drift_mode=drift_mode,
+        synthesize=synthesize,
     )
 
 
@@ -223,6 +236,7 @@ async def kb_search(
     doc_date_before: str | None = None,
     created_after: str | None = None,
     created_before: str | None = None,
+    synthesize: bool = True,
 ) -> dict[str, Any]:
     """Orchestrated LOCAL deep-search over the knowledge base: decomposes
     the question into sub-questions, retrieves each over vector + graph in
@@ -246,6 +260,10 @@ async def kb_search(
       created_after / created_before: ISO YYYY-MM-DD, inclusive bounds —
         filters by insertion date (when the document was ingested into
         the knowledge base).
+      synthesize: pass False to skip the final large-model write-up and
+        return the retrieved sources with an empty answer — for a client
+        that composes its own answer and does not want to pay for the
+        model call.
 
     Returns:
       {
@@ -264,7 +282,7 @@ async def kb_search(
         return bounds
     handle = await (await get_temporal_client()).start_workflow(
         SearchOrchestratorWorkflow.run,
-        _local_params(query, max_refinements, bounds),
+        _local_params(query, max_refinements, bounds, synthesize=synthesize),
         id=f"mcp-search-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
@@ -281,6 +299,7 @@ async def kb_search(
 async def kb_global_search(
     query: str,
     ctx: Context,
+    synthesize: bool = True,
 ) -> dict[str, Any]:
     """Corpus-wide GraphRAG search: map-reduce over precomputed community
     summaries, then synthesise one answer.
@@ -296,12 +315,18 @@ async def kb_global_search(
     summaries are undated, so this tool has no doc_date_*/created_*
     params (unlike `kb_search`, `kb_drift_search`, `kb_auto_search`).
 
+    Args:
+      synthesize: pass False to skip the REDUCE step's large-model
+        write-up and return the retrieved sources with an empty answer —
+        for a client that composes its own answer and does not want to
+        pay for the model call.
+
     Returns the same shape as `kb_search` (answer + sources + citations +
     uncertainties + latency_ms; mode == "global").
     """
     handle = await (await get_temporal_client()).start_workflow(
         GlobalSearchWorkflow.run,
-        _global_params(query),
+        _global_params(query, synthesize=synthesize),
         id=f"mcp-global-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
@@ -322,6 +347,7 @@ async def kb_drift_search(
     doc_date_before: str | None = None,
     created_after: str | None = None,
     created_before: str | None = None,
+    synthesize: bool = True,
 ) -> dict[str, Any]:
     """Drift search: run the local plan-execute flow first, then expand
     with a global GraphRAG pass seeded by the local sources, and
@@ -341,6 +367,10 @@ async def kb_drift_search(
         global community-summary pass is undated, same as `kb_global_search`).
       created_after / created_before: ISO YYYY-MM-DD, inclusive bounds —
         filters by insertion date. Applied to the LOCAL pass only.
+      synthesize: pass False to skip the final large-model write-up (both
+        legs) and return the retrieved sources with an empty answer — for
+        a client that composes its own answer and does not want to pay
+        for the model call.
 
     Returns the same shape as `kb_search` (mode == "drift"); on a
     malformed date param: {"error": str, "field": str} instead.
@@ -352,7 +382,10 @@ async def kb_drift_search(
         DriftSearchWorkflow.run,
         # drift_mode=True mirrors the FastAPI /search/drift route; the
         # workflow also forces it internally, so this is defensive.
-        args=[_local_params(query, bounds=bounds), _global_params(query, drift_mode=True)],
+        args=[
+            _local_params(query, bounds=bounds, synthesize=synthesize),
+            _global_params(query, drift_mode=True, synthesize=synthesize),
+        ],
         id=f"mcp-drift-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
@@ -370,6 +403,7 @@ async def kb_auto_search(
     doc_date_before: str | None = None,
     created_after: str | None = None,
     created_before: str | None = None,
+    synthesize: bool = True,
 ) -> dict[str, Any]:
     """Auto-routed search: a small-tier LLM router classifies the query
     and dispatches to local / global / drift, then returns that mode's
@@ -385,6 +419,10 @@ async def kb_auto_search(
         or drift (the global route is undated, same as `kb_global_search`).
       created_after / created_before: ISO YYYY-MM-DD, inclusive bounds —
         filters by insertion date. Same local/drift-only caveat.
+      synthesize: pass False to skip the final large-model write-up
+        (whichever mode is chosen) and return the retrieved sources with
+        an empty answer — for a client that composes its own answer and
+        does not want to pay for the model call.
 
     Returns the same shape as `kb_search`; `mode` reflects the chosen
     route ("local" / "global" / "drift"). On a malformed date param:
@@ -395,7 +433,10 @@ async def kb_auto_search(
         return bounds
     handle = await (await get_temporal_client()).start_workflow(
         AutoSearchWorkflow.run,
-        args=[_local_params(query, bounds=bounds), _global_params(query)],
+        args=[
+            _local_params(query, bounds=bounds, synthesize=synthesize),
+            _global_params(query, synthesize=synthesize),
+        ],
         id=f"mcp-auto-{uuid.uuid4().hex}",
         task_queue=settings.temporal.search_task_queue,
         id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
