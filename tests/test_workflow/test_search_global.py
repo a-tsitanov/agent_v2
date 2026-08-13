@@ -15,17 +15,36 @@ we cover the contract WITHOUT a Temporal env or a real LLM/store:
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
+from temporalio import activity
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from src.config import settings
 from src.workflow.contracts import (
     CommunitySummaryRef,
+    DocumentsForCommunitiesParams,
+    DocumentsForCommunitiesResult,
+    GlobalSearchParams,
     MapCommunitiesParams,
+    MapCommunitiesResult,
     MapPartialParams,
     MapPartialResult,
+    OrchestratorParams,
+    PlanParams,
+    PlanResult,
+    RerankParams,
+    RerankResult,
+    RetrieveParams,
+    RetrieveResult,
     SerializedNode,
+    SynthesizeParams,
+    SynthesizeResult,
 )
 from src.workflow.search.activities import global_search as gs_mod
 from src.workflow.search.activities.global_search import (
@@ -38,10 +57,14 @@ from src.workflow.search.activities.global_search import (
     select_communities_semantic,
 )
 from src.workflow.search.global_wf import (
+    GlobalSearchWorkflow,
     build_map_specs,
     build_reduce_call,
     partials_to_sources,
 )
+from src.workflow.search.orchestrator import SearchOrchestratorWorkflow
+from src.workflow.search.router_wf import DriftSearchWorkflow
+from src.workflow.search.subquery_wf import SubQueryRetrievalWorkflow
 
 # ── rank_summaries (pure) ───────────────────────────────────────────
 
@@ -634,3 +657,197 @@ def test_attach_report_vecs_nebula_empty_when_no_fetch(monkeypatch):
         lambda s: _NoFetch(),
     )
     assert gs_mod._attach_report_vecs_nebula(object(), [{"community_id": "1", "level": 0}]) == []
+
+
+# ── GlobalSearchWorkflow.run — the synthesize flag (live test-server env) ──
+#
+# The skip-synthesis guard lives inside the workflow body — it wraps an
+# ``execute_activity`` call, so it needs a real workflow-execution context
+# and can't be asserted via the pure-helper style used above.  Same
+# bundled time-skipping test server as test_search_drift_roundtrip.py: NOT
+# docker-compose's localhost:7233, nothing shared, nothing to clean up.
+# Skipped gracefully if the test-server binary can't start.
+
+
+async def _start_env() -> WorkflowEnvironment:
+    try:
+        return await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter,
+        )
+    except Exception as exc:  # pragma: no cover - infra-dependent
+        pytest.skip(f"time-skipping test server unavailable: {exc}")
+
+
+@activity.defn(name="map_communities")
+async def _one_community(p: MapCommunitiesParams) -> MapCommunitiesResult:
+    return MapCommunitiesResult(
+        communities=[CommunitySummaryRef(community_id="1", summary="s")],
+    )
+
+
+@activity.defn(name="map_community_partial")
+async def _relevant_partial(p: MapPartialParams) -> MapPartialResult:
+    return MapPartialResult(community_id=p.community_id, partial="партия", score=1.0)
+
+
+@activity.defn(name="documents_for_communities")
+async def _stub_documents(
+    p: DocumentsForCommunitiesParams,
+) -> DocumentsForCommunitiesResult:
+    return DocumentsForCommunitiesResult(doc_ids=["d1"])
+
+
+@activity.defn(name="synthesize_answer")
+async def _boom_synthesize(p: SynthesizeParams) -> SynthesizeResult:
+    raise AssertionError("synthesize_answer must not be invoked when synthesize=False")
+
+
+@pytest.mark.asyncio
+async def test_global_skips_synthesis_when_flag_false(monkeypatch):
+    """synthesize=False → synthesize_answer is NEVER invoked; the outcome
+    still carries the map stage's reduce sources, resolved documents and
+    step_stats, with answer == ""."""
+    env = await _start_env()
+    queue = f"global-synth-{uuid.uuid4()}"
+    # REDUCE is pinned to large_task_queue inside the workflow — point it
+    # at this test's own queue so the single in-test Worker would serve it
+    # (and a missing guard fails fast via _boom_synthesize rather than
+    # hanging on an unpolled queue).
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        async with Worker(
+            env.client, task_queue=queue,
+            workflows=[GlobalSearchWorkflow],
+            activities=[
+                _one_community, _relevant_partial, _stub_documents, _boom_synthesize,
+            ],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            outcome = await asyncio.wait_for(
+                env.client.execute_workflow(
+                    GlobalSearchWorkflow.run,
+                    GlobalSearchParams(query="строители", synthesize=False),
+                    id=f"global-{uuid.uuid4()}", task_queue=queue,
+                ),
+                timeout=30,
+            )
+    finally:
+        await env.shutdown()
+    assert outcome.answer == ""
+    assert [n.chunk_id for n in outcome.sources] == ["community:1"]
+    assert len(outcome.step_stats) == 1
+    assert outcome.documents == ["d1"]
+
+
+# ── drift consistency: happy path vs. global-failure fallback ──────────
+#
+# Task 1's review found that ``_drift_local_fallback`` (router_wf.py) and
+# the ``except`` branch of ``DriftSearchWorkflow.run`` relabel the LOCAL
+# outcome as "drift" when the global expansion pass fails.  Before this
+# task, a caller with synthesize=False got a real answer on the happy path
+# (global always defaulted to True) but answer="" on the degraded path —
+# same request, two behaviours.  These tests pin that both paths now
+# agree, in both directions.
+
+
+def _drift_activities(*, fail_global: bool) -> list:
+    """Fresh activity stubs per call so ``fail_global`` can vary between
+    the happy-path and failure-path runs in the same test."""
+
+    @activity.defn(name="plan_subquestions")
+    async def _plan(p: PlanParams) -> PlanResult:
+        return PlanResult(subquestions=[p.query])
+
+    @activity.defn(name="retrieve_subquestion")
+    async def _retrieve(p: RetrieveParams) -> RetrieveResult:
+        return RetrieveResult(
+            subquestion=p.subquestion,
+            sources=[SerializedNode(chunk_id="local1", text="local text", score=0.5)],
+        )
+
+    @activity.defn(name="rerank_sources")
+    async def _rerank(p: RerankParams) -> RerankResult:
+        return RerankResult(sources=list(p.sources))
+
+    @activity.defn(name="map_communities")
+    async def _map_communities(p: MapCommunitiesParams) -> MapCommunitiesResult:
+        if fail_global:
+            raise RuntimeError("simulated global outage")
+        return MapCommunitiesResult(
+            communities=[CommunitySummaryRef(community_id="1", summary="s")],
+        )
+
+    @activity.defn(name="map_community_partial")
+    async def _map_partial(p: MapPartialParams) -> MapPartialResult:
+        return MapPartialResult(community_id=p.community_id, partial="партия", score=1.0)
+
+    @activity.defn(name="documents_for_communities")
+    async def _docs(p: DocumentsForCommunitiesParams) -> DocumentsForCommunitiesResult:
+        return DocumentsForCommunitiesResult(doc_ids=["d1"])
+
+    @activity.defn(name="synthesize_answer")
+    async def _synth(p: SynthesizeParams) -> SynthesizeResult:
+        return SynthesizeResult(text="REAL ANSWER")
+
+    return [_plan, _retrieve, _rerank, _map_communities, _map_partial, _docs, _synth]
+
+
+async def _run_drift(
+    env: WorkflowEnvironment, queue: str, *, synthesize: bool, fail_global: bool,
+) -> str:
+    async with Worker(
+        env.client, task_queue=queue,
+        workflows=[
+            DriftSearchWorkflow, SearchOrchestratorWorkflow,
+            SubQueryRetrievalWorkflow, GlobalSearchWorkflow,
+        ],
+        activities=_drift_activities(fail_global=fail_global),
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        outcome = await asyncio.wait_for(
+            env.client.execute_workflow(
+                DriftSearchWorkflow.run,
+                args=[
+                    OrchestratorParams(
+                        query="q", synthesize=synthesize, coverage_check_enabled=False,
+                    ),
+                    GlobalSearchParams(query="q", synthesize=synthesize),
+                ],
+                id=f"drift-{uuid.uuid4()}", task_queue=queue,
+            ),
+            timeout=30,
+        )
+    return outcome.answer
+
+
+@pytest.mark.asyncio
+async def test_drift_synthesize_false_happy_and_fallback_agree_on_emptiness(monkeypatch):
+    """synthesize=False: whether the global expansion pass succeeds or
+    fails, the drift outcome's answer must be empty either way."""
+    env = await _start_env()
+    queue = f"drift-false-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        happy = await _run_drift(env, queue, synthesize=False, fail_global=False)
+        fallback = await _run_drift(env, queue, synthesize=False, fail_global=True)
+    finally:
+        await env.shutdown()
+    assert happy == ""
+    assert fallback == ""
+
+
+@pytest.mark.asyncio
+async def test_drift_synthesize_true_fallback_still_carries_real_answer(monkeypatch):
+    """synthesize=True (the default): the degraded fallback must still
+    carry a real answer, exactly as it does today — unaffected by this
+    change."""
+    env = await _start_env()
+    queue = f"drift-true-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        happy = await _run_drift(env, queue, synthesize=True, fail_global=False)
+        fallback = await _run_drift(env, queue, synthesize=True, fail_global=True)
+    finally:
+        await env.shutdown()
+    assert happy == "REAL ANSWER"
+    assert fallback == "REAL ANSWER"

@@ -735,3 +735,8 @@ class GlobalSearchParams(_Frozen):
     community_selection: str = "lexical"
     # Optional answer-shape template (named or inline); threaded to synth.
     answer_template: str = ""
+    # When false, the REDUCE step (`synthesize_answer`, large model) is
+    # skipped and the outcome's `answer` comes back "". The MAP stage,
+    # source selection and step_stats are unaffected — same sources
+    # either way. Mirrors OrchestratorParams.synthesize.
+    synthesize: bool = True

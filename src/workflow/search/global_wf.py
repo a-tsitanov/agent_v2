@@ -269,23 +269,29 @@ class GlobalSearchWorkflow:
         )
 
         # ── 3. REDUCE: single large-tier synthesis (pinned large queue) ─
-        self._state["phase"] = "reduce"
-        reduce_queue, reduce_params = build_reduce_call(
-            query=params.query,
-            sources=reduce_sources,
-            max_refinements=params.max_refinements,
-            answer_template=params.answer_template,
-        )
-        synth: SynthesizeResult = await workflow.execute_activity(
-            "synthesize_answer",
-            reduce_params,
-            task_queue=reduce_queue,
-            result_type=SynthesizeResult,
-            start_to_close_timeout=LLM_START_TO_CLOSE,
-            schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
-            heartbeat_timeout=LLM_HEARTBEAT_TIMEOUT,
-            retry_policy=FAST_RETRY,
-        )
+        if params.synthesize:
+            self._state["phase"] = "reduce"
+            reduce_queue, reduce_params = build_reduce_call(
+                query=params.query,
+                sources=reduce_sources,
+                max_refinements=params.max_refinements,
+                answer_template=params.answer_template,
+            )
+            synth: SynthesizeResult = await workflow.execute_activity(
+                "synthesize_answer",
+                reduce_params,
+                task_queue=reduce_queue,
+                result_type=SynthesizeResult,
+                start_to_close_timeout=LLM_START_TO_CLOSE,
+                schedule_to_close_timeout=LLM_SCHEDULE_TO_CLOSE,
+                heartbeat_timeout=LLM_HEARTBEAT_TIMEOUT,
+                retry_policy=FAST_RETRY,
+            )
+        else:
+            # Retrieval-only: the caller composes its own answer from
+            # `sources`. Everything else in the outcome is unchanged.
+            self._state["phase"] = "skip-reduce"
+            synth = SynthesizeResult(text="")
 
         self._state["phase"] = "done"
         latency_ms = int((workflow.now() - t_start).total_seconds() * 1000)
