@@ -37,3 +37,14 @@ def test_outcome_roundtrips_provenance():
 def test_analyze_params_defaults():
     p = AnalyzeParams(query="q")
     assert p.top_n == 20 and p.date_from_epoch is None
+
+
+def test_step_result_error_defaults_to_empty():
+    sr = StepResult(primitive="topic_trend", params={"topic": "x"})
+    assert sr.error == ""
+
+
+def test_step_result_error_is_settable():
+    sr = StepResult(primitive="topic_trend", params={"topic": "x"}, error="backend cannot run this")
+    assert sr.error == "backend cannot run this"
+    assert sr.rows == [] and sr.row_count == 0

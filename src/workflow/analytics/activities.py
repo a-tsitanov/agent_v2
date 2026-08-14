@@ -57,13 +57,20 @@ async def execute_step(p: ExecInput) -> StepResult:
     if "top_n" in prim.param_model.model_fields and "top_n" not in params:
         params["top_n"] = p.top_n
 
+    call = p.call.model_copy(update={"params": params})
     try:
         result: PrimitiveResult = await prim.fn(store, **params)
     except TypeError:
         # Planner produced params the fn doesn't accept → fail-soft empty.
         result = PrimitiveResult(cypher="", params=params, rows=[])
+    except NotImplementedError as exc:
+        # The backend structurally cannot run this query (e.g. Nebula refusing
+        # a parameterised nGQL call) — report it, don't present it as a
+        # computed zero.
+        result = PrimitiveResult(cypher="", params=params, rows=[])
+        return step_from_primitive(call, result, error=str(exc))
 
-    return step_from_primitive(p.call.model_copy(update={"params": params}), result)
+    return step_from_primitive(call, result)
 
 
 @activity.defn

@@ -6,7 +6,9 @@ from src.analytics.catalog import PrimitiveResult
 from src.analytics.contracts import AnalysisPlan, PrimitiveCall, Provenance, StepResult
 
 
-def step_from_primitive(call: PrimitiveCall, result: PrimitiveResult) -> StepResult:
+def step_from_primitive(
+    call: PrimitiveCall, result: PrimitiveResult, *, error: str = ""
+) -> StepResult:
     return StepResult(
         primitive=call.primitive,
         params=call.params,
@@ -15,6 +17,7 @@ def step_from_primitive(call: PrimitiveCall, result: PrimitiveResult) -> StepRes
         row_count=len(result.rows),
         source_chunks=list(result.source_chunks),
         truncated=result.truncated,
+        error=error,
     )
 
 

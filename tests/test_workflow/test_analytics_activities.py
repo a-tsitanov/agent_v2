@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from src.analytics.contracts import ExecInput, PrimitiveCall
-from src.analytics.primitives import aggregations  # noqa: F401 — register count_entities et al.
+from src.analytics.contracts import ExecInput, PrimitiveCall, StepResult, SynthInput
+from src.analytics.primitives import (
+    aggregations,  # noqa: F401 — register count_entities et al.
+    dynamics,  # noqa: F401 — register topic_trend
+)
 from src.workflow.analytics import activities as act
 
 
@@ -75,6 +78,76 @@ async def test_execute_step_injects_top_n_when_omitted(monkeypatch):
     assert sr.primitive == "top_entities_by_mentions"
     # top_n=5 was injected — store still returns one row
     assert sr.row_count == 1
+
+
+class _NebulaLikeStore:
+    """Mimics NebulaGraphStore.structured_query: raises NotImplementedError on
+    any non-empty param_map instead of running the query — a structural
+    limitation, not a transient failure."""
+
+    def structured_query(self, cypher: str, param_map: dict | None = None) -> list[dict]:
+        if param_map:
+            raise NotImplementedError(
+                "NebulaGraphStore.structured_query does not bind nGQL params yet "
+                f"(Phase 2); got param_map keys: {sorted(param_map)}"
+            )
+        return []
+
+
+@pytest.mark.asyncio
+async def test_execute_step_reports_structural_backend_limitation(monkeypatch):
+    """topic_trend on a nebula-like backend must report the limitation, not
+    a silent empty result indistinguishable from 'no trend'."""
+    monkeypatch.setattr(act, "build_graph_store", lambda: _NebulaLikeStore())
+    p = ExecInput(
+        call=PrimitiveCall(primitive="topic_trend", params={"topic": "x"}),
+        top_n=20,
+        date_from_epoch=None,
+        date_to_epoch=None,
+    )
+    sr = await act.execute_step(p)
+    assert sr.rows == [] and sr.row_count == 0
+    assert sr.error != ""
+    assert sr.primitive == "topic_trend"
+    assert sr.params == {"topic": "x"}
+
+
+@pytest.mark.asyncio
+async def test_execute_step_type_error_stays_fail_soft_without_error(monkeypatch):
+    """A planner mistake (bad kwarg) is fail-soft with StepResult.error left
+    empty — it is not a backend failure."""
+    monkeypatch.setattr(act, "build_graph_store", lambda: _Store())
+    p = ExecInput(
+        call=PrimitiveCall(primitive="count_entities", params={"bogus_kwarg": "x"}),
+        top_n=20,
+        date_from_epoch=None,
+        date_to_epoch=None,
+    )
+    sr = await act.execute_step(p)
+    assert sr.rows == [] and sr.row_count == 0
+    assert sr.error == ""
+
+
+# ---------------------------------------------------------------------------
+# synthesize_analytical
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_analytical_all_failed_reports_uncomputable():
+    """All steps failed structurally (empty rows, non-empty error) — must not
+    claim a computed answer, same guard as the plain all-empty case."""
+    steps = [
+        StepResult(
+            primitive="topic_trend",
+            params={"topic": "x"},
+            rows=[],
+            row_count=0,
+            error="backend cannot run this query",
+        ),
+    ]
+    res = await act.synthesize_analytical(SynthInput(query="trend for x?", steps=steps))
+    assert "не удалось вычислить" in res.text.lower()
 
 
 # ---------------------------------------------------------------------------

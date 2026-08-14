@@ -35,6 +35,10 @@ class StepResult(_Frozen):
     row_count: int = 0
     source_chunks: list[str] = Field(default_factory=list)
     truncated: bool = False
+    # Why this step produced no rows; empty means it ran (rows may still be
+    # legitimately empty). Non-empty means the primitive could not run at all
+    # (e.g. a backend structural limitation) — distinct from a computed zero.
+    error: str = ""
 
 
 class Provenance(_Frozen):

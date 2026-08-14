@@ -45,16 +45,28 @@ def faithfulness_score(answer: str, steps: list[StepResult]) -> float:
 def build_synthesis_prompt(query: str, steps: list[StepResult]) -> list[ChatMessage]:
     blocks = []
     for s in steps:
-        blocks.append(
-            f"primitive: {s.primitive}\nparams: {json.dumps(s.params, ensure_ascii=False, default=str)}\n"
-            f"rows: {json.dumps(s.rows, ensure_ascii=False, default=str)}"
-        )
+        params_json = json.dumps(s.params, ensure_ascii=False, default=str)
+        if s.error:
+            # Structural backend limitation, not a computed zero — must not
+            # read like an empty-but-successful result.
+            blocks.append(
+                f"primitive: {s.primitive}\nparams: {params_json}\n"
+                f"result: не удалось вычислить: {s.error}"
+            )
+        else:
+            blocks.append(
+                f"primitive: {s.primitive}\nparams: {params_json}\n"
+                f"rows: {json.dumps(s.rows, ensure_ascii=False, default=str)}"
+            )
     evidence = "\n\n".join(blocks) or "(no results)"
     system = (
         "You answer analytical questions about a knowledge graph. You are given the "
         "exact computed RESULTS. Use ONLY the numbers and values present in those rows. "
         "Do NOT invent or estimate any number that is not in the rows. If the rows are "
-        "empty, say the question could not be computed. Answer concisely in the user's language."
+        "empty, say the question could not be computed. Some steps may be marked "
+        "'не удалось вычислить' (could not be computed) instead of having rows — treat "
+        "those as missing, not as a computed zero, and say explicitly that they could not "
+        "be answered. Answer concisely in the user's language."
     )
     user = f"Question: {query}\n\nRESULTS:\n{evidence}"
     return [
