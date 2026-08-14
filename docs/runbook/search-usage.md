@@ -13,11 +13,20 @@
 несёт чанки `{doc_id, chunk_id, content, score}`.
 
 Поля тела, которые **реально потребляются** воркфлоу: `query`, `top_k`,
-`history` (см. §«История диалога»). Остальные поля `SearchRequest`
-(`mode`, `department`, `doc_type_filter`, `created_after/before`,
-`response_type`, `include_references`, `user_id`) приняты для обратной
-совместимости, но текущими plan-execute / GraphRAG-флоу **игнорируются** —
-не полагайтесь на них для фильтрации.
+`history` (см. §«История диалога»), `synthesize` (см. §«Только извлечение»).
+Остальные поля `SearchRequest` (`mode`, `department`, `doc_type_filter`,
+`created_after/before`, `response_type`, `include_references`, `user_id`)
+приняты для обратной совместимости, но текущими plan-execute /
+GraphRAG-флоу **игнорируются** — не полагайтесь на них для фильтрации.
+
+### Только извлечение (`synthesize: false`)
+`{"query": "...", "synthesize": false}` пропускает финальный large-model
+синтез (и предшествующий rerank) на любом из четырёх эндпоинтов: `answer`
+приходит `""`, `sources` и `documents` — как обычно. Для клиента, который
+сам пишет ответ по чанкам и не хочет платить за большой синтез задержкой и
+токенами. По умолчанию `true` — существующие вызовы не меняются. Полный
+контракт (что именно возвращается пустым) —
+[`../SEARCH.md`](../SEARCH.md#входной-слой).
 
 ## Выбор режима + параметры (стрелка = эффект при увеличении)
 
