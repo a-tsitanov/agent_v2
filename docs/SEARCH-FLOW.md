@@ -40,7 +40,7 @@ flowchart TD
     P2["2. retrieve_subquestion (parallel per sub-Q)"] --> P3
     P3["3. coverage_check<br/>evidence sufficient? gap → 1 extra round"] -->|gap| P2
     P3 -->|ok| P4
-    P4["4. rerank (bge cross-encoder, top-N)"] --> P5
+    P4["4. rerank (bge cross-encoder, весь пул ранжируется → sources)"] --> P5
     P5["5. synthesize_answer<br/>(large tier, kb-search-large queue)"] --> A["answer + sources + citations"]
 
     subgraph RET ["retrieve_subquestion — deterministic tool pipeline"]
@@ -114,7 +114,7 @@ Drift контекстуализирует follow-up **один раз** и пе
 Заменяет плоские сообщества уровня 0 + O(N) лексическое ранжирование на Leiden-**иерархию** (многоуровневые `:Community` + `PARENT_OF`), **структурированные отчёты** (`{title, summary, findings}`, построенные снизу вверх, эмбеддированные в индекс `community_report_vec`, переносимые инкрементально, когда состав сообщества не изменился) и **динамический отбор** (семантический kNN или спуск по иерархии) для global/drift. Всё opt-in: `AGENT_COMMUNITY_MAX_LEVELS` (по умолчанию 1 = один уровень, сегодня), `AGENT_COMMUNITY_DYNAMIC_SELECTION` (по умолчанию `lexical` = сегодня). Полная детализация в [`FEATURES.md`](FEATURES.md#hierarchical-communities--dynamic-selection).
 
 ### Reranker + проверка покрытия
-Каждое слияние извлечения local/drift проходит rerank через **bge cross-encoder** (top-N → синтез), а **проверка покрытия** может обнаружить пробел в доказательствах и запустить один дополнительный целевой раунд извлечения перед синтезом — обе функции уже существовали, по умолчанию включены.
+Каждое слияние извлечения local/drift проходит rerank через **bge cross-encoder**, который ранжирует ВЕСЬ объединённый пул — этот ранжированный результат и есть `SearchOutcome.sources` (best-first), а не только вход синтеза; контекст самого синтеза дополнительно урезается до `TEMPORAL_RERANK_TOP_N` отдельным шагом. **Проверка покрытия** может обнаружить пробел в доказательствах и запустить один дополнительный целевой раунд извлечения перед rerank/синтезом — обе функции уже существовали, по умолчанию включены.
 
 ### Шаблоны ответа (`answer_template`)
 Опциональное поле запроса `SearchRequest.answer_template` задаёт **форму** синтезированного ответа: **именованный** шаблон из `prompts/answer_templates/<name>.md` (в комплекте `dossier`) или **инлайновая** строка-шаблон. Протягивается request → `_local_params`/`_global_params` (`search_v2.py`) → params → `SynthesizeParams` → активность `synthesize_answer`, которая строит инструкцию синтеза через `src/retrieval/answer_template.py::build_query` (шаблон обрамляется вокруг вопроса). Применяется ко **всем режимам** (local/global/drift), так как синтез общий. Пусто/None (по умолчанию) → существующая русскоязычная преамбула, поведение без изменений. Безопасно к path-traversal (имена с разделителями путей / неизвестные / >64 символов трактуются как инлайн), шаблоны ограничены 8000 символами. Структурированный/JSON-вывод отложен (вариант b, не реализован). Полная детализация в [`SEARCH.md`](SEARCH.md#шаблоны-ответа-answer_template).

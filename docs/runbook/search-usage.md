@@ -11,8 +11,12 @@
 `documents[]` — это `{doc_id, url}` ссылки на скачивание оригиналов
 (`GET /api/v1/documents/{doc_id}`, см. §«Скачивание источника» ниже); `sources[]`
 несёт чанки `{doc_id, chunk_id, content, score}`, **отсортированные rerank'ом
-best-first** (лучшие — первыми; набор чанков при этом не меняется — только
-порядок). Это верно и при `synthesize: false` — см. ниже.
+best-first** (лучшие — первыми; набор чанков не меняется — меняется не
+только порядок, но и смысл `score`: теперь это `sigmoid(cross-encoder
+logit) × group_weight` (`activities/rerank.py::_sigmoid` +
+`apply_group_weights`), а не сырой score ретривера, как раньше. Сегодня
+`score` никто из потребителей не читает — это только документация, не
+поведенческий разрыв. Это верно и при `synthesize: false` — см. ниже.
 
 Поля тела, которые **реально потребляются** воркфлоу: `query`, `top_k`,
 `history` (см. §«История диалога»), `synthesize` (см. §«Только извлечение»).
@@ -40,7 +44,7 @@ GraphRAG-флоу **игнорируются** — не полагайтесь �
 |---|---|---|---|
 | `/search/local` | Конкретный факт из 1–нескольких чанков: «кто/что/когда/сколько у X», поиск сущности, документа, значения, определения. **Дефолт.** Пример: «какой диагноз у Иванова?» | plan → параллельный retrieve по под-вопросам → coverage-gate → rerank → синтез | `top_k`↑ кандидатов→полнее/шумнее; `AGENT_MAX_SUBQUERIES`(5)↑ шире декомпозиция, дороже; `AGENT_COVERAGE_CHECK_ENABLED`/`AGENT_MAX_COVERAGE_ROUNDS`(1)↑ добивает пробелы, +задержка; `TEMPORAL_RERANK_TOP_N`(5)↑ полнее контекст синтеза, но дольше/риск timeout; `HF_RERANK_MODEL`/`HF_OFFLINE` — реранкер (битый offline-кэш→rerank fail-open); `LITELLM_MODEL_SMALL` (plan/retrieve/coverage), `LITELLM_MODEL_LARGE` (синтез) |
 | `/search/global` | Корпус-уровневый/тематический/агрегирующий вопрос: «обобщи», «основные темы/категории во всех документах». **Требует** `admin/communities/rebuild`. Пример: «какие категории заболеваний в базе?» | map-reduce по community-summaries (small MAP → large REDUCE) | `AGENT_GLOBAL_MAX_COMMUNITIES`(20)↑ больше сообществ в MAP→полнее/дороже; конкурентность MAP ограничена `LLM_POOL_N`; **свежесть/качество зависят от rebuild**: `TEMPORAL_COMMUNITY_MIN_SIZE`(3)↑ отбрасывает мелкие сообщества, `TEMPORAL_COMMUNITY_SUMMARY_PARALLELISM`(4); `LITELLM_MODEL_SMALL` (партиалы), `LITELLM_MODEL_LARGE` (REDUCE-синтез). `top_k` почти не влияет (ретрив не по чанкам) |
-| `/search/drift` | Нужны и факт, И широкий контекст: «расскажи про X и как он связан с остальным». Дороже (2 прохода). | local-проход → global-расширение с локальными источниками как seed | **Объединяет параметры local + global** (оба прохода). Локальные источники подмешиваются в REDUCE-контекст → `TEMPORAL_RERANK_TOP_N` и `AGENT_GLOBAL_MAX_COMMUNITIES` вместе определяют размер финального контекста (риск timeout выше) |
+| `/search/drift` | Нужны и факт, И широкий контекст: «расскажи про X и как он связан с остальным». Дороже (2 прохода). | local-проход → global-расширение с локальными источниками как seed | **Объединяет параметры local + global** (оба прохода). В REDUCE-контекст подмешивается **весь** ранжированный `local.sources` БЕЗ ограничения — `TEMPORAL_RERANK_TOP_N` его НЕ ограничивает (этот параметр бьёт только по внутреннему синтезу local-прохода, которым drift не пользуется: он берёт `local.sources` напрямую, `router_wf.py:142` → `global_wf.py:242-246,276`), впереди до `AGENT_GLOBAL_MAX_COMMUNITIES` партиалов сообществ → реальный размер финального REDUCE-контекста растёт вместе с размером local-пула (риск timeout выше) |
 | `/search/auto` | Не знаете режим / смешанный трафик / клиент не классифицирует. Fail-safe→local. Пример: «сравни подходы к лечению BCC». | `route_query` (small) классифицирует → диспатчит local/global/drift | Роль `route`→`LITELLM_MODEL_SMALL` (классификация; сбой→`local`). Дальше действуют параметры **выбранного** режима. +1 small-LLM вызов |
 
 ### Сквозные параметры (влияют на любой режим)
