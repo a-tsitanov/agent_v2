@@ -71,3 +71,24 @@ def test_build_prompt_distinguishes_failed_step_from_genuine_empty_result():
     assert "не удалось вычислить" in joined
     # the genuinely-empty-but-successful step still reads as an empty result, not a failure
     assert "count_relationships" in joined
+
+
+def test_build_prompt_never_leaks_error_detail_to_the_model():
+    """error_detail carries raw internal exception text (Nebula/nGQL jargon) for
+    operators only. The synthesis prompt — and therefore anything the model
+    might echo back into the user-facing answer — must only ever see the
+    short, caller-safe .error reason."""
+    failed = StepResult(
+        primitive="topic_trend",
+        rows=[],
+        row_count=0,
+        error="this primitive is not supported by the current graph backend",
+        error_detail="NotImplementedError: NebulaGraphStore.structured_query does not "
+        "bind nGQL params yet (Phase 2); got param_map keys: ['topic']",
+    )
+    msgs = build_synthesis_prompt("q", [failed])
+    joined = " ".join(m.content for m in msgs)
+    assert "not supported by the current graph backend" in joined
+    assert "nGQL" not in joined
+    assert "Phase 2" not in joined
+    assert "param_map" not in joined

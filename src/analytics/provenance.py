@@ -7,7 +7,7 @@ from src.analytics.contracts import AnalysisPlan, PrimitiveCall, Provenance, Ste
 
 
 def step_from_primitive(
-    call: PrimitiveCall, result: PrimitiveResult, *, error: str = ""
+    call: PrimitiveCall, result: PrimitiveResult, *, error: str = "", error_detail: str = ""
 ) -> StepResult:
     return StepResult(
         primitive=call.primitive,
@@ -18,6 +18,7 @@ def step_from_primitive(
         source_chunks=list(result.source_chunks),
         truncated=result.truncated,
         error=error,
+        error_detail=error_detail,
     )
 
 

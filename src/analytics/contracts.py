@@ -38,7 +38,13 @@ class StepResult(_Frozen):
     # Why this step produced no rows; empty means it ran (rows may still be
     # legitimately empty). Non-empty means the primitive could not run at all
     # (e.g. a backend structural limitation) — distinct from a computed zero.
+    # Short and caller-safe: this text is fed to the synthesis LLM and can end
+    # up in the user-facing answer, so it must not carry internal jargon.
     error: str = ""
+    # Full exception text behind a non-empty `error`, for operators/debugging
+    # only. Never read by build_synthesis_prompt — it stays out of the
+    # user-facing answer. Empty unless `error` is also non-empty.
+    error_detail: str = ""
 
 
 class Provenance(_Frozen):

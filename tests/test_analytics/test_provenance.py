@@ -36,3 +36,23 @@ def test_step_from_primitive_passes_error_through():
     sr = step_from_primitive(call, pr, error="backend cannot run this query")
     assert sr.error == "backend cannot run this query"
     assert sr.rows == [] and sr.row_count == 0
+
+
+def test_step_from_primitive_passes_error_detail_through_independently():
+    call = PrimitiveCall(primitive="topic_trend", params={"topic": "x"})
+    pr = PrimitiveResult(cypher="", params={"topic": "x"}, rows=[])
+    sr = step_from_primitive(
+        call,
+        pr,
+        error="backend cannot run this query",
+        error_detail="NotImplementedError: does not bind nGQL params yet (Phase 2)",
+    )
+    assert sr.error == "backend cannot run this query"
+    assert "Phase 2" in sr.error_detail
+
+
+def test_step_from_primitive_default_error_detail_is_empty():
+    call = PrimitiveCall(primitive="count_entities", params={})
+    pr = PrimitiveResult(cypher="MATCH ...", params={}, rows=[{"n": 1}])
+    sr = step_from_primitive(call, pr)
+    assert sr.error_detail == ""

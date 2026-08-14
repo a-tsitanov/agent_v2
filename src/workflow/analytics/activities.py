@@ -66,9 +66,26 @@ async def execute_step(p: ExecInput) -> StepResult:
     except NotImplementedError as exc:
         # The backend structurally cannot run this query (e.g. Nebula refusing
         # a parameterised nGQL call) — report it, don't present it as a
-        # computed zero.
+        # computed zero. Unlike a transient query error this will not
+        # self-heal on retry, so it's logged at error level (not warning) —
+        # grep-able across a week of worker logs, which is the question
+        # provenance on a single request can't answer.
+        activity.logger.error(
+            "execute_step  primitive=%s cannot run on this backend "
+            "(structural, will not succeed on retry): %s",
+            call.primitive,
+            exc,
+        )
         result = PrimitiveResult(cypher="", params=params, rows=[])
-        return step_from_primitive(call, result, error=str(exc))
+        return step_from_primitive(
+            call,
+            result,
+            # Short and caller-safe — this reaches the synthesis prompt and,
+            # from there, can reach the user-facing answer. The raw exception
+            # (nGQL/param_map/Phase 2 internals) is operator detail only.
+            error="this primitive is not supported by the current graph backend",
+            error_detail=str(exc),
+        )
 
     return step_from_primitive(call, result)
 

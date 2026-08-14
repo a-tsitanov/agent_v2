@@ -48,7 +48,9 @@ def build_synthesis_prompt(query: str, steps: list[StepResult]) -> list[ChatMess
         params_json = json.dumps(s.params, ensure_ascii=False, default=str)
         if s.error:
             # Structural backend limitation, not a computed zero — must not
-            # read like an empty-but-successful result.
+            # read like an empty-but-successful result. Only the short,
+            # caller-safe `error` reaches the model; `error_detail` (raw
+            # exception text, operator-only) is deliberately never read here.
             blocks.append(
                 f"primitive: {s.primitive}\nparams: {params_json}\n"
                 f"result: не удалось вычислить: {s.error}"

@@ -113,6 +113,51 @@ async def test_execute_step_reports_structural_backend_limitation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_step_logs_error_on_structural_backend_limitation(monkeypatch):
+    """The per-request `error` field on StepResult answers "did this fire on my
+    request". Operators diagnosing a recurring backend limitation across a week
+    of traffic need a grep-able log line — this must not be silent."""
+    monkeypatch.setattr(act, "build_graph_store", lambda: _NebulaLikeStore())
+    errors: list[str] = []
+    monkeypatch.setattr(
+        act.activity.logger,
+        "error",
+        lambda msg, *args, **kw: errors.append(msg % args if args else msg),
+    )
+    p = ExecInput(
+        call=PrimitiveCall(primitive="topic_trend", params={"topic": "x"}),
+        top_n=20,
+        date_from_epoch=None,
+        date_to_epoch=None,
+    )
+    await act.execute_step(p)
+    assert len(errors) == 1
+    assert "topic_trend" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_execute_step_error_is_short_and_jargon_free(monkeypatch):
+    """StepResult.error feeds the synthesis prompt (and, from there, can reach
+    the user-facing answer) — it must not contain internal implementation
+    detail (nGQL, param_map, Phase 2). The full exception text still has to go
+    somewhere for operators: error_detail."""
+    monkeypatch.setattr(act, "build_graph_store", lambda: _NebulaLikeStore())
+    monkeypatch.setattr(act.activity.logger, "error", lambda *a, **kw: None)
+    p = ExecInput(
+        call=PrimitiveCall(primitive="topic_trend", params={"topic": "x"}),
+        top_n=20,
+        date_from_epoch=None,
+        date_to_epoch=None,
+    )
+    sr = await act.execute_step(p)
+    assert sr.error != ""
+    for jargon in ("nGQL", "param_map", "Phase 2", "NotImplementedError"):
+        assert jargon not in sr.error
+    assert "Phase 2" in sr.error_detail
+    assert "param_map" in sr.error_detail
+
+
+@pytest.mark.asyncio
 async def test_execute_step_type_error_stays_fail_soft_without_error(monkeypatch):
     """A planner mistake (bad kwarg) is fail-soft with StepResult.error left
     empty — it is not a backend failure."""
