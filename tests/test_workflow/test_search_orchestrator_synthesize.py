@@ -32,6 +32,8 @@ from src.workflow.contracts import (
     OrchestratorParams,
     PlanParams,
     PlanResult,
+    ReflectiveCitationDict,
+    ReflectiveUncertaintyDict,
     RerankParams,
     RerankResult,
     RetrieveParams,
@@ -154,7 +156,14 @@ def _tracked_activities(rerank_calls: list, synth_calls: list) -> list:
     @activity.defn(name="synthesize_answer")
     async def _synth(p: SynthesizeParams) -> SynthesizeResult:
         synth_calls.append([n.chunk_id for n in p.accumulated])
-        return SynthesizeResult(text="REAL ANSWER")
+        # Non-empty citations/uncertainties/refinement_rounds so a test can
+        # show these are products of synthesis, not retrieval.
+        return SynthesizeResult(
+            text="REAL ANSWER",
+            citations=[ReflectiveCitationDict(claim="c", chunk_id="c1")],
+            uncertainties=[ReflectiveUncertaintyDict(topic="t", reason="r")],
+            refinement_rounds=2,
+        )
 
     return [_plan, _retrieve, _rerank, _synth]
 
@@ -245,9 +254,20 @@ async def test_outcome_sources_identical_with_and_without_synthesis(monkeypatch)
     # ...and yet the surfaced sources are the same unranked merged pool.
     assert [n.chunk_id for n in with_synth.sources] == ["c1", "c2", "c3"]
     assert with_synth.sources == without_synth.sources
-    # Everything else a retrieval-only caller reads is unchanged too.
+    # The other RETRIEVAL products are unchanged too.
     assert with_synth.documents == without_synth.documents
     assert with_synth.step_stats == without_synth.step_stats
-    # Only the answer differs.
+
+    # The SYNTHESIS products are NOT unchanged — they come back empty,
+    # because the skip branch builds SynthesizeResult(text="").  This is
+    # what docs/SEARCH.md and docs/runbook/mcp.md must say: MCP clients
+    # read citations/uncertainties/refinement_rounds via _outcome_to_dict
+    # even though SearchResponse does not carry them over HTTP.
     assert with_synth.answer == "REAL ANSWER"
     assert without_synth.answer == ""
+    assert len(with_synth.citations) == 1
+    assert without_synth.citations == []
+    assert len(with_synth.uncertainties) == 1
+    assert without_synth.uncertainties == []
+    assert with_synth.refinement_rounds == 2
+    assert without_synth.refinement_rounds == 0

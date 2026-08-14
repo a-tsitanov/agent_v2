@@ -33,7 +33,19 @@
 | `top_k` | `int` | 10 | top-k чанков (переопределяет `AGENT_TOP_K`) |
 | `history` | `list[ConversationTurn]` | `[]` | предыдущие ходы (управляются клиентом); пусто = single-shot, без контекстуализации |
 | `answer_template` | `str \| None` | `None` | формирует ФОРМУ синтезированного ответа — именованный или инлайновый шаблон; пусто/None → дефолтная русскоязычная преамбула (поведение без изменений) — см. [Шаблоны ответа](#шаблоны-ответа-answer_template) |
-| `synthesize` | `bool` | `True` | `False` пропускает финальный large-model синтез — `answer` возвращается `""`, всё остальное (`sources`, `citations`, `step_stats`, …) не меняется. Для клиента, который сам собирает ответ из `sources` и не хочет платить за синтез, который всё равно выбросит |
+| `synthesize` | `bool` | `True` | `False` пропускает финальный large-model синтез (вместе с предшествующим rerank — его результат никто не читает). `answer` возвращается `""`; **`sources`, `documents` и `step_stats` не меняются**. Для клиента, который сам собирает ответ из `sources` и не хочет платить за синтез, который всё равно выбросит |
+
+> **Что именно теряется при `synthesize=false`.** Пропуск строит
+> `SynthesizeResult(text="")`, поэтому ПРОДУКТЫ синтеза возвращаются
+> пустыми: `citations` → `[]`, `uncertainties` → `[]`,
+> `refinement_rounds` → `0`. Продукты ИЗВЛЕЧЕНИЯ (`sources`, `documents`,
+> `step_stats`, `query`, `mode`, `latency_ms`) — без изменений.
+>
+> По HTTP это незаметно: `SearchResponse` = `{query, answer, mode,
+> sources, documents, latency_ms}` — `citations` / `uncertainties` /
+> `refinement_rounds` в нём отсутствуют. Но **MCP-1 их отдаёт**
+> (`_outcome_to_dict`, `src/mcp/search_server.py`), так что клиент MCP
+> увидит пустые списки — см. [`runbook/mcp.md`](runbook/mcp.md).
 
 Остальные поля (`mode`, `department`, `doc_type_filter`, `created_after`
 / `created_before`, `response_type`, `include_references`, …) сохранены
