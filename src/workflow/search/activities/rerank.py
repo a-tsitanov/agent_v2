@@ -65,6 +65,26 @@ def apply_group_weights(
     return sorted(weighted, key=lambda s: s.score, reverse=True)
 
 
+def append_unranked_remainder(
+    ranked: list[SerializedNode], pool: list[SerializedNode],
+) -> list[SerializedNode]:
+    """Nothing-lost safety net for the cached cross-encoder's fixed
+    ``_RERANK_SCORE_CAP`` (see ``_search_deps.get_reranker``):
+    ``postprocess_nodes`` never scores more than that cap, no matter what
+    ``top_n`` is requested, so for a pool bigger than the cap ``ranked``
+    can be missing members the model never touched at all — a real loss
+    once the caller (not just synthesis) reads the result.
+
+    Appends those pool members — matched by ``chunk_id``,
+    ``prepare_rerank_pool``'s dedup key — after the ranked ones, in their
+    ORIGINAL pool order: ranked chunks first (best-first), then the
+    unranked remainder. A no-op when ``ranked`` already contains every
+    pool member (pool at or under the cap). Pure."""
+    ranked_ids = {n.chunk_id for n in ranked}
+    remainder = [n for n in pool if n.chunk_id not in ranked_ids]
+    return ranked + remainder
+
+
 @activity.defn
 async def rerank_sources(params: RerankParams) -> RerankResult:
     """Co-rank the merged graph+vector pool, return reranked top-N."""
@@ -92,7 +112,15 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
     )
 
     out = [node_to_serialized(n) for n in reranked]
-    out = apply_group_weights(out, settings.agent.group_weights)[: params.top_n]
+    out = apply_group_weights(out, settings.agent.group_weights)
+    # `postprocess_nodes` above only ever scores up to the cached
+    # cross-encoder's fixed cap (`_RERANK_SCORE_CAP` inside
+    # `get_reranker`) — `out` can be missing pool members the model never
+    # touched at all when the pool exceeds that cap. Restore them,
+    # unranked, after the ranked head, THEN apply `params.top_n` so the
+    # caller's own "how many to return" request still bounds the
+    # combined (ranked + remainder) list, same as before.
+    out = append_unranked_remainder(out, pool)[: params.top_n]
     activity.logger.info(
         "rerank_sources  pool=%d  top_n=%d  out=%d",
         len(pool), params.top_n, len(out),
