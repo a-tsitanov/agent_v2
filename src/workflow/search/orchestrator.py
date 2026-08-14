@@ -92,10 +92,13 @@ def build_synthesize_call(
 def cap_synth_sources(
     sources: list[SerializedNode], top_n: int,
 ) -> list[SerializedNode]:
-    """Bound the pool fed to synthesis.  Rerank already trims to top_n;
-    on the FAIL-OPEN fallback the workflow passes the raw merged pool —
-    cap it here too so a flaky reranker can never blow up the synthesis
-    prompt (and the 5-min start_to_close).  ``top_n<=0`` ⇒ no cap."""
+    """Bound the pool fed to synthesis.  This is now the ONLY cap on the
+    synthesis prompt: the orchestrator asks the rerank activity for the
+    WHOLE pool ranked (``top_n=len(merged)``), so rerank no longer trims
+    anything on the success path, and the FAIL-OPEN fallback passes the
+    same uncapped merged pool.  Do not remove this call — without it, an
+    unbounded pool reaches ``synthesize_answer`` and its ``start_to_close``
+    timeout, on both paths.  ``top_n<=0`` ⇒ no cap."""
     if top_n <= 0:
         return sources
     return sources[:top_n]

@@ -81,19 +81,22 @@ class SearchRequest(BaseModel):
         default=None,
         description="Exclude-list of channel groups (mutually exclusive with groups).",
     )
-    # When false the final large-model synthesis is skipped (together with
-    # the rerank that only ever fed it) and `answer` comes back empty.
-    # `sources`, `documents` and `step_stats` are unchanged; the synthesis
-    # products (`citations`, `uncertainties`, `refinement_rounds`) come
-    # back empty on SearchOutcome — invisible over HTTP, since
-    # SearchResponse does not carry them, but visible to MCP-1 clients.
-    # For callers that compose their own answer from `sources` and only
-    # pay for retrieval.
+    # When false the final large-model synthesis is skipped and `answer`
+    # comes back empty. The rerank ahead of it runs unconditionally either
+    # way — its ranked output IS `sources` now (best-first), not merely
+    # synthesis input — so `sources`, `documents` and `step_stats` are
+    # unchanged from the synthesize=True case. The synthesis products
+    # (`citations`, `uncertainties`, `refinement_rounds`) come back empty
+    # on SearchOutcome — invisible over HTTP, since SearchResponse does
+    # not carry them, but visible to MCP-1 clients. For callers that
+    # compose their own answer from `sources` and only pay for retrieval.
     synthesize: bool = Field(
         default=True,
         description=(
             "Run the final answer synthesis (default). False returns retrieval "
-            "only: `answer` is empty, `sources` and `documents` are unchanged."
+            "only: `answer` is empty, `sources` and `documents` are unchanged — "
+            "`sources` is still reranked best-first either way, since the rerank "
+            "now runs unconditionally and its output is what `sources` is."
         ),
     )
 

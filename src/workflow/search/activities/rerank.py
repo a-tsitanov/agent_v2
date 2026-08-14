@@ -1,10 +1,17 @@
 """``rerank_sources`` activity — unified graph+vector rerank (R5).
 
-Before the single large-tier ``synthesize_answer``, the orchestrator's
-merged pool (graph-derived + vector chunks, already deduped by chunk_id
-across sub-questions) is co-ranked in ONE bge cross-encoder pass. This
-co-ranks the two retrieval modalities against each other so synthesis
-sees the globally most-relevant top-N — not just the union order.
+The orchestrator's merged pool (graph-derived + vector chunks, already
+deduped by chunk_id across sub-questions) is co-ranked in ONE bge
+cross-encoder pass. This co-ranks the two retrieval modalities against
+each other so the returned ordering reflects the globally most-relevant
+chunks first — not just the union order.
+
+The orchestrator now requests the WHOLE pool ranked (``top_n=len(pool)``),
+not just enough for synthesis. Its output feeds TWO consumers: the
+synthesis prompt (capped separately via the orchestrator's
+``cap_synth_sources``) AND ``SearchOutcome.sources`` returned to the
+caller, unconditionally — including when ``synthesize=False``. It is no
+longer synthesis-only input.
 
 REUSES ``src/retrieval/reranker.py`` (the same ``BAAI/bge-reranker-v2-m3``
 ``SentenceTransformerRerank`` applied in ``hybrid.py``) and the repo's
@@ -79,7 +86,15 @@ def append_unranked_remainder(
     ``prepare_rerank_pool``'s dedup key — after the ranked ones, in their
     ORIGINAL pool order: ranked chunks first (best-first), then the
     unranked remainder. A no-op when ``ranked`` already contains every
-    pool member (pool at or under the cap). Pure."""
+    pool member (pool at or under the cap). Pure.
+
+    NOTE: only reachable when the pool exceeds ``_RERANK_SCORE_CAP``
+    (256). When it triggers, the combined list is not monotonic in
+    ``score``: the ranked head carries ``apply_group_weights``' output
+    (sigmoid-normalized cross-encoder logit × group weight, in (0, 1)),
+    while the appended remainder still carries each chunk's raw retriever
+    score. Ordering (best-first) is still correct; the ``score`` field
+    alone is not comparable across the boundary."""
     ranked_ids = {n.chunk_id for n in ranked}
     remainder = [n for n in pool if n.chunk_id not in ranked_ids]
     return ranked + remainder
