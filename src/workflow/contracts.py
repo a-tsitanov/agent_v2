@@ -493,8 +493,10 @@ class OrchestratorParams(_Frozen):
     groups: list[str] = Field(default_factory=list)
     exclude_groups: list[str] = Field(default_factory=list)
     # When false, step 4 (`synthesize_answer`, large model) is skipped and
-    # the outcome's `answer` comes back "". Retrieval, the coverage loop
-    # and reranking are unaffected — same sources either way.
+    # the outcome's `answer` comes back "". The rerank step is skipped too
+    # (its only reader is the synthesis call) — but the outcome's
+    # `sources` is the unranked `merged` pool on both paths, so callers
+    # see the same sources either way.
     synthesize: bool = True
 
 
