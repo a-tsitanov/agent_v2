@@ -180,6 +180,14 @@ LLM-вызова — план зафиксировал инструменты з
   start_to_close у `synthesize_answer`. Отображаемые `SearchOutcome.sources`
   остаются ПОЛНЫМ объединённым пулом (цитаты без изменений); обрезается
   только *контекст* синтеза.
+- **`synthesize=False` → rerank НЕ выполняется.** Единственный потребитель
+  результата rerank — `build_synthesize_call`; отображаемые
+  `SearchOutcome.sources` — это объединённый пул в обоих режимах (см. выше),
+  поэтому пропуск rerank не меняет ничего наблюдаемого для клиента, но
+  убирает лишний проход cross-encoder'а по всему пулу (GPU, таймаут 3 мин)
+  ради результата, который никто не читает. Инвариант «`sources` одинаковы
+  при `synthesize=True` и `False`» закреплён тестом
+  `test_outcome_sources_identical_with_and_without_synthesis`.
 
 ### 5. Синтез — large-tier
 

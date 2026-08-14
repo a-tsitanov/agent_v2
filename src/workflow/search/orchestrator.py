@@ -292,52 +292,63 @@ class SearchOrchestratorWorkflow:
                 len(merged), cov_round,
             )
 
-        # ── 3c. unified graph+vector rerank (R5) ────────────────────
-        # Co-rank the merged pool (graph-derived + vector chunks) in ONE
-        # bge cross-encoder pass so synthesis sees the globally most
-        # relevant top-N rather than the raw union order.  Runs on the
-        # small search queue (the model is cheap relative to the large
-        # synthesis LLM).  FAIL-OPEN: any rerank error → fall back to the
-        # unranked merged pool (never block the answer).
-        self._state["phase"] = "rerank"
-        synth_sources = merged
-        try:
-            rr: RerankResult = await workflow.execute_activity(
-                "rerank_sources",
-                RerankParams(
-                    query=params.query,
-                    sources=merged,
-                    top_n=settings.temporal.rerank_top_n,
-                ),
-                result_type=RerankResult,
-                start_to_close_timeout=timedelta(minutes=3),
-                schedule_to_close_timeout=timedelta(minutes=10),
-                retry_policy=FAST_RETRY,
-            )
-            if rr.sources:
-                synth_sources = list(rr.sources)
-                log.info(
-                    "orchestrator  reranked %d → %d sources",
-                    len(merged), len(synth_sources),
-                )
-        except Exception as exc:
-            # Fail-open, but still BOUND the pool: an unranked merged pool
-            # can be large enough to blow past synthesize's start_to_close.
-            synth_sources = cap_synth_sources(
-                merged, settings.temporal.rerank_top_n,
-            )
-            log.warning(
-                "orchestrator  rerank err=%s — fall back to capped merged "
-                "pool (%d sources)", exc, len(synth_sources),
-            )
-
-        # ── 4. synthesize once (large model, dedicated large queue) ──
-        # Pin synthesize_answer to ``large_task_queue`` so the heavyweight
-        # synthesis model runs on its own low-concurrency worker pool
-        # (TEMPORAL_LARGE_ACTIVITY_CONCURRENCY).  The call spec (queue +
-        # use_synthesis_llm=True) comes from the pure ``build_synthesize_call``
-        # helper so it's unit-testable outside Temporal.
+        # ── 3c + 4. rerank, then synthesize ─────────────────────────
+        # Both are skipped together when the caller only wants retrieval.
+        # The rerank exists solely to pick the top-N *synthesis context*
+        # (``synth_sources`` has exactly one reader — build_synthesize_call
+        # below), so with synthesis off it would be a cross-encoder pass
+        # over the whole merged pool that nothing reads.  Guarding it is
+        # invisible to callers because the returned
+        # ``SearchOutcome.sources`` is ``merged`` — the UNRANKED pool — in
+        # both modes; see the return below and docs/SEARCH.md §4.
         if params.synthesize:
+            # ── 3c. unified graph+vector rerank (R5) ────────────────
+            # Co-rank the merged pool (graph-derived + vector chunks) in
+            # ONE bge cross-encoder pass so synthesis sees the globally
+            # most relevant top-N rather than the raw union order.  Runs
+            # on the small search queue (the model is cheap relative to
+            # the large synthesis LLM).  FAIL-OPEN: any rerank error →
+            # fall back to the unranked merged pool (never block the
+            # answer).
+            self._state["phase"] = "rerank"
+            synth_sources = merged
+            try:
+                rr: RerankResult = await workflow.execute_activity(
+                    "rerank_sources",
+                    RerankParams(
+                        query=params.query,
+                        sources=merged,
+                        top_n=settings.temporal.rerank_top_n,
+                    ),
+                    result_type=RerankResult,
+                    start_to_close_timeout=timedelta(minutes=3),
+                    schedule_to_close_timeout=timedelta(minutes=10),
+                    retry_policy=FAST_RETRY,
+                )
+                if rr.sources:
+                    synth_sources = list(rr.sources)
+                    log.info(
+                        "orchestrator  reranked %d → %d sources",
+                        len(merged), len(synth_sources),
+                    )
+            except Exception as exc:
+                # Fail-open, but still BOUND the pool: an unranked merged
+                # pool can be large enough to blow past synthesize's
+                # start_to_close.
+                synth_sources = cap_synth_sources(
+                    merged, settings.temporal.rerank_top_n,
+                )
+                log.warning(
+                    "orchestrator  rerank err=%s — fall back to capped "
+                    "merged pool (%d sources)", exc, len(synth_sources),
+                )
+
+            # ── 4. synthesize once (large model, dedicated large queue) ──
+            # Pin synthesize_answer to ``large_task_queue`` so the heavyweight
+            # synthesis model runs on its own low-concurrency worker pool
+            # (TEMPORAL_LARGE_ACTIVITY_CONCURRENCY).  The call spec (queue +
+            # use_synthesis_llm=True) comes from the pure ``build_synthesize_call``
+            # helper so it's unit-testable outside Temporal.
             self._state["phase"] = "synthesize"
             synth_queue, synth_params = build_synthesize_call(
                 query=params.query,
@@ -357,7 +368,9 @@ class SearchOrchestratorWorkflow:
             )
         else:
             # Retrieval-only: the caller composes its own answer from
-            # `sources`. Everything else in the outcome is unchanged.
+            # `sources`. Everything else in the outcome is unchanged —
+            # `sources` is the merged pool either way, so skipping the
+            # rerank above changes nothing a caller can observe.
             self._state["phase"] = "skip-synthesize"
             synth = SynthesizeResult(text="")
 

@@ -110,3 +110,144 @@ async def test_orchestrator_skips_synthesis_when_flag_false(monkeypatch):
         await env.shutdown()
     assert out.answer == ""
     assert [n.chunk_id for n in out.sources] == ["only"]
+
+
+# ── the rerank guard ───────────────────────────────────────────────────
+#
+# ``synth_sources`` (orchestrator.py, the 3c rerank block) has exactly one
+# reader: the ``build_synthesize_call`` inside ``if params.synthesize:``.
+# With synthesize=False the cross-encoder pass therefore ran over the full
+# merged pool — GPU, three-minute timeout — and nothing consumed it.
+#
+# Guarding it is safe ONLY because ``SearchOutcome.sources`` is ``merged``,
+# the UNRANKED pool, in both modes (documented in docs/SEARCH.md §4). The
+# second test below pins exactly that: if the surfaced sources ever start
+# depending on the rerank, the guard has silently become a behaviour
+# change and that test must fail.
+
+
+def _tracked_activities(rerank_calls: list, synth_calls: list) -> list:
+    """plan/retrieve/rerank/synth stubs sharing call-trackers.
+
+    The rerank stub deliberately returns a REORDERED, TRUNCATED pool
+    (``c3, c1`` out of ``c1, c2, c3``) so a test can tell the surfaced
+    ``SearchOutcome.sources`` apart from the reranked synthesis context.
+    """
+
+    @activity.defn(name="plan_subquestions")
+    async def _plan(p: PlanParams) -> PlanResult:
+        return PlanResult(subquestions=[p.query])
+
+    @activity.defn(name="retrieve_subquestion")
+    async def _retrieve(p: RetrieveParams) -> RetrieveResult:
+        return RetrieveResult(
+            subquestion=p.subquestion,
+            sources=[_node("c1"), _node("c2"), _node("c3")],
+        )
+
+    @activity.defn(name="rerank_sources")
+    async def _rerank(p: RerankParams) -> RerankResult:
+        rerank_calls.append([n.chunk_id for n in p.sources])
+        by_id = {n.chunk_id: n for n in p.sources}
+        return RerankResult(sources=[by_id["c3"], by_id["c1"]])
+
+    @activity.defn(name="synthesize_answer")
+    async def _synth(p: SynthesizeParams) -> SynthesizeResult:
+        synth_calls.append([n.chunk_id for n in p.accumulated])
+        return SynthesizeResult(text="REAL ANSWER")
+
+    return [_plan, _retrieve, _rerank, _synth]
+
+
+async def _run_local(
+    env: WorkflowEnvironment, queue: str, *,
+    synthesize: bool, rerank_calls: list, synth_calls: list,
+) -> SearchOutcome:
+    async with Worker(
+        env.client, task_queue=queue,
+        workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+        activities=_tracked_activities(rerank_calls, synth_calls),
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        return await asyncio.wait_for(
+            env.client.execute_workflow(
+                SearchOrchestratorWorkflow.run,
+                OrchestratorParams(
+                    query="q", synthesize=synthesize,
+                    coverage_check_enabled=False,
+                ),
+                id=f"orch-{uuid.uuid4()}", task_queue=queue,
+            ),
+            timeout=30,
+        )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_skips_rerank_when_flag_false(monkeypatch):
+    """synthesize=False → the cross-encoder rerank is NEVER invoked, the
+    same way synthesize_answer is not.  Nothing would have read its
+    result."""
+    rerank_calls: list = []
+    synth_calls: list = []
+    env = await _start_env()
+    queue = f"orch-rerank-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        out = await _run_local(
+            env, queue, synthesize=False,
+            rerank_calls=rerank_calls, synth_calls=synth_calls,
+        )
+    finally:
+        await env.shutdown()
+    assert rerank_calls == []
+    assert synth_calls == []
+    assert out.answer == ""
+    # the full merged pool still comes back, unranked
+    assert [n.chunk_id for n in out.sources] == ["c1", "c2", "c3"]
+
+
+@pytest.mark.asyncio
+async def test_outcome_sources_identical_with_and_without_synthesis(monkeypatch):
+    """THE property that makes guarding the rerank safe: over the same
+    stubbed retrieval, ``SearchOutcome.sources`` is byte-identical between
+    a synthesize=True run and a synthesize=False run.
+
+    If this ever fails, the surfaced sources have started depending on the
+    rerank and the guard is no longer a pure no-op for callers.
+    """
+    on_calls: list = []
+    on_synth: list = []
+    off_calls: list = []
+    off_synth: list = []
+    env = await _start_env()
+    queue = f"orch-parity-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        with_synth = await _run_local(
+            env, queue, synthesize=True,
+            rerank_calls=on_calls, synth_calls=on_synth,
+        )
+        without_synth = await _run_local(
+            env, queue, synthesize=False,
+            rerank_calls=off_calls, synth_calls=off_synth,
+        )
+    finally:
+        await env.shutdown()
+
+    # The synthesising run really did rerank, and synthesis really did see
+    # the reordered/truncated pool — so the stub is discriminating.
+    assert on_calls == [["c1", "c2", "c3"]]
+    assert on_synth == [["c3", "c1"]]
+    # The retrieval-only run did neither.
+    assert off_calls == []
+    assert off_synth == []
+
+    # ...and yet the surfaced sources are the same unranked merged pool.
+    assert [n.chunk_id for n in with_synth.sources] == ["c1", "c2", "c3"]
+    assert with_synth.sources == without_synth.sources
+    # Everything else a retrieval-only caller reads is unchanged too.
+    assert with_synth.documents == without_synth.documents
+    assert with_synth.step_stats == without_synth.step_stats
+    # Only the answer differs.
+    assert with_synth.answer == "REAL ANSWER"
+    assert without_synth.answer == ""
