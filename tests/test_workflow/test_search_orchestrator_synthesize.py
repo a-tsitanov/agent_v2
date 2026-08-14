@@ -114,26 +114,36 @@ async def test_orchestrator_skips_synthesis_when_flag_false(monkeypatch):
     assert [n.chunk_id for n in out.sources] == ["only"]
 
 
-# ── the rerank guard ───────────────────────────────────────────────────
+# ── rerank now runs on every path, and its ordering IS the output ──────
 #
-# ``synth_sources`` (orchestrator.py, the 3c rerank block) has exactly one
-# reader: the ``build_synthesize_call`` inside ``if params.synthesize:``.
-# With synthesize=False the cross-encoder pass therefore ran over the full
-# merged pool — GPU, three-minute timeout — and nothing consumed it.
+# Task 1 (2026-08-14-rerank-orders-output) reverses the guard that used
+# to live here.  Previously: ``synth_sources`` (the 3c rerank block) had
+# exactly one reader — ``build_synthesize_call`` inside
+# ``if params.synthesize:`` — so with synthesize=False the rerank was
+# skipped as dead work, and that was invisible to callers because
+# ``SearchOutcome.sources`` was ``merged`` (the UNRANKED pool) either way.
 #
-# Guarding it is safe ONLY because ``SearchOutcome.sources`` is ``merged``,
-# the UNRANKED pool, in both modes (documented in docs/SEARCH.md §4). The
-# second test below pins exactly that: if the surfaced sources ever start
-# depending on the rerank, the guard has silently become a behaviour
-# change and that test must fail.
+# Now ``SearchOutcome.sources`` IS the rerank activity's output (the whole
+# pool, ranked — ``top_n=len(merged)``, not the old ``rerank_top_n``), so
+# the rerank determines what every caller sees and can no longer be
+# skipped on either path.  Only the synthesis prompt still gets the
+# ``rerank_top_n`` cap, via ``cap_synth_sources``.
+#
+# ``test_orchestrator_skips_rerank_when_flag_false`` and
+# ``test_outcome_sources_identical_with_and_without_synthesis`` encoded
+# the old guard's intent (rerank skipped off-path; sources unranked and
+# thus flag-independent for an unrelated reason) and are replaced below —
+# not deleted silently — by their inverse plus an updated parity test.
 
 
-def _tracked_activities(rerank_calls: list, synth_calls: list) -> list:
-    """plan/retrieve/rerank/synth stubs sharing call-trackers.
+def _reorder_rerank_activities(rerank_calls: list, synth_calls: list) -> list:
+    """plan/retrieve/rerank/synth stubs where rerank returns the FULL pool
+    REVERSED — a permutation, never a truncation — so a test can tell
+    ranked order apart from merge order while proving nothing is dropped.
 
-    The rerank stub deliberately returns a REORDERED, TRUNCATED pool
-    (``c3, c1`` out of ``c1, c2, c3``) so a test can tell the surfaced
-    ``SearchOutcome.sources`` apart from the reranked synthesis context.
+    Retrieval returns 7 sources, comfortably more than the default
+    ``rerank_top_n`` (5, monkeypatched to 3 in some tests below) so a
+    truncation bug can't hide behind a short pool.
     """
 
     @activity.defn(name="plan_subquestions")
@@ -144,14 +154,13 @@ def _tracked_activities(rerank_calls: list, synth_calls: list) -> list:
     async def _retrieve(p: RetrieveParams) -> RetrieveResult:
         return RetrieveResult(
             subquestion=p.subquestion,
-            sources=[_node("c1"), _node("c2"), _node("c3")],
+            sources=[_node(f"c{i}") for i in range(1, 8)],
         )
 
     @activity.defn(name="rerank_sources")
     async def _rerank(p: RerankParams) -> RerankResult:
         rerank_calls.append([n.chunk_id for n in p.sources])
-        by_id = {n.chunk_id: n for n in p.sources}
-        return RerankResult(sources=[by_id["c3"], by_id["c1"]])
+        return RerankResult(sources=list(reversed(p.sources)))
 
     @activity.defn(name="synthesize_answer")
     async def _synth(p: SynthesizeParams) -> SynthesizeResult:
@@ -168,14 +177,14 @@ def _tracked_activities(rerank_calls: list, synth_calls: list) -> list:
     return [_plan, _retrieve, _rerank, _synth]
 
 
-async def _run_local(
+async def _run_reorder(
     env: WorkflowEnvironment, queue: str, *,
     synthesize: bool, rerank_calls: list, synth_calls: list,
 ) -> SearchOutcome:
     async with Worker(
         env.client, task_queue=queue,
         workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
-        activities=_tracked_activities(rerank_calls, synth_calls),
+        activities=_reorder_rerank_activities(rerank_calls, synth_calls),
         workflow_runner=UnsandboxedWorkflowRunner(),
     ):
         return await asyncio.wait_for(
@@ -191,68 +200,108 @@ async def _run_local(
         )
 
 
+_MERGED_ORDER = [f"c{i}" for i in range(1, 8)]
+_RANKED_ORDER = list(reversed(_MERGED_ORDER))
+
+
 @pytest.mark.asyncio
-async def test_orchestrator_skips_rerank_when_flag_false(monkeypatch):
-    """synthesize=False → the cross-encoder rerank is NEVER invoked, the
-    same way synthesize_answer is not.  Nothing would have read its
-    result."""
+async def test_orchestrator_sources_come_back_ranked_and_complete(monkeypatch):
+    """Three properties in one run: (1) ordering reaches the caller —
+    ``SearchOutcome.sources`` is in the stub's reranked order, not merge
+    order; (2) nothing is lost — same 7 chunk_ids, explicit count; (3)
+    synthesis still only sees the ``rerank_top_n``-capped head of the
+    ranked order, not the whole pool."""
+    monkeypatch.setattr(settings.temporal, "rerank_top_n", 3)
     rerank_calls: list = []
     synth_calls: list = []
     env = await _start_env()
-    queue = f"orch-rerank-{uuid.uuid4()}"
+    queue = f"orch-ranked-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
     try:
-        out = await _run_local(
+        out = await _run_reorder(
+            env, queue, synthesize=True,
+            rerank_calls=rerank_calls, synth_calls=synth_calls,
+        )
+    finally:
+        await env.shutdown()
+
+    # rerank was asked for the WHOLE pool (top_n=len(merged)=7), not the
+    # old rerank_top_n=3 cap.
+    assert rerank_calls == [_MERGED_ORDER]
+
+    # (1) ordering reaches the caller: best-first per the stub.
+    assert [n.chunk_id for n in out.sources] == _RANKED_ORDER
+    # (2) nothing lost: same set AND same count as the merged pool.
+    assert len(out.sources) == 7
+    assert {n.chunk_id for n in out.sources} == set(_MERGED_ORDER)
+
+    # (3) synthesis only sees the capped (rerank_top_n=3) head of the
+    # ranked order — the first 3 of _RANKED_ORDER, not all 7.
+    assert synth_calls == [_RANKED_ORDER[:3]]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_reranks_even_when_synthesis_skipped(monkeypatch):
+    """Inverse of the old guard test: synthesize=False no longer skips the
+    rerank — it is the only source of the returned ordering now, so it
+    must run on both paths.  ``sources`` still comes back as the FULL
+    ranked pool (nothing lost); ``synthesize_answer`` is still never
+    called."""
+    rerank_calls: list = []
+    synth_calls: list = []
+    env = await _start_env()
+    queue = f"orch-rerank-off-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        out = await _run_reorder(
             env, queue, synthesize=False,
             rerank_calls=rerank_calls, synth_calls=synth_calls,
         )
     finally:
         await env.shutdown()
-    assert rerank_calls == []
-    assert synth_calls == []
+
+    assert rerank_calls == [_MERGED_ORDER]  # rerank WAS invoked
+    assert synth_calls == []  # synthesis was NOT
     assert out.answer == ""
-    # the full merged pool still comes back, unranked
-    assert [n.chunk_id for n in out.sources] == ["c1", "c2", "c3"]
+    # full ranked pool, not merge order, not truncated.
+    assert [n.chunk_id for n in out.sources] == _RANKED_ORDER
+    assert len(out.sources) == 7
 
 
 @pytest.mark.asyncio
 async def test_outcome_sources_identical_with_and_without_synthesis(monkeypatch):
-    """THE property that makes guarding the rerank safe: over the same
-    stubbed retrieval, ``SearchOutcome.sources`` is byte-identical between
-    a synthesize=True run and a synthesize=False run.
-
-    If this ever fails, the surfaced sources have started depending on the
-    rerank and the guard is no longer a pure no-op for callers.
-    """
-    on_calls: list = []
+    """``SearchOutcome.sources`` is byte-identical between a synthesize=True
+    run and a synthesize=False run — but now because rerank runs ONCE,
+    unconditionally, before the synthesize branch, not because sources
+    bypass rerank (the old guard's invariant, inverted by the two tests
+    above)."""
+    on_rerank: list = []
     on_synth: list = []
-    off_calls: list = []
+    off_rerank: list = []
     off_synth: list = []
     env = await _start_env()
     queue = f"orch-parity-{uuid.uuid4()}"
     monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
     try:
-        with_synth = await _run_local(
+        with_synth = await _run_reorder(
             env, queue, synthesize=True,
-            rerank_calls=on_calls, synth_calls=on_synth,
+            rerank_calls=on_rerank, synth_calls=on_synth,
         )
-        without_synth = await _run_local(
+        without_synth = await _run_reorder(
             env, queue, synthesize=False,
-            rerank_calls=off_calls, synth_calls=off_synth,
+            rerank_calls=off_rerank, synth_calls=off_synth,
         )
     finally:
         await env.shutdown()
 
-    # The synthesising run really did rerank, and synthesis really did see
-    # the reordered/truncated pool — so the stub is discriminating.
-    assert on_calls == [["c1", "c2", "c3"]]
-    assert on_synth == [["c3", "c1"]]
-    # The retrieval-only run did neither.
-    assert off_calls == []
-    assert off_synth == []
+    # Both runs reranked the identical merged pool — rerank is no longer
+    # gated by the synthesize flag.
+    assert on_rerank == off_rerank == [_MERGED_ORDER]
+    # Only the synthesising run called synthesize_answer.
+    assert on_synth and not off_synth
 
-    # ...and yet the surfaced sources are the same unranked merged pool.
-    assert [n.chunk_id for n in with_synth.sources] == ["c1", "c2", "c3"]
+    # ...and the surfaced sources are the same ranked pool either way.
+    assert [n.chunk_id for n in with_synth.sources] == _RANKED_ORDER
     assert with_synth.sources == without_synth.sources
     # The other RETRIEVAL products are unchanged too.
     assert with_synth.documents == without_synth.documents

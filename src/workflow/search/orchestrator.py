@@ -292,67 +292,65 @@ class SearchOrchestratorWorkflow:
                 len(merged), cov_round,
             )
 
-        # ── 3c + 4. rerank, then synthesize ─────────────────────────
-        # Both are skipped together when the caller only wants retrieval.
-        # The rerank exists solely to pick the top-N *synthesis context*
-        # (``synth_sources`` has exactly one reader — build_synthesize_call
-        # below), so with synthesis off it would be a cross-encoder pass
-        # over the whole merged pool that nothing reads.  Guarding it is
-        # invisible to callers because the returned
-        # ``SearchOutcome.sources`` is ``merged`` — the UNRANKED pool — in
-        # both modes; see the return below and docs/SEARCH.md §4.
-        if params.synthesize:
-            # ── 3c. unified graph+vector rerank (R5) ────────────────
-            # Co-rank the merged pool (graph-derived + vector chunks) in
-            # ONE bge cross-encoder pass so synthesis sees the globally
-            # most relevant top-N rather than the raw union order.  Runs
-            # on the small search queue (the model is cheap relative to
-            # the large synthesis LLM).  FAIL-OPEN: any rerank error →
-            # fall back to the unranked merged pool (never block the
-            # answer).
-            self._state["phase"] = "rerank"
-            synth_sources = merged
-            try:
-                rr: RerankResult = await workflow.execute_activity(
-                    "rerank_sources",
-                    RerankParams(
-                        query=params.query,
-                        sources=merged,
-                        top_n=settings.temporal.rerank_top_n,
-                    ),
-                    result_type=RerankResult,
-                    start_to_close_timeout=timedelta(minutes=3),
-                    schedule_to_close_timeout=timedelta(minutes=10),
-                    retry_policy=FAST_RETRY,
+        # ── 3c. unified graph+vector rerank (R5) ─────────────────────
+        # Co-rank the merged pool (graph-derived + vector chunks) in ONE
+        # bge cross-encoder pass so the returned ordering reflects the
+        # globally most relevant chunks rather than the raw union order.
+        # Runs UNCONDITIONALLY now — its output is `SearchOutcome.sources`
+        # on both paths, not just synthesis context, so it is no longer
+        # discardable work when `synthesize=False`.  The cross-encoder
+        # scores every chunk in the pool regardless of `top_n` (`top_n`
+        # only trims the trailing slice), so asking for the WHOLE pool
+        # (`top_n=len(merged)`) costs the same model work as the old
+        # `rerank_top_n` request.  Runs on the small search queue (the
+        # model is cheap relative to the large synthesis LLM).
+        # FAIL-OPEN: any rerank error → fall back to the unranked merged
+        # pool (never block the answer) — the status quo ante.
+        self._state["phase"] = "rerank"
+        ranked_sources = merged
+        try:
+            rr: RerankResult = await workflow.execute_activity(
+                "rerank_sources",
+                RerankParams(
+                    query=params.query,
+                    sources=merged,
+                    top_n=len(merged),
+                ),
+                result_type=RerankResult,
+                start_to_close_timeout=timedelta(minutes=3),
+                schedule_to_close_timeout=timedelta(minutes=10),
+                retry_policy=FAST_RETRY,
+            )
+            if rr.sources:
+                ranked_sources = list(rr.sources)
+                log.info(
+                    "orchestrator  reranked %d → %d sources",
+                    len(merged), len(ranked_sources),
                 )
-                if rr.sources:
-                    synth_sources = list(rr.sources)
-                    log.info(
-                        "orchestrator  reranked %d → %d sources",
-                        len(merged), len(synth_sources),
-                    )
-            except Exception as exc:
-                # Fail-open, but still BOUND the pool: an unranked merged
-                # pool can be large enough to blow past synthesize's
-                # start_to_close.
-                synth_sources = cap_synth_sources(
-                    merged, settings.temporal.rerank_top_n,
-                )
-                log.warning(
-                    "orchestrator  rerank err=%s — fall back to capped "
-                    "merged pool (%d sources)", exc, len(synth_sources),
-                )
+        except Exception as exc:
+            # Fail-open: reranker unavailable → return the pool untouched,
+            # i.e. the full merged pool in retrieval order.
+            ranked_sources = merged
+            log.warning(
+                "orchestrator  rerank err=%s — fall back to unranked "
+                "merged pool (%d sources)", exc, len(ranked_sources),
+            )
 
+        if params.synthesize:
             # ── 4. synthesize once (large model, dedicated large queue) ──
             # Pin synthesize_answer to ``large_task_queue`` so the heavyweight
             # synthesis model runs on its own low-concurrency worker pool
             # (TEMPORAL_LARGE_ACTIVITY_CONCURRENCY).  The call spec (queue +
             # use_synthesis_llm=True) comes from the pure ``build_synthesize_call``
-            # helper so it's unit-testable outside Temporal.
+            # helper so it's unit-testable outside Temporal.  Synthesis still
+            # gets only the top ``rerank_top_n`` of the ranked pool — the
+            # cap that used to bound the whole rerank now bounds just this.
             self._state["phase"] = "synthesize"
             synth_queue, synth_params = build_synthesize_call(
                 query=params.query,
-                sources=synth_sources,
+                sources=cap_synth_sources(
+                    ranked_sources, settings.temporal.rerank_top_n,
+                ),
                 max_refinements=params.max_refinements,
                 answer_template=params.answer_template,
             )
@@ -368,9 +366,8 @@ class SearchOrchestratorWorkflow:
             )
         else:
             # Retrieval-only: the caller composes its own answer from
-            # `sources`. Everything else in the outcome is unchanged —
-            # `sources` is the merged pool either way, so skipping the
-            # rerank above changes nothing a caller can observe.
+            # `sources`, which is still the full ranked pool — reranked
+            # above like the synthesize=True path, just not fed to an LLM.
             self._state["phase"] = "skip-synthesize"
             synth = SynthesizeResult(text="")
 
@@ -380,7 +377,7 @@ class SearchOrchestratorWorkflow:
             query=params.query,
             mode="local",
             answer=synth.text,
-            sources=merged,
+            sources=ranked_sources,
             documents=distinct_doc_ids(merged),
             step_stats=step_stats,
             citations=list(synth.citations),
