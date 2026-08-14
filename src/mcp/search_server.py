@@ -277,8 +277,8 @@ async def kb_search(
       }
       With synthesize=False, `answer` is "" and `citations`,
       `uncertainties` and `refinement_rounds` come back EMPTY ([], [], 0) —
-      they are products of the synthesis step you skipped. `sources`,
-      `documents` and `step_stats` are unchanged.
+      they are products of the synthesis step you skipped. `sources` and
+      `step_stats` are unchanged.
       On a malformed date param: {"error": str, "field": str} instead.
     """
     bounds = _bounds_or_error(doc_date_after, doc_date_before, created_after, created_before)
@@ -329,7 +329,7 @@ async def kb_global_search(
     uncertainties + latency_ms; mode == "global").  With synthesize=False,
     `answer` is "" and `citations` / `uncertainties` / `refinement_rounds`
     come back empty — they are products of the REDUCE synthesis you
-    skipped; `sources`, `documents` and `step_stats` are unchanged.
+    skipped; `sources` and `step_stats` are unchanged.
     """
     handle = await (await get_temporal_client()).start_workflow(
         GlobalSearchWorkflow.run,
@@ -382,9 +382,8 @@ async def kb_drift_search(
     Returns the same shape as `kb_search` (mode == "drift").  With
     synthesize=False, `answer` is "" and `citations` / `uncertainties` /
     `refinement_rounds` come back empty — they are products of the
-    synthesis you skipped; `sources`, `documents` and `step_stats` are
-    unchanged.  On a malformed date param: {"error": str, "field": str}
-    instead.
+    synthesis you skipped; `sources` and `step_stats` are unchanged.  On a
+    malformed date param: {"error": str, "field": str} instead.
     """
     bounds = _bounds_or_error(doc_date_after, doc_date_before, created_after, created_before)
     if isinstance(bounds, dict):
@@ -439,8 +438,8 @@ async def kb_auto_search(
     route ("local" / "global" / "drift").  With synthesize=False, `answer`
     is "" and `citations` / `uncertainties` / `refinement_rounds` come
     back empty — they are products of the synthesis you skipped;
-    `sources`, `documents` and `step_stats` are unchanged.  On a malformed
-    date param: {"error": str, "field": str} instead.
+    `sources` and `step_stats` are unchanged.  On a malformed date param:
+    {"error": str, "field": str} instead.
     """
     bounds = _bounds_or_error(doc_date_after, doc_date_before, created_after, created_before)
     if isinstance(bounds, dict):

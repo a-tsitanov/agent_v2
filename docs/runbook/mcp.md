@@ -21,12 +21,16 @@
 > синтез, который всё равно выбросит. По умолчанию `True` — существующие
 > клиенты поведения не меняют.
 >
-> **⚠️ Что из результата теряется.** В отличие от HTTP-слоя, MCP-1 отдаёт
-> клиенту ВЕСЬ `SearchOutcome` (`_outcome_to_dict`), поэтому разница видна:
+> **⚠️ Что из результата теряется.** MCP-1 отдаёт клиенту НЕ весь
+> `SearchOutcome` — `_outcome_to_dict` сериализует только `answer, mode,
+> query, sources, citations, uncertainties, refinement_rounds, step_stats,
+> latency_ms` (поля `documents` в результате нет вообще, ни при
+> `synthesize=true`, ни при `false`). Разница от `synthesize=false` видна
+> так:
 >
 > | Поле результата | При `synthesize=false` |
 > |---|---|
-> | `sources`, `documents`, `step_stats`, `query`, `mode`, `latency_ms` | **без изменений** |
+> | `sources`, `step_stats`, `query`, `mode`, `latency_ms` | **без изменений** |
 > | `answer` | `""` |
 > | `citations` | `[]` — продукт синтеза |
 > | `uncertainties` | `[]` — продукт синтеза |
