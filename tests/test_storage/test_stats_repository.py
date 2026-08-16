@@ -262,6 +262,28 @@ async def test_list_sources_survives_a_source_with_no_observations():
     ]
 
 
+async def test_list_indicators_returns_the_registry_rows():
+    """`build_indicators_query` was covered as a pure builder, but nothing
+    ever called `StatsRepository.list_indicators()` end to end — so the
+    honest stub had no way to notice a `row_factory=dict_row` regression
+    here: unlike `list_sources`/`series`, this method does no internal
+    `r["..."]` access to crash on; the only thing that catches a dropped
+    `row_factory` is a test asserting the dict-shaped return value, which
+    did not exist for this read. Mirrors
+    `test_list_sources_isoformats_period_bounds`.
+    """
+    repo, _ = _repo_with([
+        {"id": 1, "source": "fom", "code": "anxiety", "title": "Тревожность",
+         "question_text": "", "unit": "%", "value_kind": "share",
+         "granularity": "week", "dims_schema": {}, "entity_vid": None},
+    ])
+    assert await repo.list_indicators() == [
+        {"id": 1, "source": "fom", "code": "anxiety", "title": "Тревожность",
+         "question_text": "", "unit": "%", "value_kind": "share",
+         "granularity": "week", "dims_schema": {}, "entity_vid": None},
+    ]
+
+
 async def test_upsert_indicator_rejects_unknown_value_kind():
     repo, conn = _repo_with([])
     with pytest.raises(ValueError, match="value_kind"):
