@@ -20,6 +20,8 @@ from src.workflow.search.activities.rerank import (
     append_unranked_remainder,
     prepare_rerank_pool,
     rerank_sources,
+    select_rerank_candidates,
+    split_into_blocks,
 )
 
 
@@ -232,3 +234,170 @@ async def test_rerank_pool_under_cap_unaffected_by_remainder_append(
         RerankParams(query="q", sources=pool_sources, top_n=2),
     )
     assert [n.chunk_id for n in out.sources] == ["b", "c"]
+
+
+# ── pure helper: bounding what the cross-encoder actually scores ────
+#
+# Cost is linear in chunks scored and the pool grows with the corpus, so
+# "score everything" is a promise the activity's timeout cannot keep —
+# in production it stopped keeping it, at a 139-chunk pool.
+#
+# The subtlety is WHICH chunks to score. The merged pool is a plain
+# concatenation of one block per sub-question (plus one per coverage
+# round); each block is sorted internally, but the scores are not
+# comparable ACROSS blocks — resolving that is the cross-encoder's whole
+# job. So the pool's leading slice is not its best chunks, it is its
+# first sub-question, and a naive `pool[:n]` drops whole facets.
+
+
+def _block(prefix: str, n: int, hi: float, lo: float) -> list[SerializedNode]:
+    """One sub-question's hits: descending scores, its own range."""
+    step = (hi - lo) / max(n - 1, 1)
+    return [_n(f"{prefix}{i}", score=hi - step * i) for i in range(n)]
+
+
+def test_split_into_blocks_cuts_the_pool_back_up():
+    pool = [_n(f"c{i}") for i in range(6)]
+    assert [
+        [n.chunk_id for n in b] for b in split_into_blocks(pool, [2, 3, 1])
+    ] == [["c0", "c1"], ["c2", "c3", "c4"], ["c5"]]
+
+
+def test_split_into_blocks_falls_back_when_sizes_do_not_fit():
+    """Sizes that do not describe THIS pool would silently mis-slice it.
+    Treat any inconsistency as "structure unknown" — one block — rather
+    than splitting on wrong boundaries."""
+    pool = [_n(f"c{i}") for i in range(6)]
+    for bad in ([], [2, 2], [7], [3, -1, 4]):
+        assert split_into_blocks(pool, bad) == [pool]
+
+
+def test_select_candidates_returns_pool_when_unbounded():
+    """``max_candidates<=0`` is the pre-existing "score the whole pool"
+    behaviour and must stay a no-op."""
+    pool = [_n(f"c{i}") for i in range(5)]
+    assert select_rerank_candidates(pool, [2, 3], 0) == pool
+    assert select_rerank_candidates(pool, [2, 3], -1) == pool
+
+
+def test_select_candidates_returns_pool_when_it_already_fits():
+    pool = [_n(f"c{i}") for i in range(5)]
+    assert select_rerank_candidates(pool, [2, 3], 5) == pool
+    assert select_rerank_candidates(pool, [2, 3], 99) == pool
+
+
+def test_select_candidates_draws_round_robin_by_rank():
+    """Each block's best first, then each block's second-best, and so on
+    — never one block's whole head before another block's best."""
+    pool = _block("a", 3, 0.9, 0.7) + _block("b", 3, 0.5, 0.3)
+    out = select_rerank_candidates(pool, [3, 3], 4)
+    assert [n.chunk_id for n in out] == ["a0", "b0", "a1", "b1"]
+
+
+def test_select_candidates_keeps_drawing_from_blocks_that_still_have_chunks():
+    """A short block runs out; the rest must keep contributing rather
+    than the round stopping at the first exhausted block."""
+    pool = _block("a", 1, 0.9, 0.9) + _block("b", 4, 0.5, 0.2)
+    out = select_rerank_candidates(pool, [1, 4], 4)
+    assert [n.chunk_id for n in out] == ["a0", "b0", "b1", "b2"]
+
+
+def test_select_candidates_without_block_sizes_degrades_to_the_head():
+    """No structure known → the leading slice is all we can justify."""
+    pool = [_n(f"c{i}") for i in range(6)]
+    out = select_rerank_candidates(pool, [], 3)
+    assert [n.chunk_id for n in out] == ["c0", "c1", "c2"]
+
+
+def test_select_candidates_beats_a_leading_slice_on_a_production_pool():
+    """Regression for the shape that actually broke: a 139-chunk pool of
+    6 blocks whose LAST block (the coverage round, issued precisely
+    because the first five left a gap) carries the highest scores in the
+    whole pool.
+
+    `pool[:40]` there reached 2 of 6 blocks and contained none of the
+    pool's ten highest-scoring chunks. Round-robin reaches every block
+    and recovers most of them. Sizes and score ranges are taken from the
+    measured production run."""
+    spec = [
+        ("b1", 30, 0.475, 0.425),
+        ("b2", 26, 0.458, 0.411),
+        ("b3", 25, 0.438, 0.387),
+        ("b4", 21, 0.441, 0.387),
+        ("b5", 13, 0.432, 0.399),
+        ("b6", 24, 0.516, 0.478),  # coverage round — best of the pool
+    ]
+    blocks = [_block(p, n, hi, lo) for p, n, hi, lo in spec]
+    pool = [n for b in blocks for n in b]
+    sizes = [len(b) for b in blocks]
+    assert len(pool) == 139
+
+    best_10 = {
+        n.chunk_id
+        for n in sorted(pool, key=lambda s: s.score, reverse=True)[:10]
+    }
+    picked = select_rerank_candidates(pool, sizes, 40)
+    picked_ids = {n.chunk_id for n in picked}
+    head_ids = {n.chunk_id for n in pool[:40]}
+
+    assert len(picked) == 40
+    # every facet represented ...
+    assert {i.chunk_id[:2] for i in picked} == {"b1", "b2", "b3", "b4", "b5", "b6"}
+    # ... and the pool's strongest chunks recovered, which the leading
+    # slice misses entirely.
+    assert len(head_ids & best_10) == 0
+    assert len(picked_ids & best_10) >= 6
+
+
+# ── activity: the bound applies, and nothing is lost ────────────────
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_only_the_candidates_but_returns_the_whole_pool(
+    monkeypatch, _reset_deps,
+):
+    """The model sees `max_candidates` chunks drawn across blocks; the
+    unscored rest still comes back, after the ranked head, in pool
+    order. Bounding the model's work must not shrink the result."""
+    stub = _CappedStubReranker(cap=256)
+
+    async def _get_reranker(top_n):
+        return stub
+
+    monkeypatch.setattr(rerank_mod, "get_reranker", _get_reranker)
+
+    pool = _block("a", 4, 0.9, 0.6) + _block("b", 4, 0.5, 0.2)
+    out = await rerank_sources(RerankParams(
+        query="q",
+        sources=pool,
+        top_n=len(pool),
+        block_sizes=[4, 4],
+        max_candidates=4,
+    ))
+
+    # Exactly 4 chunks reached the model, one rank at a time per block.
+    assert stub.seen_node_ids == ["a0", "b0", "a1", "b1"]
+    # Nothing lost: the full pool comes back.
+    assert len(out.sources) == 8
+    assert {n.chunk_id for n in out.sources} == {n.chunk_id for n in pool}
+    # Scored head first (best-first), then the untouched tail in pool order.
+    assert [n.chunk_id for n in out.sources[:4]] == ["a0", "a1", "b0", "b1"]
+    assert [n.chunk_id for n in out.sources[4:]] == ["a2", "a3", "b2", "b3"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_unbounded_params_score_the_whole_pool(
+    monkeypatch, _reset_deps,
+):
+    """Defaults (no bound, no block sizes) keep the old behaviour, so
+    existing callers are unaffected."""
+    stub = _CappedStubReranker(cap=256)
+
+    async def _get_reranker(top_n):
+        return stub
+
+    monkeypatch.setattr(rerank_mod, "get_reranker", _get_reranker)
+
+    pool = [_n(f"c{i}", score=float(i)) for i in range(5)]
+    await rerank_sources(RerankParams(query="q", sources=pool, top_n=5))
+    assert stub.seen_node_ids == [f"c{i}" for i in range(5)]

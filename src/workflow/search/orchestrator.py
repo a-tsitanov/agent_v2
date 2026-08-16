@@ -48,7 +48,7 @@ with workflow.unsafe.imports_passed_through():
         build_evidence,
         should_run_coverage_round,
     )
-    from src.workflow.search._merge import merge_subquery_sources
+    from src.workflow.search._merge import merge_subquery_sources_with_blocks
     from src.workflow.search._retry import (
         FAST_RETRY,
         LLM_HEARTBEAT_TIMEOUT,
@@ -102,6 +102,60 @@ def cap_synth_sources(
     if top_n <= 0:
         return sources
     return sources[:top_n]
+
+
+# How many chunks the cross-encoder scores per chunk that survives to
+# synthesis.  Reranking is a precision pass over the head of the list,
+# so it needs a shortlist to choose from, not the whole pool: at 2x, a
+# `rerank_top_n` of 20 ranks 40 candidates, 30 ranks 60.
+RERANK_CANDIDATES_PER_SLOT = 2
+
+# Time the cross-encoder needs per candidate, plus one-off overhead
+# (first call in a fresh worker process loads a ~1 GB model from disk).
+# Measured on the production host: 2.4 s/chunk idle, 3.4 s/chunk under
+# ingest load — 4 s carries the loaded case with margin.
+_RERANK_SECONDS_PER_CANDIDATE = 4
+_RERANK_FIXED_OVERHEAD_SECONDS = 60
+_RERANK_MIN_SECONDS = 180
+
+
+def rerank_candidate_count(synth_top_n: int) -> int:
+    """How many chunks to let the cross-encoder score.
+
+    Derived from the number that actually reaches synthesis so the two
+    move together: raising ``rerank_top_n`` widens the shortlist instead
+    of quietly starving it.  ``<=0`` (synthesis uncapped) ⇒ 0, read
+    downstream as "score the whole pool", matching ``cap_synth_sources``'
+    own reading of a non-positive cap.  Pure."""
+    if synth_top_n <= 0:
+        return 0
+    return synth_top_n * RERANK_CANDIDATES_PER_SLOT
+
+
+def rerank_timeouts(max_candidates: int) -> tuple[timedelta, timedelta]:
+    """``(start_to_close, schedule_to_close)`` for ``rerank_sources``.
+
+    Derived from the candidate bound rather than fixed, because rerank
+    cost is linear in candidates: a constant timeout silently becomes
+    too small the moment either the pool or ``rerank_top_n`` grows past
+    what it was chosen for.  That is exactly how this activity started
+    timing out — a 3-minute constant against a pool that grew from 30 to
+    139 chunks — and the fix is worthless if the same cliff can reappear
+    at a higher ``rerank_top_n``.
+
+    ``schedule_to_close`` covers all ``FAST_RETRY`` attempts plus their
+    backoff, so a late attempt is never cut short by the outer bound.
+    An unbounded candidate count (``<=0``) has no derivable budget and
+    keeps a flat generous ceiling.  Pure."""
+    if max_candidates <= 0:
+        start = timedelta(minutes=10)
+    else:
+        start = timedelta(seconds=max(
+            _RERANK_MIN_SECONDS,
+            _RERANK_FIXED_OVERHEAD_SECONDS
+            + _RERANK_SECONDS_PER_CANDIDATE * max_candidates,
+        ))
+    return start, start * 3 + timedelta(seconds=60)
 
 
 def distinct_doc_ids(sources: list[SerializedNode]) -> list[str]:
@@ -194,7 +248,14 @@ class SearchOrchestratorWorkflow:
         child_results: list[SubQueryResult] = await asyncio.gather(*child_coros)
 
         # ── 3. merge + dedup by chunk_id across all sub-questions ────
-        merged = merge_subquery_sources([r.sources for r in child_results])
+        # `blocks` keeps the per-sub-question structure the merge itself
+        # flattens away; rerank needs it to draw candidates from every
+        # facet instead of just the front of the concatenation. Coverage
+        # rounds append to it and the merge is redone from scratch —
+        # dedup is first-wins and order-stable, so that is identical to
+        # folding the new block in, and it keeps ONE code path.
+        blocks: list[list[SerializedNode]] = [r.sources for r in child_results]
+        merged, block_sizes = merge_subquery_sources_with_blocks(blocks)
         self._state["n_sources"] = len(merged)
         log.info(
             "orchestrator  merged %d sources from %d children",
@@ -282,7 +343,8 @@ class SearchOrchestratorWorkflow:
                 )
                 break
 
-            merged = merge_subquery_sources([merged, extra.sources])
+            blocks.append(extra.sources)
+            merged, block_sizes = merge_subquery_sources_with_blocks(blocks)
             self._state["n_sources"] = len(merged)
             step_stats.append(AgenticStepStatDict(
                 step=len(step_stats) + 1,
@@ -301,16 +363,22 @@ class SearchOrchestratorWorkflow:
         # globally most relevant chunks rather than the raw union order.
         # Runs UNCONDITIONALLY now — its output is `SearchOutcome.sources`
         # on both paths, not just synthesis context, so it is no longer
-        # discardable work when `synthesize=False`.  The cross-encoder
-        # scores every chunk in the pool regardless of `top_n` (`top_n`
-        # only trims the trailing slice), so asking for the WHOLE pool
-        # (`top_n=len(merged)`) costs the same model work as the old
-        # `rerank_top_n` request.  Runs on the small search queue (the
-        # model is cheap relative to the large synthesis LLM).
+        # discardable work when `synthesize=False`.  `top_n=len(merged)`
+        # asks for the whole pool BACK (nothing dropped); what the model
+        # actually scores is `max_candidates`, drawn across `block_sizes`
+        # so every sub-question is represented — the pool is a
+        # concatenation, so its head is one facet, not the best chunks.
+        # That bound is what keeps the activity inside its timeout as the
+        # corpus grows.  Runs on the small search queue (the model is
+        # cheap relative to the large synthesis LLM).
         # FAIL-OPEN: any rerank error → fall back to the unranked merged
         # pool (never block the answer) — the status quo ante.
         self._state["phase"] = "rerank"
         ranked_sources = merged
+        max_candidates = rerank_candidate_count(settings.temporal.rerank_top_n)
+        rerank_start_to_close, rerank_schedule_to_close = rerank_timeouts(
+            max_candidates,
+        )
         try:
             rr: RerankResult = await workflow.execute_activity(
                 "rerank_sources",
@@ -318,17 +386,22 @@ class SearchOrchestratorWorkflow:
                     query=params.query,
                     sources=merged,
                     top_n=len(merged),
+                    block_sizes=block_sizes,
+                    max_candidates=max_candidates,
                 ),
                 result_type=RerankResult,
-                start_to_close_timeout=timedelta(minutes=3),
-                schedule_to_close_timeout=timedelta(minutes=10),
+                start_to_close_timeout=rerank_start_to_close,
+                schedule_to_close_timeout=rerank_schedule_to_close,
                 retry_policy=FAST_RETRY,
             )
             if rr.sources:
                 ranked_sources = list(rr.sources)
                 log.info(
-                    "orchestrator  reranked %d → %d sources",
+                    "orchestrator  reranked %d → %d sources "
+                    "(%d scored, %d blocks)",
                     len(merged), len(ranked_sources),
+                    min(max_candidates or len(merged), len(merged)),
+                    len(block_sizes),
                 )
         except Exception as exc:
             # Fail-open: reranker unavailable → return the pool untouched,
