@@ -48,6 +48,7 @@ from src.mcp._shared import (
     parse_args,
 )
 from src.retrieval import atomic_tools
+from src.stats.align import GRANULARITIES
 
 mcp = FastMCP(
     name="kb-llamaindex-tools",
@@ -448,9 +449,6 @@ async def _timeline(
     }
 
 
-_TREND_GRANULARITIES = ("day", "week", "month", "quarter", "year")
-
-
 def _period_bounds(period: str, granularity: str) -> tuple[date, date]:
     """First and last day covered by a bucket key from
     ``epoch_days_to_period``."""
@@ -512,8 +510,8 @@ async def _topic_trend(
 
     if not topic or not topic.strip():
         return {"error": "topic must be a non-empty string"}
-    if granularity not in _TREND_GRANULARITIES:
-        return {"error": f"granularity must be one of {list(_TREND_GRANULARITIES)}"}
+    if granularity not in GRANULARITIES:
+        return {"error": f"granularity must be one of {sorted(GRANULARITIES)}"}
     for name, value in (("since", since), ("until", until)):
         if value is not None:
             try:

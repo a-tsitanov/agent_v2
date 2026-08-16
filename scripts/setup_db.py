@@ -25,6 +25,7 @@ import psycopg
 from loguru import logger
 
 from src.config import settings
+from src.stats.align import GRANULARITIES, VALUE_KINDS
 from src.utils.logging import configure_logging
 
 # ── Postgres ─────────────────────────────────────────────────────────
@@ -124,7 +125,16 @@ _PG_TRGM_DDL = """
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 """
 
-_STAT_INDICATOR_DDL = """
+def _sql_in_list(values: frozenset[str]) -> str:
+    """`'a', 'b', 'c'` for a SQL `IN (...)` clause — sorted so the
+    generated DDL text is deterministic across runs.  The single source
+    for turning a Python enum into SQL, used by both the inline CHECK
+    below and the idempotent ALTER that keeps an already-created table's
+    constraint in line with it (see `_STAT_INDICATOR_CONSTRAINTS_DDL`)."""
+    return ", ".join(f"'{v}'" for v in sorted(values))
+
+
+_STAT_INDICATOR_DDL = f"""
 CREATE TABLE IF NOT EXISTS stat_indicator (
     id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     source         TEXT    NOT NULL,
@@ -134,15 +144,32 @@ CREATE TABLE IF NOT EXISTS stat_indicator (
     unit           TEXT    NOT NULL,
     value_kind     TEXT    NOT NULL,
     granularity    TEXT    NOT NULL,
-    dims_schema    JSONB   NOT NULL DEFAULT '{}'::jsonb,
+    dims_schema    JSONB   NOT NULL DEFAULT '{{}}'::jsonb,
     entity_vid     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (source, code),
     CONSTRAINT stat_indicator_value_kind_check
-        CHECK (value_kind IN ('share','level','rate','index')),
+        CHECK (value_kind IN ({_sql_in_list(VALUE_KINDS)})),
     CONSTRAINT stat_indicator_granularity_check
-        CHECK (granularity IN ('day','week','month','quarter','year'))
+        CHECK (granularity IN ({_sql_in_list(GRANULARITIES)}))
 );
+"""
+
+# `stat_indicator` already exists in the live database, so the
+# `CREATE TABLE IF NOT EXISTS` above is a no-op there — a value added to
+# VALUE_KINDS/GRANULARITIES would otherwise be accepted by Python and
+# rejected by Postgres forever, with no code path that ever fixes it.
+# DROP + re-ADD (same idempotent-widen shape as documents_status_check
+# above) brings an existing table's CHECK constraints back in line with
+# src.stats.align on every run.
+_STAT_INDICATOR_CONSTRAINTS_DDL = f"""
+ALTER TABLE stat_indicator DROP CONSTRAINT IF EXISTS stat_indicator_value_kind_check;
+ALTER TABLE stat_indicator ADD CONSTRAINT stat_indicator_value_kind_check
+    CHECK (value_kind IN ({_sql_in_list(VALUE_KINDS)}));
+
+ALTER TABLE stat_indicator DROP CONSTRAINT IF EXISTS stat_indicator_granularity_check;
+ALTER TABLE stat_indicator ADD CONSTRAINT stat_indicator_granularity_check
+    CHECK (granularity IN ({_sql_in_list(GRANULARITIES)}));
 """
 
 # `entity_vid` and `source_doc_id` are WEAK links on purpose — no
@@ -297,6 +324,7 @@ def setup_postgres() -> None:
         cur.execute(_BACKFILL_SOURCE_CHANNEL_SQL)
         cur.execute(_PG_TRGM_DDL)
         cur.execute(_STAT_INDICATOR_DDL)
+        cur.execute(_STAT_INDICATOR_CONSTRAINTS_DDL)
         cur.execute(_STAT_OBSERVATION_DDL)
         cur.execute(_STAT_INDEXES_DDL)
     logger.info("postgres setup  done")

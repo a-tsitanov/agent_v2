@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from src.mcp import tools_server
 from src.mcp.tools_server import (
     _period_bounds,
     _period_in_window,
     _polarity_evolution,
     _topic_trend,
 )
+from src.stats.align import GRANULARITIES
+
+
+def test_topic_trend_granularities_are_not_a_parallel_copy():
+    """`topic_trend` supports exactly day/week/month/quarter/year, which
+    is `GRANULARITIES` exactly.  The validation set must be the same
+    object `src.stats.align` defines, not a hand-copied tuple that can
+    silently drift out of sync with it."""
+    assert tools_server.GRANULARITIES is GRANULARITIES
 
 
 async def test_topic_trend_rejects_empty_topic():
