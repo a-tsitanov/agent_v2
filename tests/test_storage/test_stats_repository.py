@@ -321,6 +321,27 @@ async def test_get_indicator_returns_none_when_absent():
     assert await repo.get_indicator(999) is None
 
 
+async def test_get_indicator_returns_the_row_as_a_dict():
+    """`get_indicator` has no builder function (inline SQL) and does no
+    internal `r["..."]` access — it just returns `await cur.fetchone()`
+    unprocessed, same shape as `list_indicators` before it got its own
+    end-to-end test.  The absent-id test above proves nothing about
+    `row_factory`: with no row to fetch, `fetchone()` returns `None`
+    whether or not `dict_row` was asked for.  This one exercises an
+    actual populated row instead.
+    """
+    repo, _ = _repo_with([
+        {"id": 7, "source": "fom", "code": "anxiety", "title": "Тревожность",
+         "question_text": "", "unit": "%", "value_kind": "share",
+         "granularity": "week", "dims_schema": {}, "entity_vid": None},
+    ])
+    assert await repo.get_indicator(7) == {
+        "id": 7, "source": "fom", "code": "anxiety", "title": "Тревожность",
+        "question_text": "", "unit": "%", "value_kind": "share",
+        "granularity": "week", "dims_schema": {}, "entity_vid": None,
+    }
+
+
 def test_trigram_operator_survives_psycopg_placeholder_expansion():
     """`%` is psycopg's placeholder marker, so the trigram operator has
     to be written `%%` — and that escaping is invisible until runtime.
