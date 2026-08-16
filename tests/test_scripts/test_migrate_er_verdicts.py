@@ -9,6 +9,8 @@ else silently works on a small space and dies on the real one.
 
 from __future__ import annotations
 
+import pytest
+
 from scripts.migrate_er_verdicts import build_page_query, escape_ngql, migrate
 
 # ── the page query ───────────────────────────────────────────────────
@@ -161,3 +163,55 @@ def test_dry_run_reads_but_does_not_write():
     assert copied == 15
     assert cache.calls == 0
     assert cache.stored == {}
+
+
+# ── resumability after a mid-run failure ─────────────────────────────
+#
+# The first live run died four pages in, on the host memory watermark,
+# and the log did not contain the resume point — so "resume with
+# --start-after" named something the operator could not find, and the
+# only option was restarting a 1.4M-row scan. Both halves are fixed
+# below: progress carries the key, and a transient read is retried.
+
+
+def test_progress_lines_carry_the_resume_key():
+    rows = {f"k{i:03d}": True for i in range(20)}
+    store, cache = _StubStore(rows), _StubCache()
+    lines: list[str] = []
+    migrate(store, cache, page=10, progress=lines.append)
+    assert lines, "no progress reported"
+    assert all("last_key=" in line for line in lines if line.startswith("page "))
+    assert repr("k009") in lines[0]
+
+
+class _FlakyStore(_StubStore):
+    """Refuses the first `fail_times` reads, like the live store does
+    when the host is momentarily over its memory watermark."""
+
+    def __init__(self, rows, fail_times: int) -> None:
+        super().__init__(rows)
+        self.remaining_failures = fail_times
+
+    def structured_query(self, q: str):
+        if self.remaining_failures > 0:
+            self.remaining_failures -= 1
+            raise RuntimeError("Used memory hits the high watermark(0.800000)")
+        return super().structured_query(q)
+
+
+def test_a_transient_store_refusal_is_retried(monkeypatch):
+    monkeypatch.setattr("scripts.migrate_er_verdicts.time.sleep", lambda _s: None)
+    rows = {f"k{i:03d}": True for i in range(10)}
+    store, cache = _FlakyStore(rows, fail_times=2), _StubCache()
+    copied, _ = migrate(store, cache, page=10, retries=3)
+    assert copied == 10
+    assert store.remaining_failures == 0
+
+
+def test_retries_are_bounded_and_the_error_surfaces(monkeypatch):
+    """Retrying forever on a host that is genuinely out of memory would
+    hang the migration instead of reporting it."""
+    monkeypatch.setattr("scripts.migrate_er_verdicts.time.sleep", lambda _s: None)
+    store, cache = _FlakyStore({"a": True}, fail_times=99), _StubCache()
+    with pytest.raises(RuntimeError, match="high watermark"):
+        migrate(store, cache, page=10, retries=2)
