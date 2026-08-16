@@ -22,15 +22,27 @@ def test_entity_ddl_has_er_canonical_name_column():
     assert "er_canonical_name string" in entity_ddl
 
 
-def test_schema_has_er_verdict_tag_and_index():
+def test_schema_keeps_the_er_verdict_tag_for_the_rollback():
+    """The live cache moved to Postgres, but the tag stays so
+    `AGENT_ER_VERDICT_CACHE_BACKEND=graph` still has somewhere to write.
+    In normal operation it is empty."""
     tag = next((s for s in SCHEMA_DDL if "CREATE TAG IF NOT EXISTS `ERVerdict`" in s), None)
     assert tag is not None, "ERVerdict TAG missing from SCHEMA_DDL"
     for col in ("er_key string", "same bool", "updated int"):
         assert col in tag, f"missing column: {col}"
-    assert any(
-        "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256))" in s
-        for s in SCHEMA_DDL
-    ), "er_verdict_key_idx missing (needed for verdict cache LOOKUP by key)"
+
+
+def test_schema_does_not_recreate_the_unread_verdict_index():
+    """`er_verdict_key_idx` had no reader on either path — the Nebula path
+    fetches by VID, and the `MATCH … WHERE v.key IN $keys` that would need
+    an index is the Neo4j path with its own constraint. It was maintained
+    on every write for nobody.
+
+    This test is also a trap-guard: `ensure_schema` runs on every
+    `build_graph_store()`, so leaving the CREATE here silently re-creates
+    the index seconds after any DROP — which is exactly what happened on
+    the first attempt to remove it."""
+    assert not any("er_verdict_key_idx" in s for s in SCHEMA_DDL)
 
 
 def test_entity_ddl_has_first_doc_id_column():

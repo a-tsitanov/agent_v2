@@ -98,12 +98,21 @@ SCHEMA_DDL: list[str] = [
     # tag/edge indexes needed for full-scan + lookups (Nebula requires an
     # index to LOOKUP by property; traversals from a known VID do not).
     "CREATE TAG INDEX IF NOT EXISTS `entity_name_idx` ON `Entity`(name(256));",
-    # Entity-resolution decision cache: backs ER's pairwise same/different
-    # verdict lookup so it can skip re-judging a pair (mirrors the neo4j
-    # `:ERVerdict {key, same}` node). VID = `verdict_vid(key)`.
+    # Entity-resolution decision cache. The LIVE cache moved to Postgres
+    # (`er_verdict`) on 2026-08-16: at 1 396 828 vertices it was 89.5% of
+    # this space and pushed full scans past Nebula's memory ceiling. The
+    # tag is kept ONLY so `AGENT_ER_VERDICT_CACHE_BACKEND=graph` — the
+    # rollback — still has somewhere to write; it is empty in normal
+    # operation. VID = `verdict_vid(key)`.
     "CREATE TAG IF NOT EXISTS `ERVerdict` ("
     "er_key string, same bool DEFAULT false, updated int DEFAULT 0);",
-    "CREATE TAG INDEX IF NOT EXISTS `er_verdict_key_idx` ON `ERVerdict`(er_key(256));",
+    # NO index on `er_key`. Nothing ever read it: the Nebula path fetches
+    # by VID (`FETCH PROP ON ERVerdict "<vid>"`), and the `MATCH … WHERE
+    # v.key IN $keys` that needs one belongs to the Neo4j path, which
+    # uses its own constraint. It was maintained on every write for no
+    # reader. Do not add it back without a query that uses it — and note
+    # that re-adding it here is what silently undid the first attempt to
+    # DROP it, because `ensure_schema` runs on every `build_graph_store`.
     # Arc-2 monitor findings (mirrors the neo4j `:Alert {key,...}` node). VID =
     # alert_vid(key). score/updated_at are 0 for unscored (new_connection) alerts.
     "CREATE TAG IF NOT EXISTS `Alert` ("
