@@ -409,12 +409,24 @@ class RerankParams(_Frozen):
 
     The merged graph+vector pool (already deduped by chunk_id across
     sub-questions) plus the original user query.  The activity runs the
-    bge cross-encoder over the UNIFIED pool and returns the top-N.
+    bge cross-encoder over a bounded candidate set drawn from that pool
+    (``max_candidates`` / ``block_sizes``) and returns the ranked head
+    followed by the untouched remainder, trimmed to ``top_n``.
     """
 
     query: str
     sources: list[SerializedNode] = Field(default_factory=list)
     top_n: int = 5
+    # How ``sources`` splits into per-sub-question blocks, in order (see
+    # ``_merge.merge_subquery_sources_with_blocks``).  Must sum to
+    # ``len(sources)``; empty (or any mismatch) is read as "one block",
+    # which is also the pre-existing behaviour for callers that do not
+    # set it.
+    block_sizes: list[int] = Field(default_factory=list)
+    # Upper bound on how many chunks the cross-encoder actually scores.
+    # Cost is linear in that count, so this — not ``top_n`` — is what
+    # bounds the activity's runtime.  ``<=0`` ⇒ score the whole pool.
+    max_candidates: int = 0
 
 
 class RerankResult(_Frozen):

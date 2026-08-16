@@ -6,12 +6,21 @@ cross-encoder pass. This co-ranks the two retrieval modalities against
 each other so the returned ordering reflects the globally most-relevant
 chunks first — not just the union order.
 
-The orchestrator now requests the WHOLE pool ranked (``top_n=len(pool)``),
-not just enough for synthesis. Its output feeds TWO consumers: the
-synthesis prompt (capped separately via the orchestrator's
-``cap_synth_sources``) AND ``SearchOutcome.sources`` returned to the
-caller, unconditionally — including when ``synthesize=False``. It is no
-longer synthesis-only input.
+The orchestrator requests the WHOLE pool BACK (``top_n=len(pool)``), not
+just enough for synthesis. The output feeds TWO consumers: the synthesis
+prompt (capped separately via the orchestrator's ``cap_synth_sources``)
+AND ``SearchOutcome.sources`` returned to the caller, unconditionally —
+including when ``synthesize=False``. It is no longer synthesis-only
+input.
+
+Returning the whole pool is NOT the same as scoring it. Cross-encoder
+cost is linear in chunks scored and the pool grows with the corpus, so
+scoring everything cannot fit a fixed activity timeout — in production
+it stopped fitting, at a 139-chunk pool against a 3-minute bound.
+``max_candidates`` bounds the scoring; ``select_rerank_candidates``
+chooses WHICH chunks, drawing across the per-sub-question blocks rather
+than off the front of the concatenation. Everything unscored still comes
+back, appended in pool order.
 
 REUSES ``src/retrieval/reranker.py`` (the same ``BAAI/bge-reranker-v2-m3``
 ``SentenceTransformerRerank`` applied in ``hybrid.py``) and the repo's
@@ -45,6 +54,68 @@ def prepare_rerank_pool(
     — unit-tested directly.
     """
     return dedup_by_chunk_id(sources)
+
+
+def split_into_blocks(
+    pool: list[SerializedNode], block_sizes: list[int],
+) -> list[list[SerializedNode]]:
+    """Cut ``pool`` back into the per-sub-question blocks it was merged
+    from. Falls back to a single block covering the whole pool when the
+    sizes are absent or do not describe this pool — a wrong split would
+    silently distort selection, so anything inconsistent is treated as
+    "structure unknown". Pure."""
+    if not block_sizes or any(s < 0 for s in block_sizes):
+        return [pool]
+    if sum(block_sizes) != len(pool):
+        return [pool]
+    out: list[list[SerializedNode]] = []
+    start = 0
+    for size in block_sizes:
+        if size:
+            out.append(pool[start : start + size])
+        start += size
+    return out or [pool]
+
+
+def select_rerank_candidates(
+    pool: list[SerializedNode],
+    block_sizes: list[int],
+    max_candidates: int,
+) -> list[SerializedNode]:
+    """Pick the chunks the cross-encoder actually scores.
+
+    Cross-encoder cost is linear in the number of chunks scored, and the
+    pool grows with the corpus, so scoring all of it is an unbounded
+    promise the fixed activity timeout cannot keep. This bounds it.
+
+    Selection is round-robin BY RANK across blocks — each sub-question's
+    best chunk, then each one's second-best, and so on — rather than the
+    pool's leading slice. The pool is a concatenation of per-sub-question
+    blocks whose scores are not comparable across blocks (that
+    incomparability is exactly what the cross-encoder resolves), so its
+    leading slice is just the first sub-question or two: on a measured
+    139-chunk production pool, ``pool[:40]`` drew from 2 of 6 blocks and
+    contained none of the pool's ten highest-scoring chunks, while this
+    rule drew from all 6 and contained six of them. Round-robin only
+    ever compares chunks with their own block-mates, which is the one
+    comparison the retriever scores support.
+
+    ``max_candidates <= 0``, or a pool already at/under the bound,
+    returns the pool unchanged — the pre-existing "score everything"
+    behaviour. Pure.
+    """
+    if max_candidates <= 0 or len(pool) <= max_candidates:
+        return list(pool)
+    blocks = split_into_blocks(pool, block_sizes)
+    out: list[SerializedNode] = []
+    for rank in range(max(len(b) for b in blocks)):
+        for block in blocks:
+            if rank >= len(block):
+                continue
+            out.append(block[rank])
+            if len(out) == max_candidates:
+                return out
+    return out
 
 
 def _sigmoid(x: float) -> float:
@@ -88,13 +159,20 @@ def append_unranked_remainder(
     unranked remainder. A no-op when ``ranked`` already contains every
     pool member (pool at or under the cap). Pure.
 
-    NOTE: only reachable when the pool exceeds ``_RERANK_SCORE_CAP``
-    (256). When it triggers, the combined list is not monotonic in
-    ``score``: the ranked head carries ``apply_group_weights``' output
-    (sigmoid-normalized cross-encoder logit × group weight, in (0, 1)),
-    while the appended remainder still carries each chunk's raw retriever
-    score. Ordering (best-first) is still correct; the ``score`` field
-    alone is not comparable across the boundary."""
+    NOTE: this is now the NORMAL case, not an edge one — ``max_candidates``
+    bounds scoring well below both the pool size and
+    ``_RERANK_SCORE_CAP``, so most of a large pool lands in the
+    remainder. Two consequences, both by design:
+
+    - The combined list is not monotonic in ``score``. The ranked head
+      carries ``apply_group_weights``' output (sigmoid-normalized
+      cross-encoder logit × group weight, in (0, 1)); the remainder
+      still carries each chunk's raw retriever score. Ordering
+      (best-first) is correct; the ``score`` field alone is not
+      comparable across the boundary.
+    - Group weighting only reaches the scored head. A boosted-group
+      chunk sitting in the remainder is not promoted past the head —
+      weighting biases the shortlist, it does not re-open it."""
     ranked_ids = {n.chunk_id for n in ranked}
     remainder = [n for n in pool if n.chunk_id not in ranked_ids]
     return ranked + remainder
@@ -119,7 +197,16 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
             "(pool=%d top_n=%d)", len(pool), params.top_n,
         )
         return RerankResult(sources=pool[: params.top_n])
-    nodes = [serialized_to_node(s) for s in pool]
+    # Bound the model's work. Everything NOT selected is still returned —
+    # `append_unranked_remainder` below puts it back, in pool order,
+    # after the ranked head.
+    candidates = select_rerank_candidates(
+        pool, params.block_sizes, params.max_candidates,
+    )
+    activity.heartbeat(
+        {"stage": "score", "n_pool": len(pool), "n_candidates": len(candidates)},
+    )
+    nodes = [serialized_to_node(s) for s in candidates]
     # Cross-encoder inference is sync CPU/GPU — off the loop so it can't
     # freeze concurrent search/ingest activities in the shared process.
     reranked = await asyncio.to_thread(
@@ -128,16 +215,16 @@ async def rerank_sources(params: RerankParams) -> RerankResult:
 
     out = [node_to_serialized(n) for n in reranked]
     out = apply_group_weights(out, settings.agent.group_weights)
-    # `postprocess_nodes` above only ever scores up to the cached
-    # cross-encoder's fixed cap (`_RERANK_SCORE_CAP` inside
-    # `get_reranker`) — `out` can be missing pool members the model never
-    # touched at all when the pool exceeds that cap. Restore them,
+    # `out` covers only the candidates just scored — plus, independently,
+    # `postprocess_nodes` never scores past the cached cross-encoder's
+    # fixed cap (`_RERANK_SCORE_CAP` inside `get_reranker`). Either way
+    # the pool has members the model never touched. Restore them,
     # unranked, after the ranked head, THEN apply `params.top_n` so the
     # caller's own "how many to return" request still bounds the
     # combined (ranked + remainder) list, same as before.
     out = append_unranked_remainder(out, pool)[: params.top_n]
     activity.logger.info(
-        "rerank_sources  pool=%d  top_n=%d  out=%d",
-        len(pool), params.top_n, len(out),
+        "rerank_sources  pool=%d  scored=%d  top_n=%d  out=%d",
+        len(pool), len(candidates), params.top_n, len(out),
     )
     return RerankResult(sources=out)
