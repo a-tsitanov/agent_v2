@@ -190,6 +190,23 @@ CREATE TABLE IF NOT EXISTS stat_observation (
 );
 """
 
+# ER verdict cache.  One row per borderline candidate pair already judged
+# by the LLM, keyed on the order-insensitive `(norm, label)|(norm, label)`
+# pair (`src/graph/entity_resolution.py:_verdict_key`).  It used to live in
+# the graph as `:ERVerdict` vertices, where it grew to 1 395 491 — 89.5% of
+# every vertex in the space — and made full scans hit Nebula's memory
+# ceiling.  A unique-keyed KV cache belongs here; the PRIMARY KEY is the
+# lookup index, and no secondary index is wanted (`er_key = ANY(...)` is
+# the only access pattern, and nothing queries by age — see the plan's note
+# on why pruning by `updated` would evict exactly the useful entries).
+_ER_VERDICT_DDL = """
+CREATE TABLE IF NOT EXISTS er_verdict (
+    er_key   TEXT PRIMARY KEY,
+    same     BOOLEAN     NOT NULL,
+    updated  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
 _STAT_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS stat_observation_series_idx
     ON stat_observation (indicator_id, period_start);
@@ -327,6 +344,7 @@ def setup_postgres() -> None:
         cur.execute(_STAT_INDICATOR_CONSTRAINTS_DDL)
         cur.execute(_STAT_OBSERVATION_DDL)
         cur.execute(_STAT_INDEXES_DDL)
+        cur.execute(_ER_VERDICT_DDL)
     logger.info("postgres setup  done")
 
 
