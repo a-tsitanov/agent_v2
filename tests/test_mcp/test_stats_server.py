@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from src.mcp.stats_server import _align_tool, _indicators_search, _series
+from src.mcp.stats_server import _align_tool, _indicators_search, _series, mcp
 
 _UNSET = object()
 
@@ -309,3 +309,28 @@ def test_align_tool_default_max_lag_is_4_when_nothing_is_configured(monkeypatch)
          for d in (5, 12, 19, 26)]
     out = _align_tool(a, a, "week", "share", "share", None)
     assert "error" not in out
+
+
+async def test_nullable_settings_params_carry_a_schema_description():
+    """Deliberate exception to this file's "no FastMCP internals" rule.
+
+    A nullable parameter's default (`"default": null`) says nothing about
+    what omitting it actually does — a schema-driven tool-calling client
+    (an LLM harness deciding what to fill in) reads the JSON SCHEMA, not
+    this repo's docstrings.  `value_kind_a`/`value_kind_b` on `stat_align`
+    already show a concrete `"default": "share"` in the same schema; the
+    three settings-backed parameters must not sit there as bare,
+    information-free nulls next to them.
+    """
+    search_schema = (await mcp.get_tool("stat_indicators_search")).parameters
+    align_schema = (await mcp.get_tool("stat_align")).parameters
+
+    for param, props in (
+        ("limit", search_schema["properties"]["limit"]),
+        ("granularity", align_schema["properties"]["granularity"]),
+        ("max_lag", align_schema["properties"]["max_lag"]),
+    ):
+        assert props.get("description"), (
+            f"{param!r} has no per-parameter description in the "
+            f"generated schema: {props!r}"
+        )

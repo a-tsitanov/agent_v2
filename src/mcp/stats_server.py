@@ -21,9 +21,10 @@ from __future__ import annotations
 import json
 from datetime import date
 from math import isfinite
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from src.config import settings
 from src.mcp._shared import (
@@ -206,7 +207,12 @@ def _align_tool(
 
 @mcp.tool(timeout=120)
 async def stat_indicators_search(
-    query: str | None = None, source: str | None = None, limit: int | None = None,
+    query: str | None = None,
+    source: str | None = None,
+    limit: Annotated[
+        int | None,
+        Field(description="Max rows to return. Defaults to 20 when omitted."),
+    ] = None,
 ) -> dict[str, Any]:
     """Discover what external statistics exist, then narrow to one indicator.
 
@@ -259,10 +265,19 @@ async def stat_series(
 async def stat_align(
     series_a: list[dict[str, Any]],
     series_b: list[dict[str, Any]],
-    granularity: str | None = None,
+    granularity: Annotated[
+        str | None,
+        Field(
+            description="day|week|month|quarter|year. Defaults to \"week\" when omitted.",
+        ),
+    ] = None,
     value_kind_a: str = "share",
     value_kind_b: str = "share",
-    max_lag: int | None = None,
+    max_lag: Annotated[
+        int | None,
+        Field(description="Max shift, in periods, to search for alignment. "
+              "Defaults to 4 when omitted."),
+    ] = None,
 ) -> dict[str, Any]:
     """Put two series on a common grid and measure how far apart they run.
 
