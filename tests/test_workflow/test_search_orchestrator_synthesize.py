@@ -320,3 +320,63 @@ async def test_outcome_sources_identical_with_and_without_synthesis(monkeypatch)
     assert without_synth.uncertainties == []
     assert with_synth.refinement_rounds == 2
     assert without_synth.refinement_rounds == 0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_falls_back_to_the_merged_pool_when_rerank_activity_raises(
+    monkeypatch,
+):
+    """The orchestrator's OWN ``except`` around the ``rerank_sources``
+    activity call (orchestrator.py, not the activity's internal
+    "reranker unavailable" fallback already covered in
+    ``test_search_rerank.py``): when the ACTIVITY ITSELF raises — every
+    attempt, so retries don't rescue it — ``SearchOutcome.sources`` must
+    still come back as the full merged pool, in merge order, not dropped
+    or truncated."""
+
+    @activity.defn(name="plan_subquestions")
+    async def _plan(p: PlanParams) -> PlanResult:
+        return PlanResult(subquestions=[p.query])
+
+    @activity.defn(name="retrieve_subquestion")
+    async def _retrieve(p: RetrieveParams) -> RetrieveResult:
+        return RetrieveResult(
+            subquestion=p.subquestion,
+            sources=[_node(f"c{i}") for i in range(1, 4)],
+        )
+
+    @activity.defn(name="rerank_sources")
+    async def _rerank(p: RerankParams) -> RerankResult:
+        raise RuntimeError("reranker blew up")
+
+    @activity.defn(name="synthesize_answer")
+    async def _synth(p: SynthesizeParams) -> SynthesizeResult:
+        raise AssertionError("synthesize_answer must not be invoked")
+
+    env = await _start_env()
+    queue = f"orch-rerank-raises-{uuid.uuid4()}"
+    monkeypatch.setattr(settings.temporal, "large_task_queue", queue)
+    try:
+        async with Worker(
+            env.client, task_queue=queue,
+            workflows=[SearchOrchestratorWorkflow, SubQueryRetrievalWorkflow],
+            activities=[_plan, _retrieve, _rerank, _synth],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            out: SearchOutcome = await asyncio.wait_for(
+                env.client.execute_workflow(
+                    SearchOrchestratorWorkflow.run,
+                    OrchestratorParams(
+                        query="q", synthesize=False,
+                        coverage_check_enabled=False,
+                    ),
+                    id=f"orch-{uuid.uuid4()}", task_queue=queue,
+                ),
+                timeout=30,
+            )
+    finally:
+        await env.shutdown()
+
+    assert [n.chunk_id for n in out.sources] == ["c1", "c2", "c3"]
+    assert len(out.sources) == 3
+    assert out.answer == ""

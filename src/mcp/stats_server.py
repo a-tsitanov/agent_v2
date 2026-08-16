@@ -92,7 +92,7 @@ def _points(raw: list[dict[str, Any]], label: str) -> tuple[list, str | None]:
 
 
 async def _indicators_search(
-    repo: Any, query: str | None, source: str | None, limit: int,
+    repo: Any, query: str | None, source: str | None, limit: int | None,
 ) -> dict[str, Any]:
     """Three modes, deliberately behind one tool.
 
@@ -102,8 +102,14 @@ async def _indicators_search(
     spelling variants but not synonyms, so a wrong guess is
     indistinguishable from "no such data" and would be reported as the
     statistic not existing.
+
+    ``limit=None`` (the tool's default) resolves to
+    ``settings.stats.search_limit`` HERE, at call time — not frozen into
+    the tool signature at import — so a test can vary the setting and
+    observe the effect without reimporting the module.
     """
-    capped = max(1, min(int(limit), _MAX_SEARCH_LIMIT))
+    effective_limit = settings.stats.search_limit if limit is None else limit
+    capped = max(1, min(int(effective_limit), _MAX_SEARCH_LIMIT))
     blank = not query or not query.strip()
     if blank and source is None:
         return {"sources": await repo.list_sources()}
@@ -157,11 +163,17 @@ async def _series(
 def _align_tool(
     series_a: list[dict[str, Any]],
     series_b: list[dict[str, Any]],
-    granularity: str,
+    granularity: str | None,
     value_kind_a: str,
     value_kind_b: str,
-    max_lag: int,
+    max_lag: int | None,
 ) -> dict[str, Any]:
+    # `None` (the tool's default) resolves from settings HERE, at call
+    # time — see `_indicators_search` above for why.
+    if granularity is None:
+        granularity = settings.stats.default_granularity
+    if max_lag is None:
+        max_lag = settings.stats.default_max_lag
     if granularity not in GRANULARITIES:
         return {"error": f"granularity must be one of {sorted(GRANULARITIES)}"}
     for name, kind in (("value_kind_a", value_kind_a), ("value_kind_b", value_kind_b)):
@@ -194,7 +206,7 @@ def _align_tool(
 
 @mcp.tool(timeout=120)
 async def stat_indicators_search(
-    query: str | None = None, source: str | None = None, limit: int = 20,
+    query: str | None = None, source: str | None = None, limit: int | None = None,
 ) -> dict[str, Any]:
     """Discover what external statistics exist, then narrow to one indicator.
 
@@ -211,6 +223,8 @@ async def stat_indicators_search(
     Every indicator carries `unit`, `value_kind` and `granularity` —
     that is what tells you whether two series are comparable at all, and
     it is what `stat_align` needs.
+    `limit` defaults to the server's configured search limit (20 out of
+    the box) when omitted.
     NOT FOR: values (use `stat_series`) or document text (use MCP-2
     `vector_search`)."""
     return await _indicators_search(_repo(), query, source, limit)
@@ -245,22 +259,24 @@ async def stat_series(
 async def stat_align(
     series_a: list[dict[str, Any]],
     series_b: list[dict[str, Any]],
-    granularity: str = "week",
+    granularity: str | None = None,
     value_kind_a: str = "share",
     value_kind_b: str = "share",
-    max_lag: int = 4,
+    max_lag: int | None = None,
 ) -> dict[str, Any]:
     """Put two series on a common grid and measure how far apart they run.
 
     USE FOR: comparing channel attention against a poll indicator.
     Each series is a list of `{"period_start": "YYYY-MM-DD", "value":
     <number>}`.  Both are resampled DOWN to `granularity` (never
-    interpolated up), z-scored so different units are comparable, and
-    correlated across shifts in `[-max_lag, +max_lag]`; the best-fitting
-    shift is reported as `best_lag`.  Returns per-period `gap`, a scalar
-    `divergence` (mean absolute gap), and `warnings` — read them:
-    `sparse:*` means one side had missing buckets, `low_overlap:*` means
-    too few common periods for the correlation to mean anything.
+    interpolated up; defaults to "week" when omitted), z-scored so
+    different units are comparable, and correlated across shifts in
+    `[-max_lag, +max_lag]` (`max_lag` defaults to 4 when omitted); the
+    best-fitting shift is reported as `best_lag`.  Returns per-period
+    `gap`, a scalar `divergence` (mean absolute gap), and `warnings` —
+    read them: `sparse:*` means one side had missing buckets,
+    `low_overlap:*` means too few common periods for the correlation to
+    mean anything.
     Do NOT compute these numbers yourself; this tool is the arithmetic."""
     return _align_tool(
         series_a, series_b, granularity, value_kind_a, value_kind_b, max_lag,

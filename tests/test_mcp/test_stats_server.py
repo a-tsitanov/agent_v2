@@ -234,3 +234,78 @@ def test_align_tool_output_is_strictly_json_serialisable():
 def test_align_tool_rejects_unknown_granularity():
     out = _align_tool([], [], "fortnight", "share", "share", 0)
     assert "error" in out
+
+
+# ── settings wiring: search_limit, default_granularity, default_max_lag ──
+#
+# The tool's public parameter is nullable (`| None = None`); omitting it
+# means "use the configured default", resolved HERE inside the helper —
+# not frozen into the tool signature at import.  These monkeypatch the
+# live `settings.stats` singleton (the same object `stats_server` holds a
+# reference to) so no module reimport is needed.
+
+
+async def test_indicators_search_uses_the_configured_default_limit_when_omitted(
+    monkeypatch,
+):
+    from src.config import settings
+
+    monkeypatch.setattr(settings.stats, "search_limit", 5)
+    repo = _StubRepo(indicators=[])
+    await _indicators_search(repo, "тревожность", None, None)
+    assert repo.calls[0] == ("search", "тревожность", None, 5)
+
+
+async def test_indicators_search_default_limit_is_20_when_nothing_is_configured(
+    monkeypatch,
+):
+    """A caller passing nothing must still get today's behaviour: 20."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings.stats, "search_limit", 20)
+    repo = _StubRepo(indicators=[])
+    await _indicators_search(repo, "тревожность", None, None)
+    assert repo.calls[0] == ("search", "тревожность", None, 20)
+
+
+def test_align_tool_uses_the_configured_default_granularity_when_omitted(monkeypatch):
+    """Monkeypatch to a value outside `GRANULARITIES` — deliberately
+    invalid, so the resulting error is unambiguous proof the resolved
+    value (not the old "week" literal) reached the validation check."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings.stats, "default_granularity", "fortnight")
+    out = _align_tool([], [], None, "share", "share", 0)
+    assert "error" in out
+    assert "granularity" in out["error"]
+
+
+def test_align_tool_default_granularity_is_week_when_nothing_is_configured(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings.stats, "default_granularity", "week")
+    a = [{"period_start": f"2026-01-{d:02d}", "value": float(d)}
+         for d in (5, 12, 19, 26)]
+    out = _align_tool(a, a, None, "share", "share", 0)
+    assert "error" not in out
+    assert "low_overlap:4<8" in out["warnings"]
+
+
+def test_align_tool_uses_the_configured_default_max_lag_when_omitted(monkeypatch):
+    """Same probe technique: an invalid (negative) configured value makes
+    the resolved value observable via the existing `max_lag < 0` check."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings.stats, "default_max_lag", -1)
+    out = _align_tool([], [], "week", "share", "share", None)
+    assert out == {"error": "max_lag must be >= 0"}
+
+
+def test_align_tool_default_max_lag_is_4_when_nothing_is_configured(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings.stats, "default_max_lag", 4)
+    a = [{"period_start": f"2026-01-{d:02d}", "value": float(d)}
+         for d in (5, 12, 19, 26)]
+    out = _align_tool(a, a, "week", "share", "share", None)
+    assert "error" not in out

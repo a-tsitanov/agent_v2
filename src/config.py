@@ -18,6 +18,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.ingest_queue.priorities import PRIO_LIVE
+from src.stats.align import GRANULARITIES
 
 # Two physical model tiers operators actually manage:
 #   * ``small`` — local, high-volume (extraction, judge, search, plan, …)
@@ -1170,10 +1171,29 @@ class StatsSettings(BaseSettings):
         env_prefix="STATS_", env_file=".env", extra="ignore",
     )
 
-    default_granularity: str = "week"
-    default_max_lag: int = 4
-    search_limit: int = 20
-    min_overlap: int = 8
+    default_granularity: str = Field(
+        default="week",
+        description="day|week|month|quarter|year — must be one of GRANULARITIES.",
+    )
+    default_max_lag: int = Field(
+        default=4, ge=0, description="Default max lag (in periods) for stat_align. >= 0.",
+    )
+    search_limit: int = Field(
+        default=20, ge=1, description="Default indicator-search result limit. >= 1.",
+    )
+    min_overlap: int = Field(
+        default=8, ge=1,
+        description="Minimum overlapping periods required to align two series. >= 1.",
+    )
+
+    @field_validator("default_granularity")
+    @classmethod
+    def _default_granularity_is_known(cls, v: str) -> str:
+        if v not in GRANULARITIES:
+            raise ValueError(
+                f"default_granularity must be one of {sorted(GRANULARITIES)}, got {v!r}"
+            )
+        return v
 
 
 class Settings(BaseSettings):

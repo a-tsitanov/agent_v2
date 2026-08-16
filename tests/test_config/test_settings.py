@@ -228,3 +228,45 @@ def test_stats_settings_defaults():
     assert settings.stats.default_max_lag == 4
     assert settings.stats.search_limit == 20
     assert settings.stats.min_overlap == 8
+
+
+def test_stats_settings_env_override(monkeypatch):
+    """STATS_* env vars actually reach the settings object — the part of
+    the promise that was never broken; the wiring gap is between this and
+    ``stats_server.py``, covered separately in ``test_stats_server.py``."""
+    from src.config import StatsSettings
+
+    monkeypatch.setenv("STATS_SEARCH_LIMIT", "5")
+    monkeypatch.setenv("STATS_DEFAULT_MAX_LAG", "2")
+    monkeypatch.setenv("STATS_DEFAULT_GRANULARITY", "month")
+    fresh = StatsSettings()
+    assert fresh.search_limit == 5
+    assert fresh.default_max_lag == 2
+    assert fresh.default_granularity == "month"
+
+
+def test_stats_settings_rejects_bounds_its_own_docs_forbid():
+    """``scripts/make_env.py`` documents ``default_max_lag`` as ``>= 0``
+    and ``min_overlap`` / ``search_limit`` as ``>= 1`` — nothing enforced
+    that before now."""
+    import pytest
+    from pydantic import ValidationError
+
+    from src.config import StatsSettings
+
+    with pytest.raises(ValidationError):
+        StatsSettings(default_max_lag=-1)
+    with pytest.raises(ValidationError):
+        StatsSettings(min_overlap=0)
+    with pytest.raises(ValidationError):
+        StatsSettings(search_limit=0)
+
+
+def test_stats_settings_rejects_unknown_granularity():
+    import pytest
+    from pydantic import ValidationError
+
+    from src.config import StatsSettings
+
+    with pytest.raises(ValidationError):
+        StatsSettings(default_granularity="fortnight")
