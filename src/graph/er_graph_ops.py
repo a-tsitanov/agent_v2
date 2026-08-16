@@ -240,7 +240,118 @@ class NebulaERGraphOps:
         self._store.structured_query(f"DELETE VERTEX {_q(lv)} WITH EDGE;")
 
 
+_ER_VERDICT_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS er_verdict (
+    er_key   TEXT PRIMARY KEY,
+    same     BOOLEAN     NOT NULL,
+    updated  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+
+class PostgresERVerdictCache:
+    """The verdict cache, in the database built for unique-keyed lookups.
+
+    Historically these verdicts were vertices in the knowledge graph.
+    They are not knowledge — one row is one already-judged borderline
+    pair — and at 1 395 491 rows they were 89.5% of every vertex in the
+    Nebula space, which is what pushed full scans past its memory
+    ceiling.  Here the PRIMARY KEY *is* the lookup index, so the graph's
+    separate `er_verdict_key_idx` (maintained on every write, read by
+    nobody, because the Nebula path fetches by VID) has no counterpart.
+
+    Same contract as the graph implementations: synchronous, and the
+    caller (`entity_resolution._load_verdict_cache` / `_store_verdicts`)
+    swallows every error so ER degrades to pure LLM judging.
+    """
+
+    def __init__(self, dsn: str | None = None) -> None:
+        self._dsn = dsn
+
+    def _pool(self):
+        from src.storage.pg_sync_pool import get_pg_sync_pool
+
+        return get_pg_sync_pool()
+
+    def ensure_verdict_schema(self) -> None:
+        # NOT called on the ER runtime path — nothing there calls it, on
+        # any backend (Neo4j re-issues its constraint inside
+        # `store_verdicts`; Nebula's is a no-op because `nebula_schema`
+        # owns the tag).  `scripts/setup_db.py` owns this table the same
+        # way, and the migration script calls this explicitly.  If the
+        # table is missing at runtime the fail-safe takes over: the error
+        # is logged and ER judges with the LLM, as with any other storage
+        # failure.
+        with self._pool().connection() as conn, conn.cursor() as cur:
+            cur.execute(_ER_VERDICT_TABLE_DDL)
+
+    def load_verdicts(self, keys: list[str]) -> dict[str, bool]:
+        """Cached verdicts for `keys`, as `{key: same}`.
+
+        A key that is NOT in the cache is ABSENT from the result — never
+        present as `False`.  `False` means "these were judged DIFFERENT",
+        so returning it for a miss would silently suppress a real
+        judgement.
+        """
+        if not keys:
+            return {}
+        from psycopg.rows import dict_row
+
+        with self._pool().connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT er_key, same FROM er_verdict WHERE er_key = ANY(%s)",
+                (list(keys),),
+            )
+            rows = cur.fetchall()
+        return {r["er_key"]: bool(r["same"]) for r in rows}
+
+    def store_verdicts(self, entries: dict[str, bool]) -> None:
+        """Upsert freshly-judged verdicts.  Idempotent; a re-judged pair
+        overwrites, so the newest verdict wins."""
+        if not entries:
+            return
+        with self._pool().connection() as conn, conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO er_verdict (er_key, same) VALUES (%s, %s) "
+                "ON CONFLICT (er_key) DO UPDATE "
+                "SET same = EXCLUDED.same, updated = now()",
+                list(entries.items()),
+            )
+
+
+class _CompositeERGraphOps:
+    """Verdict cache in Postgres, graph merge on the graph.
+
+    `ERGraphOps` bundles two unrelated concerns: three cache methods and
+    one genuine graph operation.  Splitting the Protocol is the tidier
+    long-term shape, but it edits call sites for no behavioural gain, and
+    this change already touches production ingest — so the split stays a
+    composite here and `build_er_graph_ops`'s signature is unchanged.
+    """
+
+    def __init__(self, cache: Any, graph_ops: ERGraphOps) -> None:
+        self._cache = cache
+        self._graph = graph_ops
+
+    def ensure_verdict_schema(self) -> None:
+        self._cache.ensure_verdict_schema()
+
+    def load_verdicts(self, keys: list[str]) -> dict[str, bool]:
+        return self._cache.load_verdicts(keys)
+
+    def store_verdicts(self, entries: dict[str, bool]) -> None:
+        self._cache.store_verdicts(entries)
+
+    def merge_loser_into_canonical(self, *, loser: str, canon: str) -> None:
+        self._graph.merge_loser_into_canonical(loser=loser, canon=canon)
+
+
 def build_er_graph_ops(store: Any) -> ERGraphOps:
-    if settings.graph.backend == "nebula":
-        return NebulaERGraphOps(store)
-    return Neo4jERGraphOps(store)
+    graph_ops: ERGraphOps = (
+        NebulaERGraphOps(store)
+        if settings.graph.backend == "nebula"
+        else Neo4jERGraphOps(store)
+    )
+    if settings.agent.er_verdict_cache_backend == "postgres":
+        return _CompositeERGraphOps(PostgresERVerdictCache(), graph_ops)
+    return graph_ops

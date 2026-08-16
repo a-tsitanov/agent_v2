@@ -96,14 +96,38 @@ def test_neo4j_merge_loser_into_canonical_issues_apoc_merge_cypher():
 # --- Dispatch ----------------------------------------------------------
 
 
+# The graph backend still decides who performs the GRAPH half. What
+# changed is that the verdict cache no longer rides along with it: by
+# default `build_er_graph_ops` wraps the backend in a composite whose
+# cache half is Postgres. These assert the graph half is still dispatched
+# correctly THROUGH that wrapper — dropping to the concrete class would
+# stop testing the thing the caller actually gets.
+
+
+def _graph_half(ops):
+    return ops._graph if isinstance(ops, ego._CompositeERGraphOps) else ops
+
+
 def test_dispatch_returns_neo4j_when_backend_not_nebula(monkeypatch):
     monkeypatch.setattr(ego.settings.graph, "backend", "neo4j")
-    assert isinstance(ego.build_er_graph_ops(_RecStore()), ego.Neo4jERGraphOps)
+    ops = ego.build_er_graph_ops(_RecStore())
+    assert isinstance(_graph_half(ops), ego.Neo4jERGraphOps)
 
 
 def test_dispatch_returns_nebula_when_backend_nebula(monkeypatch):
     monkeypatch.setattr(ego.settings.graph, "backend", "nebula")
-    assert isinstance(ego.build_er_graph_ops(_RecStore()), ego.NebulaERGraphOps)
+    ops = ego.build_er_graph_ops(_RecStore())
+    assert isinstance(_graph_half(ops), ego.NebulaERGraphOps)
+
+
+def test_dispatch_sends_the_verdict_cache_to_postgres_by_default(monkeypatch):
+    monkeypatch.setattr(ego.settings.graph, "backend", "nebula")
+    monkeypatch.setattr(
+        ego.settings.agent, "er_verdict_cache_backend", "postgres", raising=False,
+    )
+    ops = ego.build_er_graph_ops(_RecStore())
+    assert isinstance(ops, ego._CompositeERGraphOps)
+    assert isinstance(ops._cache, ego.PostgresERVerdictCache)
 
 
 # --- Nebula: ensure_verdict_schema no-op; verdict cache + merge --------

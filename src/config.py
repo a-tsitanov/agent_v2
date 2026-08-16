@@ -647,6 +647,14 @@ class AgentSettings(BaseSettings):
     # docs skip the LLM.  OPTIONAL + FAIL-SAFE: any Neo4j error or a
     # missing store falls back to pure LLM judging.
     er_verdict_cache_enabled: bool = True
+    # WHERE those verdicts are stored.  `postgres` (default) keeps them in
+    # the `er_verdict` table; `graph` restores the historical behaviour of
+    # storing them as graph vertices.  They were moved out because at
+    # 1 395 491 rows they were 89.5% of every vertex in the Nebula space
+    # and pushed full scans past its memory ceiling — a unique-keyed KV
+    # cache is not knowledge and does not belong in the graph.  `graph` is
+    # the rollback, and needs no image rebuild.
+    er_verdict_cache_backend: Literal["postgres", "graph"] = "postgres"
     # Native Neo4j vector-index kNN for ER instead of the bounded
     # 5000-entity window.  Removes the window ceiling (at 200k canonicals
     # the window reaches only ~2% of true nearest matches; native kNN
