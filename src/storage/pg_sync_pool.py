@@ -17,6 +17,13 @@ pool costs nothing and settles the question.
 
 ``min_size=0`` means importing this module, or building the pool, opens
 no connection: offline-safe, same as the async pool.
+
+Connection budget, checked 2026-08-16 rather than assumed: the worker
+launcher forks 7 pool processes, and ``pool_max_size`` is 4, so this pool
+adds at most 28 connections on top of the async pool's 28 — against
+``max_connections = 300`` with 34 in use.  In practice far fewer: only
+the ER path touches this pool, that path lives in one pool group, and
+``min_size=0`` means the rest never open a connection at all.
 """
 
 from __future__ import annotations
