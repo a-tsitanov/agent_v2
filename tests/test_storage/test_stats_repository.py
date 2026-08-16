@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import pytest
+from psycopg.rows import dict_row
 
 from src.storage.stats import (
     StatsRepository,
@@ -25,6 +26,7 @@ from src.storage.stats import (
 @dataclass
 class _StubCursor:
     rows: list[dict]
+    row_factory: object = None
     executed: list[tuple] = field(default_factory=list)
 
     async def execute(self, sql, params=None):
@@ -33,11 +35,21 @@ class _StubCursor:
     async def executemany(self, sql, params_seq):
         self.executed.append((sql, list(params_seq)))
 
+    def _shaped(self, row):
+        # Honour `row_factory` like the real pool does: dict rows only
+        # when `dict_row` was actually asked for, tuples otherwise — a
+        # cursor opened without it on live psycopg3 gets plain tuples,
+        # so a read that forgets `row_factory=dict_row` must not
+        # silently keep working here either.
+        if self.row_factory is dict_row:
+            return row
+        return tuple(row.values()) if isinstance(row, dict) else row
+
     async def fetchall(self):
-        return self.rows
+        return [self._shaped(r) for r in self.rows]
 
     async def fetchone(self):
-        return self.rows[0] if self.rows else None
+        return self._shaped(self.rows[0]) if self.rows else None
 
     async def __aenter__(self):
         return self
@@ -52,6 +64,7 @@ class _StubConn:
     committed: int = 0
 
     def cursor(self, *a, **kw):
+        self.cur.row_factory = kw.get("row_factory")
         return self.cur
 
     async def commit(self):
@@ -68,6 +81,30 @@ def _repo_with(rows: list[dict]) -> tuple[StatsRepository, _StubConn]:
 
     repo._conn = _conn  # type: ignore[method-assign]
     return repo, conn
+
+
+async def test_forgetting_dict_row_must_not_silently_work():
+    """Pins the stub's honesty.  On live psycopg3 the pool sets no row
+    factory by default, so a cursor opened without `row_factory=dict_row`
+    gets plain tuples back and `row["score"]` raises `TypeError`.  Before
+    this fix `_StubConn.cursor()` swallowed kwargs and always handed back
+    dict rows regardless of what was asked for, so deleting
+    `row_factory=dict_row` from a real read in `src/storage/stats.py`
+    broke nothing here — it would only blow up in production.
+    """
+    conn = _StubConn(cur=_StubCursor(rows=[{"id": 1, "score": 0.5}]))
+
+    async with conn.cursor() as cur:  # no row_factory — the bug this pins
+        await cur.execute("SELECT id, score FROM stat_indicator")
+        rows = await cur.fetchall()
+    assert rows == [(1, 0.5)]
+    with pytest.raises(TypeError):
+        _ = rows[0]["score"]
+
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute("SELECT id, score FROM stat_indicator")
+        rows = await cur.fetchall()
+    assert rows == [{"id": 1, "score": 0.5}]
 
 
 # ── query builders ───────────────────────────────────────────────────
