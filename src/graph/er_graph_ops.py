@@ -274,8 +274,14 @@ class PostgresERVerdictCache:
         return get_pg_sync_pool()
 
     def ensure_verdict_schema(self) -> None:
-        # `scripts/setup_db.py` owns the schema, but a worker meeting a
-        # fresh database must not be blocked on it having been run.
+        # NOT called on the ER runtime path — nothing there calls it, on
+        # any backend (Neo4j re-issues its constraint inside
+        # `store_verdicts`; Nebula's is a no-op because `nebula_schema`
+        # owns the tag).  `scripts/setup_db.py` owns this table the same
+        # way, and the migration script calls this explicitly.  If the
+        # table is missing at runtime the fail-safe takes over: the error
+        # is logged and ER judges with the LLM, as with any other storage
+        # failure.
         with self._pool().connection() as conn, conn.cursor() as cur:
             cur.execute(_ER_VERDICT_TABLE_DDL)
 
