@@ -47,7 +47,28 @@ services:
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-change-me}
       LITELLM_MODEL_SMALL: ${LITELLM_MODEL_SMALL:-gemma4:12b}
       LITELLM_MODEL_LARGE: ${LITELLM_MODEL_LARGE:-gemma4:12b}
+      # Users, quotas and the request log live in Postgres — the bot needs
+      # its own connection, not just the API's.
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-kb_llamaindex}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      # Who may approve anybody. WITHOUT AT LEAST ONE the bot is unusable:
+      # it fails closed, so every new user stays pending forever and there
+      # is nobody who can change that.
+      BOT_ADMIN_IDS: ${BOT_ADMIN_IDS:-}
+      # A /ask search takes ~90s and is felt by everything else on this
+      # host. Over the cap the user is refused, not queued.
+      BOT_MAX_CONCURRENT: ${BOT_MAX_CONCURRENT:-2}
+      BOT_DEFAULT_DAILY_QUOTA: ${BOT_DEFAULT_DAILY_QUOTA:-20}
     depends_on:
       - api
+      - postgres
     stop_signal: SIGINT
     restart: unless-stopped
+    # Every service in docker-compose.prod.yml carries a cap on this
+    # memory-constrained host; the bot is an idle long-poller plus one
+    # httpx client, so it needs very little.
+    mem_limit: 384m
+    memswap_limit: 384m

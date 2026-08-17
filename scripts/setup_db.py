@@ -199,6 +199,61 @@ CREATE TABLE IF NOT EXISTS stat_observation (
 # lookup index, and no secondary index is wanted (`er_key = ANY(...)` is
 # the only access pattern, and nothing queries by age — see the plan's note
 # on why pruning by `updated` would evict exactly the useful entries).
+# Telegram bot: who may use it, and what everyone asked.
+#
+# `bot_user.status` is the admission boundary and the ONLY one — every
+# approved client sees the same corpus the operator does (the service has
+# no data-level access control: `SearchRequest.department` / `user_id` are
+# RESERVED and the group filters carry an explicit "NOT an access-control
+# boundary" warning).  So this table decides who gets in, nothing more.
+_BOT_USER_DDL = """
+CREATE TABLE IF NOT EXISTS bot_user (
+    telegram_id  BIGINT PRIMARY KEY,
+    username     TEXT        NOT NULL DEFAULT '',
+    status       TEXT        NOT NULL DEFAULT 'pending',
+    role         TEXT        NOT NULL DEFAULT 'client',
+    daily_quota  INTEGER     NOT NULL DEFAULT 20,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    approved_at  TIMESTAMPTZ,
+    approved_by  BIGINT,
+    CONSTRAINT bot_user_status_check
+        CHECK (status IN ('pending', 'active', 'blocked')),
+    CONSTRAINT bot_user_role_check
+        CHECK (role IN ('client', 'admin'))
+);
+"""
+
+# One row per request, written BEFORE the work starts and completed after —
+# including refusals (quota, busy, denied).  An audit that records only
+# successes is not an audit.
+#
+# Deliberately NO foreign key to `bot_user`: the record of what someone
+# asked must outlive the account being deleted.
+_BOT_REQUEST_DDL = """
+CREATE TABLE IF NOT EXISTS bot_request (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    telegram_id  BIGINT      NOT NULL,
+    chat_id      BIGINT      NOT NULL,
+    command      TEXT        NOT NULL,
+    args         TEXT        NOT NULL DEFAULT '',
+    status       TEXT        NOT NULL DEFAULT 'running',
+    started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at  TIMESTAMPTZ,
+    answer       TEXT        NOT NULL DEFAULT '',
+    sources      JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    error        TEXT        NOT NULL DEFAULT '',
+    CONSTRAINT bot_request_status_check
+        CHECK (status IN ('running', 'done', 'failed', 'denied'))
+);
+"""
+
+# Serves both `/history` (newest-first per user) and the daily quota count.
+# No other index is wanted: every read of this table is scoped to one user.
+_BOT_INDEXES_DDL = """
+CREATE INDEX IF NOT EXISTS bot_request_user_time_idx
+    ON bot_request (telegram_id, started_at DESC);
+"""
+
 _ER_VERDICT_DDL = """
 CREATE TABLE IF NOT EXISTS er_verdict (
     er_key   TEXT PRIMARY KEY,
@@ -345,6 +400,9 @@ def setup_postgres() -> None:
         cur.execute(_STAT_OBSERVATION_DDL)
         cur.execute(_STAT_INDEXES_DDL)
         cur.execute(_ER_VERDICT_DDL)
+        cur.execute(_BOT_USER_DDL)
+        cur.execute(_BOT_REQUEST_DDL)
+        cur.execute(_BOT_INDEXES_DDL)
     logger.info("postgres setup  done")
 
 

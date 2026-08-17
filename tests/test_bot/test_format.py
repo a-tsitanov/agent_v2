@@ -1,0 +1,167 @@
+"""Reply rendering.
+
+Telegram rejects both an empty message and one over 4096 characters, so
+every formatter owes a non-empty, bounded string for any input.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from src.bot.format import (
+    TG_LIMIT,
+    format_answer,
+    format_channels,
+    format_fragments,
+    format_history,
+    format_timeline,
+    format_users,
+    split_for_telegram,
+)
+
+ALL = (
+    lambda: format_channels([]),
+    lambda: format_timeline([]),
+    lambda: format_history([]),
+    lambda: format_answer("", []),
+    lambda: format_fragments([]),
+    lambda: format_users([]),
+)
+
+
+def test_every_formatter_says_something_for_empty_input():
+    """An empty string is not a sendable Telegram message."""
+    for make in ALL:
+        assert make().strip()
+
+
+# ── channels ─────────────────────────────────────────────────────────
+
+
+def test_channels_are_ordered_by_volume():
+    out = format_channels([
+        {"key": "small", "total": 5, "completed": 5},
+        {"key": "big", "total": 900, "completed": 800},
+    ])
+    assert out.index("big") < out.index("small")
+
+
+def test_channels_say_how_many_were_hidden():
+    """A silently truncated list reads as the whole list."""
+    rows = [{"key": f"c{i}", "total": 100 - i, "completed": 1} for i in range(40)]
+    out = format_channels(rows)
+    assert "ещё 25" in out
+    assert len(out) < TG_LIMIT
+
+
+def test_channels_report_the_total_over_all_of_them_not_the_shown_ones():
+    rows = [{"key": f"c{i}", "total": 10, "completed": 10} for i in range(40)]
+    assert "400" in format_channels(rows)
+
+
+# ── timeline ─────────────────────────────────────────────────────────
+
+
+def test_timeline_keeps_the_most_recent_days_and_stays_within_the_cap():
+    buckets = [{"day": f"2026-{m:02d}-{d:02d}", "count": d} for m in range(1, 13)
+               for d in range(1, 29)]
+    out = format_timeline(buckets)
+    assert len(out) < TG_LIMIT
+    assert "2026-12-28" in out          # newest kept
+    assert "2026-01-01" not in out      # oldest dropped
+    assert f"из {len(buckets)}" in out  # and it says so
+
+
+def test_timeline_names_the_channel_when_filtered():
+    out = format_timeline([{"day": "2026-08-01", "count": 3}], channel="tass")
+    assert "tass" in out
+
+
+# ── history ──────────────────────────────────────────────────────────
+
+
+def test_history_shows_id_command_status_and_the_question():
+    rows = [{
+        "id": 7, "command": "/ask", "status": "done",
+        "started_at": datetime(2026, 8, 17, 5, 30, tzinfo=UTC),
+        "args": "что писали про урожай",
+    }]
+    out = format_history(rows)
+    assert "#7" in out and "/ask" in out and "done" in out
+    assert "урожай" in out
+    assert "/repeat" in out
+
+
+def test_history_trims_a_long_question():
+    rows = [{"id": 1, "command": "/ask", "status": "done",
+             "started_at": None, "args": "х" * 500}]
+    assert len(format_history(rows)) < 400
+
+
+# ── answer ───────────────────────────────────────────────────────────
+
+
+def test_answer_appends_sources():
+    out = format_answer("ответ", [{"metadata": {"file_name": "tass_1.txt"}}])
+    assert "ответ" in out
+    assert "tass_1.txt" in out
+    assert "Источники (1)" in out
+
+
+def test_answer_without_sources_has_no_empty_section():
+    out = format_answer("ответ", [])
+    assert out == "ответ"
+    assert "Источники" not in out
+
+
+def test_answer_distinguishes_no_synthesis_from_no_hits():
+    """An empty synthesis WITH sources is a different failure from
+    finding nothing, and the user should be able to tell."""
+    assert format_answer("", []) != format_answer("", [{"chunk_id": "c1"}])
+
+
+def test_answer_deduplicates_source_names_and_counts_the_rest():
+    sources = [{"metadata": {"file_name": "a.txt"}} for _ in range(9)]
+    out = format_answer("ответ", sources)
+    assert out.count("a.txt") == 1
+    assert "Источники (9)" in out
+
+
+# ── fragments ────────────────────────────────────────────────────────
+
+
+def test_fragments_stay_within_the_cap_and_say_how_many_are_shown():
+    sources = [{"text": "ю" * 400} for _ in range(60)]
+    out = format_fragments(sources)
+    assert len(out) < TG_LIMIT
+    assert "показаны первые" in out
+
+
+def test_fragments_report_the_full_count():
+    assert "3" in format_fragments([{"text": "a"}, {"text": "b"}, {"text": "c"}])
+
+
+# ── users ────────────────────────────────────────────────────────────
+
+
+def test_users_list_shows_status_and_the_admin_commands():
+    out = format_users([
+        {"telegram_id": 1, "status": "pending", "role": "client", "username": "vasya"},
+    ])
+    assert "pending" in out and "vasya" in out
+    assert "/approve" in out and "/deny" in out
+
+
+# ── splitting ────────────────────────────────────────────────────────
+
+
+def test_split_never_yields_an_empty_message():
+    assert split_for_telegram("") == ["(пустой ответ)"]
+    assert split_for_telegram(None) == ["(пустой ответ)"]
+
+
+def test_split_chunks_stay_under_the_limit():
+    chunks = split_for_telegram("я" * 9500)
+    assert len(chunks) == 3
+    assert all(len(c) <= TG_LIMIT for c in chunks)
+    assert "".join(chunks) == "я" * 9500

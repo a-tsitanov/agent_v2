@@ -38,6 +38,45 @@ def make_search(
     return search
 
 
+def make_search_full(
+    *, api_base: str, api_key: str, mode: str = "auto",
+    timeout_s: float = 180.0, synthesize: bool = True,
+) -> Callable[[str], Awaitable[dict]]:
+    """Like ``make_search`` but returns the WHOLE payload, not just the text.
+
+    ``make_search`` keeps only ``answer``; the bot's request log has to
+    store the sources behind an answer, so `/history` can show an old
+    answer with its provenance without re-running anything.
+
+    ``synthesize=False`` is what `/find` is: the same retrieval, no
+    synthesis LLM, seconds instead of a minute and a half. It is a real
+    field on ``SearchRequest`` and is threaded through to the
+    orchestrator.
+
+    Raises on a non-2xx / transport error, like ``make_search``, so the
+    caller's fail-soft path can record it against the request row.
+    """
+    if mode not in _VALID_MODES:
+        raise ValueError(f"unknown search mode {mode!r}, expected one of {sorted(_VALID_MODES)}")
+    url = f"{api_base.rstrip('/')}/api/v1/search/{mode}"
+
+    async def search(query: str) -> dict:
+        async with httpx.AsyncClient(timeout=timeout_s) as http:
+            resp = await http.post(
+                url,
+                headers={"X-API-Key": api_key},
+                json={"query": query, "synthesize": synthesize},
+            )
+            resp.raise_for_status()
+            body = resp.json() or {}
+        return {
+            "answer": body.get("answer") or "",
+            "sources": body.get("sources") or [],
+        }
+
+    return search
+
+
 def make_analyze(
     *, api_base: str, api_key: str, timeout_s: float = 180.0,
 ) -> SearchFn:
