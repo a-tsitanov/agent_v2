@@ -1187,7 +1187,11 @@ class BotSettings(BaseSettings):
         default="", description="X-API-Key for the search API. Empty → falls back to API_KEYS[0].",
     )
     search_mode: str = Field(
-        default="auto", description="Primary search mode: auto | local | global | drift.",
+        default="local",
+        description="Primary search mode: auto | local | global | drift. `local` is "
+        "the default because `auto` was measured routing to `global`, which answered "
+        "'Empty Response' with 0 sources where `local` returned 10 sources and a real "
+        "answer for the same question (2026-08-17).",
     )
     fallback_mode: str = Field(
         default="drift",

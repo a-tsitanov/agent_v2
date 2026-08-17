@@ -165,3 +165,65 @@ def test_split_chunks_stay_under_the_limit():
     assert len(chunks) == 3
     assert all(len(c) <= TG_LIMIT for c in chunks)
     assert "".join(chunks) == "я" * 9500
+
+
+# ── the shape the API actually returns ───────────────────────────────
+#
+# Checked live on 2026-08-17, after the first deploy rendered "1. 2. 3."
+# — ten fragments with no text in them. The search API's source is FLAT
+# and its text field is `content`:
+#
+#   {chunk_id, content, doc_id, position, score, department, doc_type}
+#
+# There is no `metadata` dict. MCP's vector_search uses `text` instead,
+# so both are accepted.
+
+API_SOURCE = {
+    "chunk_id": "17f59b5f-c60a-494a-916d-34b481037598",
+    "doc_id": "ff48aba5-572c-4717-99f4-534fe61f2c55",
+    "content": "Зерно российских аграриев оказалось никому не нужно",
+    "position": 0,
+    "score": 0.64,
+    "department": "",
+    "doc_type": "",
+}
+
+
+def test_fragments_render_the_api_content_field():
+    out = format_fragments([API_SOURCE])
+    assert "Зерно российских аграриев" in out
+
+
+def test_fragments_still_render_the_mcp_text_field():
+    assert "фрагмент" in format_fragments([{"text": "фрагмент"}])
+
+
+def test_answer_labels_an_api_source_by_its_document():
+    out = format_answer("ответ", [API_SOURCE])
+    assert "ff48aba5" in out
+
+
+def test_answer_falls_back_to_chunk_id_when_there_is_no_doc():
+    out = format_answer("ответ", [{"chunk_id": "c-1"}])
+    assert "c-1" in out
+
+
+# ── the empty-synthesis marker ───────────────────────────────────────
+
+
+def test_empty_response_marker_is_never_shown_to_the_user():
+    """LlamaIndex returns the literal `Empty Response` when synthesis has
+    no nodes. The first deploy relayed it verbatim as the answer AND
+    recorded the request as done."""
+    out = format_answer("Empty Response", [])
+    assert "Empty Response" not in out
+    assert "ничего не нашлось" in out
+
+
+def test_empty_synthesis_with_sources_says_so_and_keeps_them():
+    """Different failure from finding nothing: there ARE sources, the
+    synthesis just produced no prose."""
+    out = format_answer("Empty Response", [API_SOURCE])
+    assert "Empty Response" not in out
+    assert "не сформирован" in out
+    assert "ff48aba5" in out

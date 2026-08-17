@@ -9,7 +9,23 @@
 # context, which is fine (24h-ish window anyway).
 #
 # ── Required env ─────────────────────────────────────────────────────────
-#   BOT_TOKEN            — Telegram bot token from @BotFather
+#   KB_BOT_TOKEN         — Telegram bot token from @BotFather, for THIS bot.
+#
+#     It MUST be a different bot from the one openclaw serves. Telegram
+#     hands each update to exactly one `getUpdates` caller, so two
+#     processes on one token silently steal each other's messages — no
+#     error, just messages that go to the wrong place at random.
+#
+#     This is not hypothetical: on 2026-08-17 both ran on the same token
+#     for twenty minutes, because `docker-compose.openclaw.yml` resolves
+#     OPENCLAW_TELEGRAM_TOKEN to ${BOT_TOKEN} and this file used to read
+#     ${BOT_TOKEN} too. Checking `data/openclaw/openclaw.json` does NOT
+#     tell you which token openclaw uses — that file's value is stale;
+#     the container's environment is what counts.
+#
+#     Falls back to BOT_TOKEN only so an existing single-bot setup keeps
+#     working; set KB_BOT_TOKEN whenever openclaw's Telegram channel is
+#     also enabled.
 # ── Strongly recommended ─────────────────────────────────────────────────
 #   BOT_ALLOWED_USERS    — comma-separated Telegram user ids allowed to use it.
 #                          EMPTY = the bot denies EVERYONE (fail closed).
@@ -33,7 +49,8 @@ services:
       - src.bot
     environment:
       # Bot identity + access
-      BOT_TOKEN: ${BOT_TOKEN:?set BOT_TOKEN from @BotFather}
+      # Own variable, NOT ${BOT_TOKEN} — openclaw falls back to that one.
+      BOT_TOKEN: ${KB_BOT_TOKEN:-${BOT_TOKEN:?set KB_BOT_TOKEN from @BotFather}}
       BOT_ALLOWED_USERS: ${BOT_ALLOWED_USERS:-}
       BOT_API_BASE: ${BOT_API_BASE:-http://api:8000}
       BOT_SEARCH_MODE: ${BOT_SEARCH_MODE:-auto}

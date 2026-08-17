@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from src.bot.answers import NO_RESULT_MESSAGE, is_empty_answer
+
 # The hard cap is 4096; leave headroom for the chunking suffix and for
 # any markup the caller adds.
 TG_LIMIT = 4000
@@ -90,25 +92,55 @@ def format_history(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def source_text(source: dict[str, Any]) -> str:
+    """The chunk's text.
+
+    The search API calls the field ``content``; MCP's `vector_search`
+    calls it ``text``. Both are accepted because the bot reads the API
+    while the tests and neighbouring tools speak the other shape, and
+    guessing wrong renders a list of empty fragments — which is exactly
+    what shipped before this was checked against the live API.
+    """
+    return str(source.get("content") or source.get("text") or "")
+
+
+def source_name(source: dict[str, Any]) -> str:
+    """A human-ish label for provenance.
+
+    The API returns a FLAT source — ``{chunk_id, content, doc_id,
+    position, score, …}`` — with no ``metadata`` dict, so reach for the
+    nested keys only as a fallback for other shapes.
+    """
+    meta = source.get("metadata") or {}
+    return str(
+        meta.get("file_name")
+        or source.get("doc_id")
+        or meta.get("doc_id")
+        or source.get("chunk_id")
+        or "?",
+    )
+
+
 def format_answer(answer: str, sources: list[dict[str, Any]] | None) -> str:
     """The answer plus a compact provenance list."""
     answer = (answer or "").strip()
     sources = sources or []
-    if not answer:
-        # Distinct from "found nothing": an empty synthesis with sources
-        # is a different failure from no hits at all.
+    if is_empty_answer(answer):
+        # `Empty Response` is LlamaIndex's marker for "no synthesis", not
+        # something to show a user. Distinguish it from "found nothing":
+        # an empty synthesis WITH sources is a different failure from no
+        # hits at all, and the user can act on the difference.
         answer = (
-            "Ответ не сформирован." if not sources
-            else "Ответ не сформирован, но найдены источники."
+            NO_RESULT_MESSAGE if not sources
+            else "Ответ не сформирован, но найдены источники — посмотрите их ниже."
         )
     if not sources:
         return answer
     names: list[str] = []
     for s in sources[:_SOURCES_SHOWN]:
-        meta = s.get("metadata") or {}
-        name = meta.get("file_name") or meta.get("doc_id") or s.get("chunk_id") or "?"
+        name = source_name(s)
         if name not in names:
-            names.append(str(name))
+            names.append(name)
     tail = ["", f"Источники ({len(sources)}):"]
     tail += [f"· {_clip(n, 80)}" for n in names]
     if len(sources) > len(names):
@@ -123,7 +155,7 @@ def format_fragments(sources: list[dict[str, Any]]) -> str:
     lines = [f"Найдено фрагментов: {len(sources)}", ""]
     budget = TG_LIMIT - len(lines[0]) - 100
     for i, s in enumerate(sources, 1):
-        piece = f"{i}. {_clip(s.get('text') or '', 400)}"
+        piece = f"{i}. {_clip(source_text(s), 400)}"
         if budget - len(piece) < 0:
             lines.append(f"…показаны первые {i - 1}")
             break
@@ -153,5 +185,7 @@ __all__ = [
     "format_history",
     "format_timeline",
     "format_users",
+    "source_name",
+    "source_text",
     "split_for_telegram",
 ]
