@@ -134,7 +134,7 @@ async def _run_search(
                 await ctx.repo.finish_request(
                     request_id, status="failed", error=str(exc)[:500],
                 )
-            except Exception:  # noqa: BLE001 - the reply matters more
+            except Exception:
                 logger.warning("bot: cannot finish request {r}", r=request_id)
         return SEARCH_ERROR
     finally:

@@ -12,9 +12,9 @@ from typing import Any
 import pytest
 
 from src.bot.commands import (
+    NO_SUCH_REQUEST,
     NOT_ADMIN,
     NOT_YOUR_REQUEST,
-    NO_SUCH_REQUEST,
     SEARCH_ERROR,
     Ctx,
     handle_approve,
