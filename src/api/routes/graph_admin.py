@@ -41,6 +41,18 @@ async def graph_stats() -> dict:
     return await analysis.graph_stats(_store())
 
 
+@router.post("/refresh-stats", dependencies=[Depends(require_api_key)])
+async def graph_refresh_stats() -> dict:
+    """Recompute Nebula's tag/edge counts (`SUBMIT JOB STATS`).
+
+    `/admin/graph/stats` serves those counts rather than scanning — the
+    scans cannot run on this space — so they are only as fresh as the
+    last job. This is the refresh, wired into `scripts/graph_refresh.sh`.
+    Takes about a second and does not spike memory: the work happens in
+    storaged, not as a graphd query."""
+    return await analysis.refresh_nebula_stats(_store())
+
+
 @router.post("/pagerank", dependencies=[Depends(require_api_key)])
 async def graph_pagerank(top_n: int = 20) -> dict:
     """Top-N most central entities by weighted PageRank."""

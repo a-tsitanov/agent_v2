@@ -171,6 +171,36 @@ def _nebula_stats_computed_at(store: Any) -> str | None:
     return max(iso) if iso else None
 
 
+async def refresh_nebula_stats(store: Any | None) -> dict:
+    """Recompute Nebula's own tag/edge counts (`SUBMIT JOB STATS`).
+
+    `graph_stats` reads those counts instead of scanning, so without a
+    periodic refresh it reports numbers frozen at whenever a job last ran
+    — and nothing in this repo ran one until 2026-08-16, which is why
+    `SHOW STATS` answered "please execute `submit job stats' firstly" on
+    a space three weeks old. Cheap: measured at ~1 s on 1.5M vertices,
+    with no memory spike, because it runs in storaged rather than as a
+    graphd query.
+
+    No-op on other backends. Fail-soft: returns the error rather than
+    raising, like the rest of this module.
+    """
+    if store is None or settings.graph.backend != "nebula":
+        return {"submitted": False, "reason": "not a nebula store"}
+    try:
+        # Straight to `structured_query`, like every other nebula call in
+        # this module — `_run_query` is the neo4j-shaped helper and passes
+        # `param_map={}`, which the nebula path does not use.
+        rows = await asyncio.to_thread(store.structured_query, "SUBMIT JOB STATS")
+    except Exception as exc:
+        logger.warning("refresh_nebula_stats failed: {e}", e=exc)
+        return {"submitted": False, "error": str(exc)[:200]}
+    job_id = None
+    if rows and isinstance(rows[0], dict):
+        job_id = rows[0].get("New Job Id")
+    return {"submitted": True, "job_id": job_id}
+
+
 def _nebula_show_stats(store: Any) -> dict[str, int] | None:
     """Exact counts from Nebula's own `SUBMIT JOB STATS` results.
 

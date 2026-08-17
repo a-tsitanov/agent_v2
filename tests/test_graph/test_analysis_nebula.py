@@ -222,3 +222,48 @@ def test_personalized_pagerank_biases_toward_seed_component():
 def test_personalized_pagerank_empty_seeds():
     assert analysis._personalized_pagerank_from_edges(
         [("A", "B", 1.0)], ["A", "B"], [], 5) == []
+
+
+# ── keeping SHOW STATS fresh ─────────────────────────────────────────
+#
+# graph_stats serves Nebula's job results rather than scanning, so those
+# numbers are only as fresh as the last job — and nothing in this repo
+# ran one until 2026-08-16, which is why SHOW STATS had never had
+# anything to serve on a three-week-old space.
+
+
+@pytest.mark.asyncio
+async def test_refresh_stats_submits_the_job(monkeypatch):
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
+    store = _FakeNebulaStore([("SUBMIT JOB STATS", [{"New Job Id": 7}])])
+    out = await analysis.refresh_nebula_stats(store)
+    assert out == {"submitted": True, "job_id": 7}
+    assert any("SUBMIT JOB STATS" in c for c in store.calls)
+
+
+@pytest.mark.asyncio
+async def test_refresh_stats_is_a_noop_off_nebula(monkeypatch):
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "neo4j", raising=False)
+    store = _FakeNebulaStore([])
+    out = await analysis.refresh_nebula_stats(store)
+    assert out["submitted"] is False
+    assert store.calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_stats_fails_soft(monkeypatch):
+    """A maintenance trigger must not 500 the admin route."""
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
+
+    class _Boom:
+        def structured_query(self, *a, **k):
+            raise RuntimeError("nebula down")
+
+    out = await analysis.refresh_nebula_stats(_Boom())
+    assert out["submitted"] is False
+    assert "nebula down" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_stats_none_store():
+    assert (await analysis.refresh_nebula_stats(None))["submitted"] is False
