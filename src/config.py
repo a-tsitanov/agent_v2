@@ -325,7 +325,23 @@ class LiteLLMSettings(BaseSettings):
 class TemporalSettings(BaseSettings):
     """Temporal worker / client connection settings."""
 
-    model_config = SettingsConfigDict(env_prefix="TEMPORAL_", extra="ignore")
+    # `env_file=".env"` like every sibling block here.  Without it this
+    # class read only the real process environment — and whether a given
+    # `.env` key was IN that environment depended on import order:
+    # `pymilvus/settings.py` calls `dotenv.load_dotenv()` at import time,
+    # so the whole file lands in `os.environ` the moment anything touches
+    # pymilvus.  Since `settings.temporal` is a `cached_property` on a
+    # process singleton, whichever code path ran first froze the value for
+    # the process.  Reproduced: `community_backend` is "gds" before
+    # importing `src.workflow.worker` and "leidenalg" after.
+    #
+    # In tests that meant a red or green result could depend on collection
+    # order rather than on the code.  In production it changes nothing:
+    # compose passes TEMPORAL_* as real environment variables, and those
+    # still take precedence over the file.
+    model_config = SettingsConfigDict(
+        env_prefix="TEMPORAL_", env_file=".env", extra="ignore",
+    )
 
     host: str = "localhost"
     port: int = 7233
