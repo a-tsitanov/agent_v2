@@ -1159,8 +1159,25 @@ class BotSettings(BaseSettings):
     token: str = Field(default="", description="Telegram bot token from @BotFather (BOT_TOKEN).")
     allowed_users: str = Field(
         default="",
-        description="Comma-separated Telegram user ids allowed to use the bot. "
-        "EMPTY = deny everyone (fail closed).",
+        description="SUPERSEDED by the `bot_user` table — kept for the pre-database "
+        "path only. Access is granted with /approve, not here.",
+    )
+    admin_ids: str = Field(
+        default="",
+        description="Comma-separated Telegram user ids seeded as active admins on "
+        "startup. Without at least one there is NOBODY who can approve anybody, and "
+        "the bot is unusable by design (it fails closed).",
+    )
+    max_concurrent: int = Field(
+        default=2, ge=0,
+        description="Simultaneous /ask searches allowed. A search takes ~90s and is "
+        "felt by the rest of the host; over the cap the user is refused, not queued. "
+        "0 = unlimited.",
+    )
+    default_daily_quota: int = Field(
+        default=20, ge=0,
+        description="Requests per user per day for newly created users. Counted over "
+        "every attempt, refusals included. 0 = unlimited.",
     )
     api_base: str = Field(
         default="http://api:8000",
