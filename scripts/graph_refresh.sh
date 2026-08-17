@@ -23,8 +23,8 @@ set -uo pipefail
 
 TARGET="${1:-all}"
 case "$TARGET" in
-  communities|analytics|all) ;;
-  *) echo "usage: $0 [communities|analytics|all]" >&2; exit 2 ;;
+  communities|analytics|stats|all) ;;
+  *) echo "usage: $0 [communities|analytics|stats|all]" >&2; exit 2 ;;
 esac
 
 LOG=/home/user/projects/agent_v2/logs/graph_refresh.log
@@ -69,9 +69,14 @@ fi
 # scanning — the counting scans are refused for memory on this space — so
 # without a refresh it reports numbers frozen at the last job. Nothing ran
 # one until 2026-08-16, and `SHOW STATS` had never had anything to serve.
-# ~1s, in storaged, no memory spike: no overlap guard needed, and it runs
-# on every invocation rather than only under a TARGET.
-if [ -n "$KEY" ]; then
+# ~1s, in storaged, no memory spike, so no overlap guard.
+#
+# It runs under EVERY target, and `stats` exists so it can be run ALONE.
+# Without that target the only way to exercise this was to also fire a
+# 40-minute betweenness pass — which is exactly what happened the first
+# time it was tested, on a host with 2.4 GB free.
+if [ "$TARGET" = stats ] || [ "$TARGET" = communities ] || \
+   [ "$TARGET" = analytics ] || [ "$TARGET" = all ]; then
   # NOTE: graph_admin is mounted WITHOUT the /api/v1 prefix (see
   # src/api/main.py) — same as the materialize URL above, unlike the
   # communities one.
