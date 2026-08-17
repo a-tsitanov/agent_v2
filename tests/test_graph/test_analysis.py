@@ -167,7 +167,10 @@ async def test_none_store_is_failsafe():
     assert await pagerank(None) == []
     assert (await components(None))["component_count"] == 0
     assert (await shortest_path(None, "A", "B"))["hops"] == -1
-    assert (await graph_stats(None))["entities"] == 0
+    # No store is not a measurement of zero entities.
+    out = await graph_stats(None)
+    assert out["entities"] is None
+    assert out["errors"]["store"]
 
 
 @pytest.mark.asyncio

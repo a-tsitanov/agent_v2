@@ -385,8 +385,14 @@ async def graph_stats() -> dict[str, Any]:
     counts, degree distribution (p50/p99/max), duplicate-name groups,
     community count.
 
-    USE FOR: a quick health/size read of the graph. Returns a stats dict
-    (zeros if Neo4j is unavailable)."""
+    USE FOR: a quick health/size read of the graph.
+
+    A field that could not be measured is `null`, NEVER 0, and the reason
+    is under `errors` — do not read a null as "the graph has none of
+    these". `source` says where the counts came from: `show_stats` means
+    Nebula's own job results, exact but as old as `stats_computed_at`;
+    `scan` means counted live. Degree and duplicate counts have no cheap
+    equivalent and are `null` whenever the graph is too large to scan."""
     from src.graph import analysis
     return await analysis.graph_stats(await _gs())
 

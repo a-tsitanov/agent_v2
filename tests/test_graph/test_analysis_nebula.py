@@ -69,10 +69,108 @@ async def test_graph_stats_nebula_counts_degree_dup(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_graph_stats_nebula_empty_graph(monkeypatch):
+async def test_graph_stats_nebula_no_rows_is_not_zero(monkeypatch):
+    """A count aggregate ALWAYS yields a row — verified on the live store,
+    `MATCH (a:Alert) RETURN count(a)` returns [{'n': 0}] on an empty tag.
+    So a query answering with nothing at all did not measure zero, and
+    must not be reported as zero."""
     monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
     out = await analysis.graph_stats(_FakeNebulaStore([]))
-    assert out["entities"] == 0 and out["degree"]["max"] == 0
+    assert out["entities"] is None
+    assert out["relationships"] is None
+    assert out["communities"] is None
+    assert out["errors"]["entities"]
+
+
+@pytest.mark.asyncio
+async def test_graph_stats_nebula_reports_a_measured_zero_as_zero(monkeypatch):
+    """The other side of it: an empty graph that ANSWERS zero is zero,
+    with no error recorded."""
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
+    store = _FakeNebulaStore([
+        ("AS ent_n", [{"ent_n": 0}]),
+        ("AS rel_n", [{"rel_n": 0}]),
+        ("AS comm_n", [{"comm_n": 0}]),
+        ("AS deg", []),
+        ("AS dup_name", []),
+    ])
+    out = await analysis.graph_stats(store)
+    assert out["entities"] == 0
+    assert out["relationships"] == 0
+    assert "entities" not in out["errors"]
+    assert out["degree"] == {"avg": 0.0, "p50": 0, "p99": 0, "max": 0}
+
+
+@pytest.mark.asyncio
+async def test_graph_stats_nebula_failure_is_none_not_zero(monkeypatch):
+    """The 2026-08-16 defect: the counting scans were refused for memory
+    and the handler turned that into 0, so the tool reported "no
+    relationships, no communities" on a space holding 310 989 and 2 302."""
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
+
+    class _Refusing:
+        def structured_query(self, stmt, param_map=None):
+            if "SHOW STATS" in stmt or "SHOW JOBS" in stmt:
+                raise RuntimeError("no stats info")
+            raise RuntimeError("Used memory hits the high watermark(0.800000)")
+
+    out = await analysis.graph_stats(_Refusing())
+    assert out["relationships"] is None
+    assert out["communities"] is None
+    assert out["degree"] is None
+    assert "high watermark" in out["errors"]["relationships"]
+
+
+@pytest.mark.asyncio
+async def test_graph_stats_nebula_prefers_show_stats(monkeypatch):
+    """`SHOW STATS` serves Nebula's own job results: exact, milliseconds,
+    and no scan — the scans it replaces fail outright on the production
+    space. The counting queries must not even be issued."""
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
+    store = _FakeNebulaStore([
+        ("SHOW STATS", [
+            {"Type": "Tag", "Name": "Entity", "Count": 161367},
+            {"Type": "Tag", "Name": "Community", "Count": 2302},
+            {"Type": "Edge", "Name": "RELATED", "Count": 311387},
+            {"Type": "Space", "Name": "vertices", "Count": 163669},
+        ]),
+        ("SHOW JOBS", [
+            {"Command": "STATS", "Status": "FINISHED",
+             "Stop Time": "utc datetime: 2026-08-16T21:44:28.000000, timezone_offset: 0"},
+        ]),
+        ("AS deg", [{"deg": 3}]),
+        ("AS dup_name", []),
+    ])
+    out = await analysis.graph_stats(store)
+    assert out["entities"] == 161367
+    assert out["relationships"] == 311387
+    assert out["communities"] == 2302
+    assert out["source"] == "show_stats"
+    assert out["stats_computed_at"] == "2026-08-16T21:44:28.000000"
+    # The three counting scans it replaces are not issued at all. (The
+    # degree query still is — SHOW STATS reports totals, not a
+    # distribution — so match on their result aliases, not on `count(`.)
+    assert not any(
+        alias in c for c in store.calls for alias in ("AS ent_n", "AS rel_n", "AS comm_n")
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_stats_nebula_falls_back_to_scanning(monkeypatch):
+    """No stats job has ever run — Nebula answers "please execute `submit
+    job stats' firstly". Fall back to the scans rather than report
+    nothing."""
+    monkeypatch.setattr("src.graph.analysis.settings.graph.backend", "nebula", raising=False)
+    store = _FakeNebulaStore([
+        ("AS ent_n", [{"ent_n": 5}]),
+        ("AS rel_n", [{"rel_n": 8}]),
+        ("AS comm_n", [{"comm_n": 3}]),
+        ("AS deg", []),
+        ("AS dup_name", []),
+    ])
+    out = await analysis.graph_stats(store)
+    assert out["source"] == "scan"
+    assert out["entities"] == 5 and out["relationships"] == 8
 
 
 def test_components_from_edges_counts_weak_components():

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -142,47 +143,140 @@ def _percentile(sorted_vals: list[int], q: float) -> int:
     return int(sorted_vals[max(0, min(idx, len(sorted_vals) - 1))])
 
 
+_SHOW_STATS_FIELDS = {
+    ("Tag", "Entity"): "entities",
+    ("Tag", "Community"): "communities",
+    ("Edge", "RELATED"): "relationships",
+}
+
+
+def _nebula_stats_computed_at(store: Any) -> str | None:
+    """When the newest finished STATS job ran, ISO-ish, or None.
+
+    `SHOW STATS` serves the LAST job's numbers, however old. Reporting
+    them without saying when they were computed swaps one lie (a
+    fabricated zero) for another (a stale number that looks fresh)."""
+    try:
+        rows = store.structured_query("SHOW JOBS") or []
+    except Exception:
+        return None
+    stamps = [
+        str(r.get("Stop Time"))
+        for r in rows
+        if isinstance(r, dict)
+        and r.get("Command") == "STATS"
+        and r.get("Status") == "FINISHED"
+    ]
+    iso = [m.group(0) for s in stamps if (m := re.search(r"\d{4}-\d{2}-\d{2}T[\d:.]+", s))]
+    return max(iso) if iso else None
+
+
+def _nebula_show_stats(store: Any) -> dict[str, int] | None:
+    """Exact counts from Nebula's own `SUBMIT JOB STATS` results.
+
+    Preferred over `MATCH … count(…)` because those are full scans: on
+    the production space they fail outright with `GraphMemoryExceeded`
+    while this returns in milliseconds. Returns None when no stats job
+    has ever run (Nebula answers "please execute `submit job stats'
+    firstly") — the caller then falls back to scanning.
+    """
+    try:
+        rows = store.structured_query("SHOW STATS") or []
+    except Exception as exc:
+        logger.info("graph_stats: SHOW STATS unavailable ({e}) — falling back", e=exc)
+        return None
+    counts: dict[str, int] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        field = _SHOW_STATS_FIELDS.get((r.get("Type"), r.get("Name")))
+        if field is not None and r.get("Count") is not None:
+            counts[field] = int(r["Count"])
+    return counts or None
+
+
 def _graph_stats_nebula(store: Any, out: dict) -> dict:
     """nGQL counts + client-side degree percentiles / duplicate grouping — nebula
-    has no GDS and no percentileCont. Each sub-query is fail-soft."""
-    def q(stmt: str) -> list[dict]:
+    has no GDS and no percentileCont.
+
+    Every sub-query is independent, and a failed one leaves its field
+    None with the reason in `errors` — NEVER 0. The two are not the same
+    thing, and this function used to conflate them: on 2026-08-16 it
+    reported "relationships 0, communities 0" on a space that held
+    310 989 and 2 302, because the counting scans hit Nebula's memory
+    ceiling and the handler turned the exception into an empty list.
+    A caller cannot tell a fabricated zero from a measured one.
+    """
+    errors: dict[str, str] = out.setdefault("errors", {})
+
+    def q(stmt: str, field: str) -> list[dict] | None:
+        """Rows, or None when the query could not run. None is not []."""
         try:
             return store.structured_query(stmt) or []
         except Exception as exc:
             logger.warning("graph_stats (nebula) sub-query failed: {e}", e=exc)
-            return []
+            errors[field] = str(exc)[:200]
+            return None
 
-    def _count(rows: list[dict], key: str) -> int:
-        return int(rows[0].get(key) or 0) if rows and isinstance(rows[0], dict) else 0
+    def _count(rows: list[dict] | None, key: str, field: str) -> int | None:
+        if rows is None:
+            return None
+        if not rows or not isinstance(rows[0], dict) or rows[0].get(key) is None:
+            # A count aggregate always yields a row — `MATCH (a:Alert)
+            # RETURN count(a)` returns [{'n': 0}] on an empty tag,
+            # verified on the live store. So no row means the query did
+            # not really answer, which is not the same as zero.
+            errors[field] = "count query returned no row"
+            return None
+        return int(rows[0][key])
 
-    out["entities"] = _count(q("MATCH (e:`Entity`) RETURN count(e) AS ent_n;"), "ent_n")
-    out["relationships"] = _count(
-        q("MATCH ()-[x:`RELATED`]->() RETURN count(x) AS rel_n;"), "rel_n")
-    out["communities"] = _count(
-        q("MATCH (c:`Community`) RETURN count(c) AS comm_n;"), "comm_n")
+    counts = _nebula_show_stats(store)
+    if counts:
+        # Cheap and exact. Timestamped, because these are as old as the
+        # last stats job.
+        out.update(counts)
+        out["source"] = "show_stats"
+        out["stats_computed_at"] = _nebula_stats_computed_at(store)
+        for field in ("entities", "relationships", "communities"):
+            out.setdefault(field, None)
+    else:
+        out["source"] = "scan"
+        out["entities"] = _count(
+            q("MATCH (e:`Entity`) RETURN count(e) AS ent_n;", "entities"),
+            "ent_n", "entities")
+        out["relationships"] = _count(
+            q("MATCH ()-[x:`RELATED`]->() RETURN count(x) AS rel_n;", "relationships"),
+            "rel_n", "relationships")
+        out["communities"] = _count(
+            q("MATCH (c:`Community`) RETURN count(c) AS comm_n;", "communities"),
+            "comm_n", "communities")
 
     # Per-node degree, percentiles computed here (id(e) forces per-node grouping;
-    # OPTIONAL MATCH keeps degree-0 nodes).
+    # OPTIONAL MATCH keeps degree-0 nodes). No `SHOW STATS` equivalent —
+    # it reports totals, not a distribution — so this stays a scan and
+    # fails honestly when the host cannot serve it.
     degrows = q("MATCH (e:`Entity`) OPTIONAL MATCH (e)-[x:`RELATED`]-() "
-                "RETURN id(e) AS eid, count(x) AS deg;")
-    degs = sorted(int(r.get("deg") or 0) for r in degrows if isinstance(r, dict))
-    if degs:
+                "RETURN id(e) AS eid, count(x) AS deg;", "degree")
+    if degrows is not None:
+        degs = sorted(int(r.get("deg") or 0) for r in degrows if isinstance(r, dict))
         out["degree"] = {
-            "avg": sum(degs) / len(degs),
+            "avg": sum(degs) / len(degs) if degs else 0.0,
             "p50": _percentile(degs, 0.5),
             "p99": _percentile(degs, 0.99),
-            "max": degs[-1],
+            "max": degs[-1] if degs else 0,
         }
 
     # Duplicate display names (case-insensitive), grouped in Python.
-    names = [r.get("dup_name") for r in q("MATCH (e:`Entity`) RETURN e.`Entity`.name AS dup_name;")
-             if isinstance(r, dict) and r.get("dup_name")]
-    groups: dict[str, int] = {}
-    for n in names:
-        groups[n.strip().lower()] = groups.get(n.strip().lower(), 0) + 1
-    dup = {k: c for k, c in groups.items() if c > 1}
-    out["duplicate_name_groups"] = len(dup)
-    out["duplicate_entities"] = sum(dup.values())
+    namerows = q("MATCH (e:`Entity`) RETURN e.`Entity`.name AS dup_name;", "duplicates")
+    if namerows is not None:
+        names = [r.get("dup_name") for r in namerows
+                 if isinstance(r, dict) and r.get("dup_name")]
+        groups: dict[str, int] = {}
+        for n in names:
+            groups[n.strip().lower()] = groups.get(n.strip().lower(), 0) + 1
+        dup = {k: c for k, c in groups.items() if c > 1}
+        out["duplicate_name_groups"] = len(dup)
+        out["duplicate_entities"] = sum(dup.values())
     return out
 
 
@@ -393,45 +487,68 @@ async def graph_stats(store: Any | None) -> dict:
 
     Feeds the live diagnostics from the 250k-scale assessment.  Every
     sub-query is independent + fail-soft so one failure doesn't void the
-    rest."""
+    rest.
+
+    A field that could NOT be measured comes back ``None``, with the
+    reason under ``errors``.  It is never 0.  Reporting a failure as a
+    zero is how this function spent 2026-08-16 telling operators the
+    production graph had no relationships and no communities while it
+    held 310 989 and 2 302 — the counting scans were being refused for
+    memory and the handler turned that into an empty result.
+
+    Under nebula, ``source`` says where the counts came from:
+    ``show_stats`` (Nebula's own ``SUBMIT JOB STATS`` output — exact,
+    milliseconds, and as old as ``stats_computed_at``) or ``scan``.
+    """
     out: dict[str, Any] = {
-        "entities": 0,
-        "relationships": 0,
-        "degree": {"avg": 0.0, "p50": 0, "p99": 0, "max": 0},
-        "duplicate_name_groups": 0,
-        "duplicate_entities": 0,
-        "communities": 0,
+        "entities": None,
+        "relationships": None,
+        "degree": None,
+        "duplicate_name_groups": None,
+        "duplicate_entities": None,
+        "communities": None,
+        "errors": {},
     }
     if store is None:
+        out["errors"]["store"] = "no graph store configured"
         return out
     if settings.graph.backend == "nebula":
         return await asyncio.to_thread(_graph_stats_nebula, store, out)
 
-    async def _one(cypher: str) -> dict:
+    async def _one(cypher: str, field: str) -> dict | None:
+        """The first row, or None when the query could not run."""
         try:
             rows = await asyncio.to_thread(_run_query, store, cypher)
         except Exception as exc:
             logger.warning("graph_stats sub-query failed: {e}", e=exc)
-            return {}
-        return rows[0] if rows and isinstance(rows[0], dict) else {}
+            out["errors"][field] = str(exc)[:200]
+            return None
+        if not rows or not isinstance(rows[0], dict):
+            out["errors"][field] = "query returned no row"
+            return None
+        return rows[0]
 
-    ent = await _one(_STATS_CYPHER["entities"])
-    out["entities"] = int(ent.get("n") or 0)
-    rel = await _one(_STATS_CYPHER["relationships"])
-    out["relationships"] = int(rel.get("n") or 0)
-    deg = await _one(_STATS_CYPHER["degree"])
-    if deg:
+    ent = await _one(_STATS_CYPHER["entities"], "entities")
+    if ent is not None:
+        out["entities"] = int(ent.get("n") or 0)
+    rel = await _one(_STATS_CYPHER["relationships"], "relationships")
+    if rel is not None:
+        out["relationships"] = int(rel.get("n") or 0)
+    deg = await _one(_STATS_CYPHER["degree"], "degree")
+    if deg is not None:
         out["degree"] = {
             "avg": float(deg.get("avg") or 0.0),
             "p50": int(deg.get("p50") or 0),
             "p99": int(deg.get("p99") or 0),
             "max": int(deg.get("max") or 0),
         }
-    dup = await _one(_STATS_CYPHER["dup"])
-    out["duplicate_name_groups"] = int(dup.get("dup_groups") or 0)
-    out["duplicate_entities"] = int(dup.get("dup_entities") or 0)
-    comm = await _one(_STATS_CYPHER["communities"])
-    out["communities"] = int(comm.get("n") or 0)
+    dup = await _one(_STATS_CYPHER["dup"], "duplicates")
+    if dup is not None:
+        out["duplicate_name_groups"] = int(dup.get("dup_groups") or 0)
+        out["duplicate_entities"] = int(dup.get("dup_entities") or 0)
+    comm = await _one(_STATS_CYPHER["communities"], "communities")
+    if comm is not None:
+        out["communities"] = int(comm.get("n") or 0)
     return out
 
 

@@ -34,7 +34,10 @@ def _store() -> Any:
 @router.post("/stats", dependencies=[Depends(require_api_key)])
 async def graph_stats() -> dict:
     """Operational snapshot: entity/relationship counts, degree
-    distribution, duplicate-name groups, community count."""
+    distribution, duplicate-name groups, community count.
+
+    An unmeasurable field is `null` with the reason under `errors` — it
+    is never reported as 0."""
     return await analysis.graph_stats(_store())
 
 
