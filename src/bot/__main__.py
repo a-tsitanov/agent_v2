@@ -52,12 +52,16 @@ def build_ctx() -> cmd.Ctx:
             api_base=cfg.api_base, api_key=key, mode=cfg.search_mode,
             timeout_s=cfg.search_timeout_s, synthesize=True,
         ),
-        # `/find` is the same retrieval without the synthesis LLM, so it
-        # answers in seconds; a shorter timeout keeps a hung call from
-        # holding a slot for three minutes.
+        # `/find` gets the SAME timeout as `/ask`. It is not a fast path:
+        # `synthesize=False` skips only the final synthesis LLM, while
+        # planning, the sub-question retrievals, the coverage round and
+        # the rerank all still run. Measured 2026-08-17 on one query:
+        # 46s without synthesis against 61s with it — a quarter off, not
+        # an order of magnitude. A 60s cap was tight enough that a
+        # slightly longer question timed out.
         find=make_search_full(
             api_base=cfg.api_base, api_key=key, mode=cfg.search_mode,
-            timeout_s=min(cfg.search_timeout_s, 60.0), synthesize=False,
+            timeout_s=cfg.search_timeout_s, synthesize=False,
         ),
         channels=make_channels(api_base=cfg.api_base, api_key=key),
         timeline=make_timeline(api_base=cfg.api_base, api_key=key),

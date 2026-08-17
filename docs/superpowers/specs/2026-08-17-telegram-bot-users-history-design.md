@@ -25,9 +25,16 @@ warning in the code.
 
 Measured 2026-08-17, not assumed. Only these are wired into commands:
 
+Corrected 2026-08-17 after deployment: `/find` is NOT the 0.7 s figure.
+`vector_search` is that fast, but it is an MCP tool and the bot reaches
+the API, where `synthesize=false` skips only the final synthesis LLM —
+planning, sub-question retrieval, the coverage round and the rerank all
+still run. Measured on one query: 46 s without synthesis, 61 s with. Its
+value is returning source text instead of prose, not speed.
+
 ```
 full search (synthesis)      89 s    20 sources, reranked
-vector_search               0.7 s    raw fragments
+vector_search               0.7 s    raw fragments (MCP only, not the bot's path)
 channel_message_stats       0.2 s    volume per channel
 channel_message_timeline    0.2 s    daily volume, back to 2017
 graph_stats                 4.9 s    graph size
@@ -66,7 +73,7 @@ Everything else is kept.
 
 ```
 /ask <вопрос>     full search WITH synthesis        ~90 s
-/find <запрос>    raw fragments, no synthesis        ~1 s
+/find <запрос>    raw fragments, no synthesis       ~45 s
 /channels         ingested volume per channel        ~1 s
 /volume [канал]   daily volume, optional channel     ~1 s
 /history          this user's last 10 requests
@@ -79,8 +86,14 @@ Admin only: `/users`, `/approve <telegram_id>`, `/deny <telegram_id>`.
 A bare message with no command is treated as `/ask`, so the bot stays
 usable without learning the command list.
 
-`/ask` uses `BOT_SEARCH_MODE` (default `auto`, unchanged) so the operator
-keeps the existing tuning.
+`/ask` uses `BOT_SEARCH_MODE`, defaulted to `local` rather than the
+previous `auto`. Measured on one question: `auto` routed to `global` and
+answered `Empty Response` with 0 sources in 11 s, where `local` returned
+10 sources and a 501-character answer.
+
+Both commands hold a concurrency slot for about a minute, so the cap
+below applies to `/find` too — it is a cheaper `/ask`, not a cheap
+command.
 
 ### Users and admission
 
