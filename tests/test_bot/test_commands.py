@@ -20,6 +20,7 @@ from src.bot.commands import (
     handle_approve,
     handle_ask,
     handle_channels,
+    handle_entity,
     handle_find,
     handle_history,
     handle_repeat,
@@ -338,3 +339,65 @@ async def test_a_store_outage_denies_rather_than_admits():
     out = await _ask(_ctx(repo))
     assert "не зарегистрированы" in out.lower()
     assert repo.started == []
+
+
+# ── /entity ──────────────────────────────────────────────────────────
+
+
+def _ctx_with_entities(repo, fn):
+    ctx = _ctx(repo)
+    ctx.entities = fn
+    return ctx
+
+
+async def test_entity_needs_admission():
+    repo = _Repo(user={"telegram_id": USER, "status": "pending", "role": "client"})
+    called: list[str] = []
+
+    async def _e(q, **kw):
+        called.append(q)
+        return {"entities": []}
+
+    out = await handle_entity(_ctx_with_entities(repo, _e), user_id=USER, query="Украина")
+    assert "не одобрена" in out
+    assert called == []
+
+
+async def test_entity_returns_the_matches():
+    async def _e(q, **kw):
+        return {"entities": [{"entity_name": "Украина", "entity_type": "Country"}]}
+
+    out = await handle_entity(_ctx_with_entities(_Repo(), _e), user_id=USER, query="Украина")
+    assert "Украина" in out
+
+
+async def test_entity_costs_no_quota_and_no_slot():
+    """It is an index read, not a search. Rationing it would ration the
+    only fast content command the bot has."""
+    async def _e(q, **kw):
+        return {"entities": []}
+
+    repo = _Repo(used_today=999)          # far over any quota
+    ctx = _ctx_with_entities(repo, _e)
+    ctx.gate.try_acquire()          # and the gate is full
+    ctx.gate.try_acquire()
+    out = await handle_entity(ctx, user_id=USER, query="Украина")
+    assert "лимит" not in out.lower()
+    assert "подождите" not in out.lower()
+    assert repo.started == []             # not an audited request either
+
+
+async def test_entity_empty_query_asks_for_one():
+    async def _e(q, **kw):
+        raise AssertionError("must not be called")
+
+    out = await handle_entity(_ctx_with_entities(_Repo(), _e), user_id=USER, query=" ")
+    assert "Нужен аргумент" in out
+
+
+async def test_entity_fails_soft():
+    async def _boom(q, **kw):
+        raise RuntimeError("api down")
+
+    out = await handle_entity(_ctx_with_entities(_Repo(), _boom), user_id=USER, query="X")
+    assert out == SEARCH_ERROR

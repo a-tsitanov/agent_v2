@@ -241,9 +241,15 @@ async def find_entity_by_name(
         return ToolResult(sources=[], observation=json.dumps({"entities": []}))
     data = await graph_retriever.afind_entities_by_name(query, limit=limit)
     entities = getattr(data, "entities", []) or []
+    payload: dict[str, Any] = {"entities": entities}
+    # An `error` means the lookup could not run — NOT that the graph has
+    # no such entity. Pass it on: a caller cannot tell the two apart from
+    # an empty list, and for a day this tool answered "Украина is not
+    # here" while an index lookup found it instantly.
+    if getattr(data, "error", ""):
+        payload["error"] = data.error
     return ToolResult(
-        sources=[],
-        observation=json.dumps({"entities": entities}, ensure_ascii=False),
+        sources=[], observation=json.dumps(payload, ensure_ascii=False),
     )
 
 

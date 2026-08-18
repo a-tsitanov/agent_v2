@@ -63,4 +63,32 @@ def make_timeline(
     return timeline
 
 
-__all__ = ["make_channels", "make_timeline"]
+__all__ = ["make_channels", "make_entities", "make_timeline"]
+
+
+EntitiesFn = Callable[..., Awaitable[dict[str, Any]]]
+
+
+def make_entities(
+    *, api_base: str, api_key: str, timeout_s: float = 30.0,
+) -> EntitiesFn:
+    """Entity name lookup → the whole body, `error` included.
+
+    The body is passed through rather than reduced to a list because an
+    empty list means two different things: "no such name" when there is
+    no `error`, and "the lookup could not run" when there is. Collapsing
+    them here would recreate the defect this endpoint was built to fix.
+    """
+    url = f"{api_base.rstrip('/')}/api/v1/entities"
+
+    async def entities(query: str, *, limit: int = 10) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=timeout_s) as http:
+            resp = await http.get(
+                url,
+                headers={"X-API-Key": api_key},
+                params={"query": query, "limit": limit},
+            )
+            resp.raise_for_status()
+            return resp.json() or {}
+
+    return entities

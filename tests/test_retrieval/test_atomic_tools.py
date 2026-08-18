@@ -418,3 +418,43 @@ def test_tool_descriptions_cover_all_tools():
         "filter_by_metadata", "get_chunks_by_doc_id", "read_full_document",
     }
     assert set(atomic_tools.TOOL_DESCRIPTIONS) == expected
+
+
+# ── an unrunnable lookup is not "no such entity" ─────────────────────
+
+
+class _NameRetriever:
+    """Stands in for GraphRetriever's name lookup."""
+
+    def __init__(self, data):
+        self._data = data
+
+    async def afind_entities_by_name(self, query, *, limit=10):
+        return self._data
+
+
+async def test_find_entity_by_name_passes_the_failure_through():
+    """`GraphMemoryExceeded` reached callers as `{"entities": []}` — which
+    reads as "the graph has no such entity". It found "Украина" instantly
+    by index the whole time."""
+    from src.graph.retriever import RoundGraphData
+
+    data = RoundGraphData(error="nGQL failed: GraphMemoryExceeded: (-2600)")
+    r = await atomic_tools.find_entity_by_name(
+        _NameRetriever(data), query="Украина",
+    )
+    body = json.loads(r.observation)
+    assert body["entities"] == []
+    assert "GraphMemoryExceeded" in body["error"]
+
+
+async def test_find_entity_by_name_omits_error_when_it_ran():
+    """A genuine empty result carries no error key, so a caller can tell
+    "nothing matched" from "could not look"."""
+    from src.graph.retriever import RoundGraphData
+
+    r = await atomic_tools.find_entity_by_name(
+        _NameRetriever(RoundGraphData(entities=[])), query="несуществующее",
+    )
+    body = json.loads(r.observation)
+    assert body == {"entities": []}

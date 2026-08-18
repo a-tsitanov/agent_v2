@@ -17,6 +17,7 @@ from loguru import logger
 from src.api.routes import (
     admin,
     documents,
+    entities,
     graph_admin,
     health,
     ingest,
@@ -89,6 +90,7 @@ app.include_router(search_v2.router, prefix="/api/v1")
 app.include_router(analyze_routes.router, prefix="/api/v1")
 app.include_router(ingest.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(entities.router, prefix="/api/v1")
 app.include_router(stats.router, prefix="/api/v1")
 app.include_router(stats_data.router, prefix="/api/v1")
 app.include_router(admin.router)

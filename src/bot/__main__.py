@@ -28,7 +28,7 @@ from src.bot.format import split_for_telegram
 from src.bot.policy import ConcurrencyGate
 from src.bot.search_client import make_search_full
 from src.bot.seed import seed_admins
-from src.bot.stats_client import make_channels, make_timeline
+from src.bot.stats_client import make_channels, make_entities, make_timeline
 from src.config import settings
 from src.storage.bot import BotRepository
 
@@ -65,6 +65,7 @@ def build_ctx() -> cmd.Ctx:
         ),
         channels=make_channels(api_base=cfg.api_base, api_key=key),
         timeline=make_timeline(api_base=cfg.api_base, api_key=key),
+        entities=make_entities(api_base=cfg.api_base, api_key=key),
         gate=ConcurrencyGate(cfg.max_concurrent),
         default_quota=cfg.default_daily_quota,
     )
@@ -115,6 +116,12 @@ async def main() -> None:
         uid, username = _who(message)
         await _reply(message, await cmd.handle_volume(
             ctx, user_id=uid, channel=(command.args or "").strip(), username=username))
+
+    @dp.message(Command("entity"))
+    async def on_entity(message: Message, command: CommandObject) -> None:
+        uid, username = _who(message)
+        await _reply(message, await cmd.handle_entity(
+            ctx, user_id=uid, query=command.args or "", username=username))
 
     @dp.message(Command("history"))
     async def on_history(message: Message) -> None:

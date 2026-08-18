@@ -85,6 +85,12 @@ class RoundGraphData:
     entities: list[dict] = field(default_factory=list)
     relations: list[dict] = field(default_factory=list)
     chunks: list[NodeWithScore] = field(default_factory=list)
+    # Why this came back empty, when it did so because the lookup could
+    # not run. Empty string means it ran. Without this an infrastructure
+    # refusal is indistinguishable from "the graph has no such entity" —
+    # which is exactly how a `GraphMemoryExceeded` spent a day being
+    # reported to callers as "Украина is not in the knowledge base".
+    error: str = ""
 
 
 # Bounded N-hop traversal. ``$hops`` is interpolated into the
@@ -156,20 +162,40 @@ LIMIT $limit
 
 
 def _find_by_name_ngql(query: str, *, limit: int) -> str:
-    """FUZZY (partial) name lookup under nebula — mirrors the neo4j full-text
-    index's OR-of-tokens behaviour ("Киев" → "Область Киева", "Ромаш" → "ООО
-    Ромашка").  Whitespace-split the input and OR a ``CONTAINS`` per token over a
-    ``MATCH`` scan (nebula has no full-text index; `LOOKUP ... ==` was exact-only,
-    which silently broke every partial-name lookup after cutover).  Returns ``""``
-    for blank input so the caller short-circuits.  Case-sensitive (nebula CONTAINS
-    has no analyzer) — a minor divergence from neo4j's lowercased full-text."""
+    """PREFIX name lookup under nebula, over the ``entity_name_idx`` index.
+
+    Whitespace-split the input and OR a ``STARTS WITH`` per token. Exact
+    and prefix both work: "Украина" finds itself, "Иванов" finds "Иванов
+    Иван Иванович".
+
+    KNOWN LIMIT: a token matching mid-name does NOT match. "Ромаш" will
+    not find "ООО Ромашка", which the previous ``CONTAINS`` version
+    promised. That promise was not kept in practice — ``CONTAINS`` cannot
+    use an index, so the query was a full scan of every Entity vertex,
+    and on a 161k-entity graph it failed outright with
+    ``GraphMemoryExceeded (-2600)``. Measured 2026-08-18: this form
+    answers in under two seconds where ``CONTAINS`` failed in three.
+    Prefix matching that works beats substring matching that does not.
+
+    True substring search needs an index built for it — a trigram table
+    of entity names in Postgres, the way the statistics registry is
+    searched. That is a separate piece of work; do not reintroduce
+    ``CONTAINS`` here instead.
+
+    Returns ``""`` for blank input so the caller short-circuits.
+    Case-sensitive, like the index.
+    """
     tokens = [t for t in (query or "").split() if t.strip()]
     if not tokens:
         return ""
-    clauses = " OR ".join(f"e.`Entity`.name CONTAINS {_nebula_q(t)}" for t in tokens)
+    clauses = " OR ".join(
+        f"`Entity`.name STARTS WITH {_nebula_q(t)}" for t in tokens
+    )
     return (
-        f"MATCH (e:`Entity`) WHERE {clauses} "
-        f"RETURN id(e) AS vid, properties(e) AS p LIMIT {int(limit)};"
+        f"LOOKUP ON `Entity` WHERE {clauses} "
+        "YIELD id(vertex) AS vid, `Entity`.name AS name, "
+        "`Entity`.label AS label, `Entity`.description AS description "
+        f"| LIMIT {int(limit)};"
     )
 
 
@@ -486,10 +512,15 @@ class GraphRetriever:
                 )
             except Exception as exc:
                 logger.warning("find_entities_by_name (nebula) failed: {e}", e=repr(exc))
-                return RoundGraphData()
+                # Report it. Returning a bare empty result told the caller
+                # "no such entity" when the truth was "the lookup could
+                # not run".
+                return RoundGraphData(error=str(exc)[:200])
             out = RoundGraphData()
             for row in (rows or [])[: int(cap)]:
-                p = (row or {}).get("p") or {}
+                # LOOKUP yields flat columns; accept the older `p` map too
+                # so a caller or fake feeding either shape still works.
+                p = (row or {}).get("p") or row or {}
                 name = p.get("name")
                 if not name:
                     continue
