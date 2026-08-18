@@ -48,18 +48,77 @@ async def test_find_by_name_nebula_lookup(monkeypatch):
     monkeypatch.setattr(
         "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
     )
-    rows = [{"vid": "abc", "p": {"name": "Иванов Иван", "label": "PERSON",
-                                 "description": "инженер"}}]
+    rows = [{"vid": "abc", "name": "Иванов Иван", "label": "PERSON",
+             "description": "инженер"}]
     store = _FakeStore(rows=rows)
     r = GraphRetriever.for_store(store)
     out = await r.afind_entities_by_name("Иванов", limit=5)
-    # FUZZY partial-name match: a MATCH scan with CONTAINS-per-token (mirrors the
-    # neo4j full-text index; `LOOKUP ... ==` was exact-only and broke partials).
-    assert "MATCH (e:`Entity`)" in store.last_query
-    assert 'e.`Entity`.name CONTAINS "Иванов"' in store.last_query
+    # PREFIX match over `entity_name_idx`, not a MATCH scan. `CONTAINS`
+    # cannot use an index, so the old form was a full scan of every
+    # Entity vertex and failed outright with GraphMemoryExceeded on the
+    # production graph — the tool answered `{"entities": []}` for
+    # "Украина" while an index lookup found it instantly.
+    assert "LOOKUP ON `Entity`" in store.last_query
+    assert '`Entity`.name STARTS WITH "Иванов"' in store.last_query
+    assert "CONTAINS" not in store.last_query
+    assert "MATCH" not in store.last_query
     assert "LIMIT 5" in store.last_query
     assert out.entities == [{"entity_name": "Иванов Иван",
                              "entity_type": "PERSON", "description": "инженер"}]
+    assert out.error == ""
+
+
+@pytest.mark.asyncio
+async def test_find_by_name_nebula_ors_the_tokens(monkeypatch):
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+    store = _FakeStore(rows=[])
+    await GraphRetriever.for_store(store).afind_entities_by_name("Иванов Москва")
+    assert store.last_query.count("STARTS WITH") == 2
+    assert " OR " in store.last_query
+
+
+@pytest.mark.asyncio
+async def test_find_by_name_nebula_blank_query_issues_nothing(monkeypatch):
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+    store = _FakeStore(rows=[])
+    out = await GraphRetriever.for_store(store).afind_entities_by_name("   ")
+    assert store.last_query is None
+    assert out.entities == []
+
+
+@pytest.mark.asyncio
+async def test_find_by_name_nebula_reports_a_failure_instead_of_empty(monkeypatch):
+    """The defect this replaced: a `GraphMemoryExceeded` came back as an
+    empty entity list, which reads as "the graph has no such entity"."""
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+
+    class _Refusing(_FakeStore):
+        def structured_query(self, query, param_map=None):
+            raise RuntimeError("nGQL failed: GraphMemoryExceeded: (-2600)")
+
+    out = await GraphRetriever.for_store(_Refusing()).afind_entities_by_name("Украина")
+    assert out.entities == []
+    assert "GraphMemoryExceeded" in out.error
+
+
+@pytest.mark.asyncio
+async def test_find_by_name_nebula_still_reads_the_older_row_shape(monkeypatch):
+    """Accepts the `p` map the previous MATCH form returned, so a caller
+    or fake feeding either shape keeps working."""
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+    store = _FakeStore(rows=[{"vid": "a", "p": {"name": "Киев", "label": "CITY"}}])
+    out = await GraphRetriever.for_store(store).afind_entities_by_name("Киев")
+    assert out.entities == [
+        {"entity_name": "Киев", "entity_type": "CITY", "description": ""},
+    ]
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from src.bot.format import (
     TG_LIMIT,
     format_answer,
     format_channels,
+    format_entities,
     format_fragments,
     format_history,
     format_timeline,
@@ -26,6 +27,7 @@ ALL = (
     lambda: format_answer("", []),
     lambda: format_fragments([]),
     lambda: format_users([]),
+    lambda: format_entities({}),
 )
 
 
@@ -227,3 +229,43 @@ def test_empty_synthesis_with_sources_says_so_and_keeps_them():
     assert "Empty Response" not in out
     assert "не сформирован" in out
     assert "ff48aba5" in out
+
+
+# ── entities ─────────────────────────────────────────────────────────
+
+
+def test_entities_render_name_type_and_description():
+    body = {"entities": [
+        {"entity_name": "Украина", "entity_type": "Country", "description": "государство"},
+    ]}
+    out = format_entities(body, query="Украина")
+    assert "Украина" in out and "Country" in out and "государство" in out
+
+
+def test_entities_empty_explains_the_prefix_rule():
+    """So the user knows to try another spelling rather than concluding
+    the entity is absent."""
+    out = format_entities({"entities": []}, query="Ромаш")
+    assert "Ромаш" in out
+    assert "НАЧАЛУ" in out
+
+
+def test_entities_error_is_not_reported_as_absence():
+    """An empty list WITH an error means the lookup could not run. Saying
+    "not found" there is the exact defect this command was built after."""
+    out = format_entities(
+        {"entities": [], "error": "GraphMemoryExceeded: (-2600)"}, query="Украина",
+    )
+    assert "сбой" in out
+    assert "GraphMemoryExceeded" in out
+    assert "не найдено" not in out
+
+
+def test_entities_bound_the_list_and_say_how_many_were_hidden():
+    body = {"entities": [
+        {"entity_name": f"E{i}", "entity_type": "X", "description": "d"}
+        for i in range(30)
+    ]}
+    out = format_entities(body)
+    assert len(out) < TG_LIMIT
+    assert "ещё 20" in out

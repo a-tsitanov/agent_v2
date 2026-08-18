@@ -35,6 +35,7 @@ NOT_YOUR_REQUEST = "Это чужой запрос."
 HELP = """Команды:
 
 /ask <вопрос> — поиск с готовым ответом (около минуты)
+/entity <имя> — что за сущность, по началу имени (быстро)
 /find <запрос> — те же материалы, но текстом первоисточников, без пересказа
    (чуть быстрее /ask, но не мгновенно — работа та же, кроме финального пересказа)
 /channels — что загружено, по каналам
@@ -56,6 +57,7 @@ class Ctx:
     channels: Callable[[], Awaitable[list[dict]]]
     timeline: Callable[..., Awaitable[list[dict]]]
     gate: ConcurrencyGate
+    entities: Callable[..., Awaitable[dict]] | None = None
     default_quota: int = 20
 
 
@@ -210,6 +212,28 @@ async def handle_volume(
         return SEARCH_ERROR
 
 
+async def handle_entity(
+    ctx: Ctx, *, user_id: int, query: str, username: str = "",
+) -> str:
+    """Entity lookup by name prefix. Cheap — no concurrency slot, no
+    quota: it is an index read, not a search, and rationing it would be
+    rationing the one fast content command the bot has."""
+    user = await _load_user(ctx, user_id, username)
+    decision = admit(user, user_id=user_id)
+    if not decision.allowed:
+        return decision.message
+    query = (query or "").strip()
+    if not query:
+        return BAD_ARGS.format(example="/entity Украина")
+    if ctx.entities is None:
+        return SEARCH_ERROR
+    try:
+        return fmt.format_entities(await ctx.entities(query), query=query)
+    except Exception as exc:
+        logger.warning("bot: /entity failed: {e}", e=exc)
+        return SEARCH_ERROR
+
+
 async def handle_history(ctx: Ctx, *, user_id: int, username: str = "") -> str:
     user = await _load_user(ctx, user_id, username)
     decision = admit(user, user_id=user_id)
@@ -307,6 +331,7 @@ __all__ = [
     "handle_ask",
     "handle_channels",
     "handle_deny",
+    "handle_entity",
     "handle_find",
     "handle_history",
     "handle_repeat",

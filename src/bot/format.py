@@ -22,6 +22,7 @@ _CHANNELS_SHOWN = 15
 _TIMELINE_SHOWN = 30
 _SOURCES_SHOWN = 5
 _ANSWER_PREVIEW = 60
+_ENTITIES_SHOWN = 10
 
 
 def _clip(text: str, limit: int) -> str:
@@ -181,6 +182,7 @@ __all__ = [
     "TG_LIMIT",
     "format_answer",
     "format_channels",
+    "format_entities",
     "format_fragments",
     "format_history",
     "format_timeline",
@@ -189,3 +191,36 @@ __all__ = [
     "source_text",
     "split_for_telegram",
 ]
+
+
+def format_entities(body: dict[str, Any], *, query: str = "") -> str:
+    """Entity lookup results, or the reason there are none.
+
+    Takes the whole response body, not just the list, because an empty
+    list means two different things and the user can act on the
+    difference: "the graph has no such name" is a cue to try another
+    spelling, "the lookup could not run" is not.
+    """
+    error = str(body.get("error") or "")
+    rows = body.get("entities") or []
+    if error:
+        return (
+            "Не удалось выполнить поиск по сущностям — это сбой, "
+            f"а не отсутствие данных.\nПричина: {_clip(error, 200)}"
+        )
+    if not rows:
+        return (
+            f"Сущностей по запросу «{query}» не найдено.\n"
+            "Поиск идёт по НАЧАЛУ имени: «Иванов» найдёт «Иванов Иван», "
+            "но «Ромаш» не найдёт «ООО Ромашка»."
+        )
+    lines = [f"Найдено сущностей: {len(rows)}", ""]
+    for r in rows[:_ENTITIES_SHOWN]:
+        name = r.get("entity_name") or "?"
+        kind = r.get("entity_type") or ""
+        desc = _clip(r.get("description") or "", 160)
+        head = f"{name}" + (f" · {kind}" if kind else "")
+        lines.append(head + (f"\n  {desc}" if desc else ""))
+    if len(rows) > _ENTITIES_SHOWN:
+        lines += ["", f"…и ещё {len(rows) - _ENTITIES_SHOWN}"]
+    return "\n".join(lines)
