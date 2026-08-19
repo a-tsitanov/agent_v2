@@ -25,9 +25,11 @@ from loguru import logger
 
 from src.bot import commands as cmd
 from src.bot.format import split_for_telegram
+from src.bot.llm_rewrite import make_rewrite
 from src.bot.policy import ConcurrencyGate
 from src.bot.search_client import make_search_full
 from src.bot.seed import seed_admins
+from src.bot.session import InMemorySessionStore
 from src.bot.stats_client import make_channels, make_entities, make_timeline
 from src.config import settings
 from src.storage.bot import BotRepository
@@ -66,6 +68,8 @@ def build_ctx() -> cmd.Ctx:
         channels=make_channels(api_base=cfg.api_base, api_key=key),
         timeline=make_timeline(api_base=cfg.api_base, api_key=key),
         entities=make_entities(api_base=cfg.api_base, api_key=key),
+        session=InMemorySessionStore(max_messages=cfg.max_messages),
+        rewrite=make_rewrite(),
         gate=ConcurrencyGate(cfg.max_concurrent),
         default_quota=cfg.default_daily_quota,
     )
