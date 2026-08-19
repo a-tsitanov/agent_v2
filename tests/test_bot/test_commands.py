@@ -401,3 +401,69 @@ async def test_entity_fails_soft():
 
     out = await handle_entity(_ctx_with_entities(_Repo(), _boom), user_id=USER, query="X")
     assert out == SEARCH_ERROR
+
+
+# ── follow-up context ────────────────────────────────────────────────
+
+
+class _Session:
+    def __init__(self):
+        self.turns = {}
+
+    def load(self, chat_id):
+        return list(self.turns.get(chat_id, []))
+
+    def append(self, chat_id, turn):
+        self.turns.setdefault(chat_id, []).append(turn)
+
+
+def _ctx_chat(repo, *, rewrite=None, search=None):
+    ctx = _ctx(repo, search=search)
+    ctx.session = _Session()
+    ctx.rewrite = rewrite
+    return ctx
+
+
+async def test_followup_is_rewritten_before_searching():
+    seen = {}
+
+    async def _rw(history, question):
+        seen["history"] = list(history)
+        return "полный вопрос про урожай"
+
+    async def _search(q):
+        seen["asked"] = q
+        return {"answer": "ответ", "sources": []}
+
+    ctx = _ctx_chat(_Repo(), rewrite=_rw, search=_search)
+    await handle_ask(ctx, user_id=USER, chat_id=1, query="а что ещё?")
+    assert seen["asked"] == "полный вопрос про урожай"
+
+
+async def test_session_keeps_what_the_user_typed_not_the_rewrite():
+    """Later rewrites must see the real conversation."""
+    async def _rw(history, question):
+        return "переписанный"
+
+    ctx = _ctx_chat(_Repo(), rewrite=_rw)
+    await handle_ask(ctx, user_id=USER, chat_id=1, query="исходный")
+    assert ctx.session.load(1)[0].text == "исходный"
+
+
+async def test_rewrite_failure_costs_context_not_the_answer():
+    async def _boom(history, question):
+        raise RuntimeError("llm down")
+
+    ctx = _ctx_chat(_Repo(), rewrite=_boom)
+    out = await handle_ask(ctx, user_id=USER, chat_id=1, query="вопрос")
+    assert "ответ на вопрос" in out
+
+
+async def test_a_failed_search_is_not_persisted():
+    """A broken turn would poison every later rewrite."""
+    async def _boom(q):
+        raise RuntimeError("search down")
+
+    ctx = _ctx_chat(_Repo(), search=_boom)
+    await handle_ask(ctx, user_id=USER, chat_id=1, query="вопрос")
+    assert ctx.session.load(1) == []

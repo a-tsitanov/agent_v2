@@ -25,6 +25,7 @@ from src.bot.policy import (
     check_quota,
     is_admin,
 )
+from src.bot.session import Turn
 
 SEARCH_ERROR = "Не удалось получить ответ из базы. Попробуйте ещё раз."
 NOT_ADMIN = "Команда доступна только администратору."
@@ -58,6 +59,11 @@ class Ctx:
     timeline: Callable[..., Awaitable[list[dict]]]
     gate: ConcurrencyGate
     entities: Callable[..., Awaitable[dict]] | None = None
+    # Follow-up context. Both already existed, unit-tested, and were left
+    # unwired when the pipeline was replaced by these handlers — so "а что
+    # ещё про это?" was answered as a fresh question.
+    session: Any = None
+    rewrite: Callable[..., Awaitable[str]] | None = None
     default_quota: int = 20
 
 
@@ -159,11 +165,27 @@ async def handle_ask(
     )
     if refusal is not None:
         return refusal
-    return await _run_search(
-        ctx, user_id=user_id, chat_id=chat_id, command=command, query=query,
+
+    # Resolve the follow-up against this chat's recent turns. Fail-soft:
+    # a rewrite outage should cost context, not the answer.
+    standalone = query
+    if ctx.session is not None and ctx.rewrite is not None:
+        try:
+            standalone = await ctx.rewrite(ctx.session.load(chat_id), query) or query
+        except Exception as exc:
+            logger.warning("bot: rewrite failed, asking as-is: {e}", e=exc)
+
+    answer = await _run_search(
+        ctx, user_id=user_id, chat_id=chat_id, command=command, query=standalone,
         fn=ctx.search,
         render=lambda r: fmt.format_answer(r.get("answer") or "", r.get("sources")),
     )
+    if ctx.session is not None and answer != SEARCH_ERROR:
+        # Persist what the user TYPED, not the rewritten query — later
+        # rewrites must see the real conversation.
+        ctx.session.append(chat_id, Turn(role="user", text=query))
+        ctx.session.append(chat_id, Turn(role="assistant", text=answer))
+    return answer
 
 
 async def handle_find(
