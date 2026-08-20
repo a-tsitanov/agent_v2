@@ -1201,6 +1201,14 @@ class BotSettings(BaseSettings):
     max_messages: int = Field(
         default=8, ge=1, description="Rolling conversation window kept per chat.",
     )
+    agent_base: str = Field(
+        default="http://openclaw:18789",
+        description="openclaw gateway base URL for the /agent bridge (its OpenAI-compatible "
+        "/v1/chat/completions). Empty disables the /agent command.",
+    )
+    agent_token: str = Field(
+        default="", description="Bearer for the openclaw gateway. Empty → falls back to API key.",
+    )
     search_timeout_s: float = Field(
         default=180.0, description="Per-search HTTP timeout (fallback modes are slower).",
     )

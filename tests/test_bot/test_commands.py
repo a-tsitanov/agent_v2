@@ -17,6 +17,7 @@ from src.bot.commands import (
     NOT_YOUR_REQUEST,
     SEARCH_ERROR,
     Ctx,
+    handle_agent,
     handle_approve,
     handle_ask,
     handle_channels,
@@ -467,3 +468,52 @@ async def test_a_failed_search_is_not_persisted():
     ctx = _ctx_chat(_Repo(), search=_boom)
     await handle_ask(ctx, user_id=USER, chat_id=1, query="вопрос")
     assert ctx.session.load(1) == []
+
+
+# ── /agent (openclaw bridge) ─────────────────────────────────────────
+
+
+def _ctx_agent(repo, fn):
+    ctx = _ctx(repo)
+    ctx.agent = fn
+    return ctx
+
+
+async def test_agent_returns_the_prose_and_records_it():
+    async def _a(q):
+        return f"агент ответил на {q}"
+
+    repo = _Repo()
+    out = await handle_agent(_ctx_agent(repo, _a), user_id=USER, chat_id=1, query="вопрос")
+    assert "агент ответил на вопрос" in out
+    assert repo.started[0]["command"] == "/agent"
+    assert repo.finished[0]["status"] == "done"
+
+
+async def test_agent_costs_a_slot_and_quota_like_ask():
+    async def _a(q):
+        raise AssertionError("must not run")
+
+    repo = _Repo(used_today=20)
+    out = await handle_agent(_ctx_agent(repo, _a), user_id=USER, chat_id=1, query="x")
+    assert "лимит" in out.lower()
+    assert repo.started[-1]["status"] == "denied"
+
+
+async def test_agent_fails_soft():
+    async def _boom(q):
+        raise RuntimeError("openclaw down")
+
+    repo = _Repo()
+    out = await handle_agent(_ctx_agent(repo, _boom), user_id=USER, chat_id=1, query="x")
+    assert out == SEARCH_ERROR
+    assert repo.finished[0]["status"] == "failed"
+
+
+async def test_agent_needs_admission():
+    async def _a(q):
+        raise AssertionError("must not run")
+
+    repo = _Repo(user={"telegram_id": USER, "status": "pending", "role": "client"})
+    out = await handle_agent(_ctx_agent(repo, _a), user_id=USER, chat_id=1, query="x")
+    assert "не одобрена" in out

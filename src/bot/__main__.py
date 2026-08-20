@@ -24,6 +24,7 @@ from aiogram.types import Message
 from loguru import logger
 
 from src.bot import commands as cmd
+from src.bot.agent_client import make_agent
 from src.bot.format import split_for_telegram
 from src.bot.llm_rewrite import make_rewrite
 from src.bot.policy import ConcurrencyGate
@@ -70,6 +71,9 @@ def build_ctx() -> cmd.Ctx:
         entities=make_entities(api_base=cfg.api_base, api_key=key),
         session=InMemorySessionStore(max_messages=cfg.max_messages),
         rewrite=make_rewrite(),
+        agent=(make_agent(base_url=cfg.agent_base, token=cfg.agent_token or key,
+                          timeout_s=cfg.search_timeout_s * 2)
+               if cfg.agent_base else None),
         gate=ConcurrencyGate(cfg.max_concurrent),
         default_quota=cfg.default_daily_quota,
     )
@@ -148,6 +152,21 @@ async def main() -> None:
         uid, _ = _who(message)
         await _reply(message, await cmd.handle_deny(
             ctx, user_id=uid, raw_id=command.args or ""))
+
+    @dp.message(Command("agent"))
+    async def on_agent(message: Message, command: CommandObject) -> None:
+        uid, username = _who(message)
+        notice = await message.answer(_WORKING)
+        text = await cmd.handle_agent(
+            ctx, user_id=uid, chat_id=message.chat.id,
+            query=command.args or "", username=username)
+        chunks = split_for_telegram(text)
+        try:
+            await notice.edit_text(chunks[0])
+        except Exception:
+            await message.answer(chunks[0])
+        for extra in chunks[1:]:
+            await message.answer(extra)
 
     @dp.message(Command("find"))
     async def on_find(message: Message, command: CommandObject) -> None:
