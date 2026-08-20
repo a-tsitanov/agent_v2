@@ -83,6 +83,10 @@ services:
       # host. Over the cap the user is refused, not queued.
       BOT_MAX_CONCURRENT: ${BOT_MAX_CONCURRENT:-2}
       BOT_DEFAULT_DAILY_QUOTA: ${BOT_DEFAULT_DAILY_QUOTA:-20}
+      # /agent bridges to openclaw's OpenAI-compatible endpoint (same
+      # docker network). Token = the openclaw gateway token.
+      BOT_AGENT_BASE: ${BOT_AGENT_BASE:-http://openclaw:18789}
+      BOT_AGENT_TOKEN: ${BOT_AGENT_TOKEN:-${OPENCLAW_GATEWAY_TOKEN:-}}
     depends_on:
       - api
       - postgres
