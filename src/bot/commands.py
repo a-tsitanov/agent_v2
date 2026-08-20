@@ -36,6 +36,7 @@ NOT_YOUR_REQUEST = "Это чужой запрос."
 HELP = """Команды:
 
 /ask <вопрос> — поиск с готовым ответом (около минуты)
+/agent <вопрос> — умный агент: сам подбирает и комбинирует инструменты (дольше)
 /entity <имя> — что за сущность, по началу имени (быстро)
 /find <запрос> — те же материалы, но текстом первоисточников, без пересказа
    (чуть быстрее /ask, но не мгновенно — работа та же, кроме финального пересказа)
@@ -59,6 +60,7 @@ class Ctx:
     timeline: Callable[..., Awaitable[list[dict]]]
     gate: ConcurrencyGate
     entities: Callable[..., Awaitable[dict]] | None = None
+    agent: Callable[[str], Awaitable[str]] | None = None
     # Follow-up context. Both already existed, unit-tested, and were left
     # unwired when the pipeline was replaced by these handlers — so "а что
     # ещё про это?" was answered as a fresh question.
@@ -207,6 +209,35 @@ async def handle_find(
     )
 
 
+async def handle_agent(
+    ctx: Ctx, *, user_id: int, chat_id: int, query: str, username: str = "",
+) -> str:
+    """Free-form question to the openclaw agent, which chains MCP tools.
+    Same cost as /ask (a slot + quota); openclaw keeps its own memory, so
+    no session/rewrite here."""
+    query = (query or "").strip()
+    if not query:
+        return BAD_ARGS.format(example="/agent кто связан с зерновой сделкой")
+    if ctx.agent is None:
+        return SEARCH_ERROR
+    user = await _load_user(ctx, user_id, username)
+    refusal = await _gate_checks(
+        ctx, user=user, user_id=user_id, chat_id=chat_id, command="/agent", args=query,
+    )
+    if refusal is not None:
+        return refusal
+    return await _run_search(
+        ctx, user_id=user_id, chat_id=chat_id, command="/agent", query=query,
+        fn=lambda q: _wrap_agent(ctx, q),
+        render=lambda r: r.get("answer") or SEARCH_ERROR,
+    )
+
+
+async def _wrap_agent(ctx: Ctx, q: str) -> dict:
+    # _run_search expects {answer, sources}; the agent returns prose only.
+    return {"answer": await ctx.agent(q), "sources": []}
+
+
 async def handle_channels(ctx: Ctx, *, user_id: int, username: str = "") -> str:
     user = await _load_user(ctx, user_id, username)
     decision = admit(user, user_id=user_id)
@@ -349,6 +380,7 @@ __all__ = [
     "NO_SUCH_REQUEST",
     "SEARCH_ERROR",
     "Ctx",
+    "handle_agent",
     "handle_approve",
     "handle_ask",
     "handle_channels",
