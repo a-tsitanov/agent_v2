@@ -480,7 +480,7 @@ def _ctx_agent(repo, fn):
 
 
 async def test_agent_returns_the_prose_and_records_it():
-    async def _a(q):
+    async def _a(q, **kw):
         return f"агент ответил на {q}"
 
     repo = _Repo()
@@ -491,7 +491,7 @@ async def test_agent_returns_the_prose_and_records_it():
 
 
 async def test_agent_costs_a_slot_and_quota_like_ask():
-    async def _a(q):
+    async def _a(q, **kw):
         raise AssertionError("must not run")
 
     repo = _Repo(used_today=20)
@@ -501,7 +501,7 @@ async def test_agent_costs_a_slot_and_quota_like_ask():
 
 
 async def test_agent_fails_soft():
-    async def _boom(q):
+    async def _boom(q, **kw):
         raise RuntimeError("openclaw down")
 
     repo = _Repo()
@@ -511,9 +511,22 @@ async def test_agent_fails_soft():
 
 
 async def test_agent_needs_admission():
-    async def _a(q):
+    async def _a(q, **kw):
         raise AssertionError("must not run")
 
     repo = _Repo(user={"telegram_id": USER, "status": "pending", "role": "client"})
     out = await handle_agent(_ctx_agent(repo, _a), user_id=USER, chat_id=1, query="x")
     assert "не одобрена" in out
+
+
+async def test_agent_passes_the_chat_session_for_followups():
+    """openclaw keeps its own per-session memory; the bot must hand it a
+    per-chat key so a follow-up carries."""
+    seen = {}
+
+    async def _a(q, *, session=""):
+        seen["session"] = session
+        return "ok"
+
+    await handle_agent(_ctx_agent(_Repo(), _a), user_id=USER, chat_id=555, query="x")
+    assert seen["session"] == "tg:555"

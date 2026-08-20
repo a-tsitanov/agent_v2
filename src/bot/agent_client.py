@@ -18,18 +18,26 @@ AGENT_MODEL = "openclaw"
 
 def make_agent(
     *, base_url: str, token: str, timeout_s: float = 300.0,
-) -> Callable[[str], Awaitable[str]]:
+) -> Callable[..., Awaitable[str]]:
     """Build `agent(question) -> answer`. Raises on non-2xx / transport
     error so the caller's fail-soft path records it against the request."""
     url = f"{base_url.rstrip('/')}/v1/chat/completions"
 
-    async def agent(question: str) -> str:
+    async def agent(question: str, *, session: str = "") -> str:
         async with httpx.AsyncClient(timeout=timeout_s) as http:
             resp = await http.post(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
-                json={"model": AGENT_MODEL,
-                      "messages": [{"role": "user", "content": question}]},
+                json={
+                    "model": AGENT_MODEL,
+                    "messages": [{"role": "user", "content": question}],
+                    # openclaw maps the OpenAI `user` field to its sessionKey
+                    # (verified 2026-08-20: a second call with the same `user`
+                    # recalled the first). One key per chat = per-chat agent
+                    # memory, so follow-ups carry — the thing the bare call
+                    # dropped.
+                    **({"user": session} if session else {}),
+                },
             )
             resp.raise_for_status()
             body = resp.json() or {}

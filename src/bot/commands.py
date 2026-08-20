@@ -228,14 +228,15 @@ async def handle_agent(
         return refusal
     return await _run_search(
         ctx, user_id=user_id, chat_id=chat_id, command="/agent", query=query,
-        fn=lambda q: _wrap_agent(ctx, q),
+        fn=lambda q: _wrap_agent(ctx, q, session=f"tg:{chat_id}"),
         render=lambda r: r.get("answer") or SEARCH_ERROR,
     )
 
 
-async def _wrap_agent(ctx: Ctx, q: str) -> dict:
+async def _wrap_agent(ctx: Ctx, q: str, *, session: str) -> dict:
     # _run_search expects {answer, sources}; the agent returns prose only.
-    return {"answer": await ctx.agent(q), "sources": []}
+    # `session` = per-chat sessionKey so openclaw carries follow-ups.
+    return {"answer": await ctx.agent(q, session=session), "sources": []}
 
 
 async def handle_channels(ctx: Ctx, *, user_id: int, username: str = "") -> str:
