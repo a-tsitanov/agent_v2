@@ -459,27 +459,49 @@ class GraphRetriever:
 
         return self._map_walk_rows(rows)
 
+    async def _nebula_knn_names(self, query: str) -> list[str]:
+        """Embed the query and kNN over ``er_vec`` (Milvus entity vectors),
+        returning the matched entity names."""
+        from src.graph.entity_vector_store import build_entity_vector_store
+        from src.ingestion.embeddings import build_embedding_model
+
+        vec = await build_embedding_model().aget_text_embedding(query)
+        evs = build_entity_vector_store(self._graph_store)
+        cands = await asyncio.to_thread(evs.knn, vec, self._similarity_top_k)
+        # EntityCandidate is a TypedDict (a dict), not an attr object.
+        return [c.get("name") for c in cands if isinstance(c, dict) and c.get("name")]
+
+    async def _entity_table_names(self, query: str) -> list[dict]:
+        """Lexical seeds from the Postgres entity mirror. Fail-soft: an
+        outage here just means the vector path stands alone."""
+        try:
+            from src.storage.entity_search import EntitySearchRepository
+            return await EntitySearchRepository().search(
+                query, mode="substring", limit=self._similarity_top_k,
+            )
+        except Exception as exc:
+            logger.warning("entity-table seed failed (vector-only): {e}", e=repr(exc))
+            return []
+
     async def _aretrieve_nebula(
         self, query: str, path_depth: int | None,
     ) -> RoundGraphData:
-        """graph_search under nebula: embed the query, kNN over ``er_vec``
-        (Milvus entity vectors), then subgraph-expand each matched entity via
-        ``awalk``. There is no LlamaIndex PropertyGraphIndex retriever here.
-        Fail-soft — any error yields empty."""
+        """graph_search under nebula: union vector kNN (``er_vec`` in Milvus)
+        and lexical hits from the Postgres entity mirror, then
+        subgraph-expand each matched entity via ``awalk``. There is no
+        LlamaIndex PropertyGraphIndex retriever here. Fail-soft — a vector
+        or table outage degrades to the other path, not to empty."""
         if self._graph_store is None or not (query or "").strip():
             return RoundGraphData()
         try:
-            from src.graph.entity_vector_store import build_entity_vector_store
-            from src.ingestion.embeddings import build_embedding_model
-
-            vec = await build_embedding_model().aget_text_embedding(query)
-            evs = build_entity_vector_store(self._graph_store)
-            cands = await asyncio.to_thread(evs.knn, vec, self._similarity_top_k)
-            # EntityCandidate is a TypedDict (a dict), not an attr object.
-            names = [c.get("name") for c in cands if isinstance(c, dict) and c.get("name")]
+            knn_names = await self._nebula_knn_names(query)
         except Exception as exc:  # embed / vector-store / kNN failure
             logger.warning("aretrieve (nebula) entity kNN failed: {e}", e=repr(exc))
-            return RoundGraphData()
+            knn_names = []
+        table_rows = await self._entity_table_names(query)
+        names = list(dict.fromkeys(
+            [*knn_names, *[r["name"] for r in table_rows if r.get("name")]]
+        ))
 
         hops = path_depth if path_depth is not None else 1
         out = RoundGraphData()

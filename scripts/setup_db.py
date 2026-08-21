@@ -262,6 +262,29 @@ CREATE TABLE IF NOT EXISTS er_verdict (
 );
 """
 
+# Search mirror of the graph's entities. NOT a second source of truth —
+# the graph stays canonical; this is a trigram-indexed flat copy so name
+# lookup (exact/prefix/substring + label filter) runs in Postgres instead
+# of scanning Nebula, which falls over on full scans. `vid` is the same
+# entity_vid(name) key the graph vertex uses, so the mirror lines up by
+# key. No pagerank/betweenness: those are offline and would drift.
+_ENTITY_DDL = """
+CREATE TABLE IF NOT EXISTS entity (
+    vid           TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    label         TEXT NOT NULL DEFAULT '',
+    description   TEXT NOT NULL DEFAULT '',
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+_ENTITY_INDEXES_DDL = """
+CREATE INDEX IF NOT EXISTS entity_name_trgm_idx
+    ON entity USING GIN (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS entity_label_idx ON entity (label);
+"""
+
 _STAT_INDEXES_DDL = """
 CREATE INDEX IF NOT EXISTS stat_observation_series_idx
     ON stat_observation (indicator_id, period_start);
@@ -400,6 +423,8 @@ def setup_postgres() -> None:
         cur.execute(_STAT_OBSERVATION_DDL)
         cur.execute(_STAT_INDEXES_DDL)
         cur.execute(_ER_VERDICT_DDL)
+        cur.execute(_ENTITY_DDL)
+        cur.execute(_ENTITY_INDEXES_DDL)
         cur.execute(_BOT_USER_DDL)
         cur.execute(_BOT_REQUEST_DDL)
         cur.execute(_BOT_INDEXES_DDL)

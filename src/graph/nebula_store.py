@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 
 from src.config import settings
+from src.graph.entity_table import mirror_entities, node_to_row
 from src.graph.nebula_schema import ensure_schema
 
 _store: NebulaGraphStore | None = None
@@ -191,6 +192,11 @@ class NebulaGraphStore:
                 + ";"
             )
             self._exec(stmt)
+
+            # Search mirror (fail-soft). Same nodes, same entity_vid key.
+            mirror_entities(
+                [node_to_row(n, entity_vid(getattr(n, "name", ""))) for n in chunk],
+            )
 
     def upsert_relations(self, relations: list[Any]) -> None:
         # Neo4j allows dynamic relationship types; Nebula needs declared
