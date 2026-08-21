@@ -23,7 +23,14 @@ _UPSERT = (
 
 
 def mirror_entities(rows: list[dict[str, Any]]) -> None:
-    """Upsert entity rows into Postgres. Fail-soft."""
+    """Upsert entity rows into Postgres. Fail-soft, fail-FAST.
+
+    ``timeout=1`` decouples connection acquisition from the shared sync
+    pool's ``pool_timeout_s`` (30s) — during a Postgres outage, a graph
+    write must not absorb up to 30s per chunk waiting on a search-only
+    mirror. The 1s budget still goes through the same try/except, so a
+    timeout is just another swallowed error.
+    """
     if not rows:
         return
     try:
@@ -31,10 +38,10 @@ def mirror_entities(rows: list[dict[str, Any]]) -> None:
 
         values = [
             (r["vid"], r["name"], r.get("label") or "",
-             r.get("description") or "", int(r.get("mention_count") or 1))
+             r.get("description") or "", int(r.get("mention_count") or 0))
             for r in rows
         ]
-        with get_pg_sync_pool().connection() as conn, conn.cursor() as cur:
+        with get_pg_sync_pool().connection(timeout=1) as conn, conn.cursor() as cur:
             cur.executemany(_UPSERT, values)
     except Exception as exc:
         logger.warning("entity mirror upsert failed (search only): {e}", e=exc)

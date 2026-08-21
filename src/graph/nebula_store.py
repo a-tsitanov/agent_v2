@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 
 from src.config import settings
+from src.graph.entity_table import mirror_entities
 from src.graph.nebula_schema import ensure_schema
 
 _store: NebulaGraphStore | None = None
@@ -193,8 +194,6 @@ class NebulaGraphStore:
             self._exec(stmt)
 
             # Search mirror (fail-soft). Same nodes, same entity_vid key.
-            from src.graph.entity_table import mirror_entities
-
             mirror_entities(
                 [
                     {

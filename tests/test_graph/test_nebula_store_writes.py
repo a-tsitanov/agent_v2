@@ -5,8 +5,19 @@ from types import SimpleNamespace
 
 import pytest
 
+import src.graph.nebula_store as nebula_store_mod
 from src.config import settings
 from src.graph.nebula_store import NebulaGraphStore, entity_vid
+
+
+@pytest.fixture(autouse=True)
+def _no_entity_mirror(monkeypatch):
+    """This file's contract is "no live DB" (see module docstring). The
+    entity-table mirror grafted onto upsert_nodes would otherwise reach for
+    a real Postgres pool on every call and, with Postgres unreachable,
+    stall behind mirror_entities' own fail-fast timeout — no-op it so this
+    file stays fast and DB-free."""
+    monkeypatch.setattr(nebula_store_mod, "mirror_entities", lambda rows: None)
 
 
 class _Cast:
