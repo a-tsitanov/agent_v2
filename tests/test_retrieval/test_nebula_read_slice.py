@@ -194,6 +194,10 @@ async def test_aretrieve_nebula_knn_then_expands(monkeypatch):
         "src.graph.entity_vector_store.build_entity_vector_store",
         lambda store: _EVS(), raising=False,
     )
+
+    async def _no_table_hits(_q):
+        return []
+
     subgraph_rows = [{
         "entities": [
             {"name": "Герань", "label": "Product", "description": ""},
@@ -206,9 +210,43 @@ async def test_aretrieve_nebula_knn_then_expands(monkeypatch):
     }]
     store = _FakeStore(subgraph_rows=subgraph_rows)
     r = GraphRetriever.for_store(store)
+    monkeypatch.setattr(r, "_entity_table_names", _no_table_hits, raising=False)
     out = await r.aretrieve("удары по Украине", path_depth=1)
     assert {e["entity_name"] for e in out.entities} == {"Герань", "Одесса"}
     assert [rel["label"] for rel in out.relations] == ["HIT"]
+
+
+@pytest.mark.asyncio
+async def test_aretrieve_unions_vector_and_table_seeds(monkeypatch):
+    """The walk seeds from BOTH the vector kNN and the entity-table lexical
+    hit — a named entity the vector misses still gets walked."""
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+    walked: list[str] = []
+
+    class _Store:
+        def structured_query(self, q, param_map=None):
+            return []
+
+    r = GraphRetriever.for_store(_Store())
+
+    async def _fake_knn_names(_q):
+        return ["Вектор-сущность"]
+
+    async def _fake_table(_q):
+        return [{"name": "Таблица-сущность"}]
+
+    async def _fake_walk(name, *, hops=1):
+        walked.append(name)
+        return RoundGraphData()
+
+    monkeypatch.setattr(r, "_nebula_knn_names", _fake_knn_names, raising=False)
+    monkeypatch.setattr(r, "_entity_table_names", _fake_table, raising=False)
+    monkeypatch.setattr(r, "awalk", _fake_walk)
+    await r.aretrieve("зерно")
+    assert "Вектор-сущность" in walked
+    assert "Таблица-сущность" in walked
 
 
 @pytest.mark.asyncio
