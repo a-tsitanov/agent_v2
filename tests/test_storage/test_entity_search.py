@@ -1,4 +1,14 @@
-from src.storage.entity_search import build_entity_search_query
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+
+import pytest
+from psycopg.rows import dict_row
+
+from src.storage.entity_search import EntitySearchRepository, build_entity_search_query
+
+# ── query builders ──────────────────────────────────────────────────
 
 
 def test_exact_matches_the_whole_name():
@@ -37,6 +47,94 @@ def test_mention_count_breaks_ties():
 
 
 def test_unknown_mode_is_rejected():
-    import pytest
     with pytest.raises(ValueError, match="unknown mode"):
         build_entity_search_query("x", mode="fuzzy", label=None, limit=5)
+
+
+# ── stubs ────────────────────────────────────────────────────────────
+# Same honest stub as tests/test_storage/test_stats_repository.py: rows
+# come back as dicts only when `row_factory=dict_row` was actually
+# requested, tuples otherwise — a repository read that forgets
+# `row_factory=dict_row` must fail loudly here too, not just in prod.
+
+
+@dataclass
+class _StubCursor:
+    rows: list[dict]
+    row_factory: object = None
+    executed: list[tuple] = field(default_factory=list)
+
+    async def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def _shaped(self, row):
+        if self.row_factory is dict_row:
+            return row
+        return tuple(row.values()) if isinstance(row, dict) else row
+
+    async def fetchall(self):
+        return [self._shaped(r) for r in self.rows]
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+@dataclass
+class _StubConn:
+    cur: _StubCursor
+
+    def cursor(self, *a, **kw):
+        self.cur.row_factory = kw.get("row_factory")
+        return self.cur
+
+
+def _repo_with(rows: list[dict]) -> tuple[EntitySearchRepository, _StubConn]:
+    conn = _StubConn(cur=_StubCursor(rows=rows))
+    repo = EntitySearchRepository()
+
+    @asynccontextmanager
+    async def _conn():
+        yield conn
+
+    repo._conn = _conn  # type: ignore[method-assign]
+    return repo, conn
+
+
+# ── EntitySearchRepository.search() ─────────────────────────────────
+
+
+async def test_blank_query_returns_empty_without_touching_pool():
+    repo, conn = _repo_with(rows=[{"vid": "e1"}])
+    result = await repo.search("   ")
+    assert result == []
+    assert conn.cur.executed == []  # no cursor.execute() call at all
+
+
+async def test_search_reads_rows_with_dict_row_factory():
+    rows = [
+        {"vid": "e1", "name": "Украина", "label": "Country",
+         "description": "", "mention_count": 5},
+    ]
+    repo, conn = _repo_with(rows=rows)
+    result = await repo.search("Украина", mode="exact")
+    assert conn.cur.row_factory is dict_row
+    # Honest stub: without dict_row this would come back as tuples and
+    # break `row["name"]`-style access downstream.
+    assert result == rows
+
+
+async def test_search_passes_mode_label_limit_through_to_builder():
+    rows = [
+        {"vid": "e2", "name": "Ромашка", "label": "Person",
+         "description": "d", "mention_count": 3},
+    ]
+    repo, conn = _repo_with(rows=rows)
+    result = await repo.search("Ромаш", mode="substring", label="Person", limit=7)
+    assert result == rows
+    sql, params = conn.cur.executed[0]
+    assert "name %% %s" in sql
+    assert "label = %s" in sql
+    assert params[-1] == 7
