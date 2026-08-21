@@ -18,16 +18,27 @@ def escape_ngql(value: str) -> str:
 
 
 def build_page_query(last_name: str | None, page: int) -> str:
-    where = (
-        f'WHERE `Entity`.name > "{escape_ngql(last_name)}" '
-        if last_name is not None else ""
-    )
+    """One page of entities, in name order, after `last_name`.
+
+    No `ORDER BY`: on the live store `LOOKUP | ORDER BY $-.name | LIMIT n`
+    sorts the ENTIRE ~163k-row scan in graphd memory before the first page
+    can be cut, which is what blew up as GraphMemoryExceeded (-2600) even
+    at page=50. An index-range `LOOKUP ... WHERE name >= "..."` already
+    returns rows in index (name-sorted) order — verified live — so the
+    WHERE range does double duty: it is both the resume filter and the
+    only source of ordering. A bare `LOOKUP` with no WHERE returns
+    unsorted scan order, so the first page still needs `>= ""` (the empty
+    string sorts before every name) rather than dropping the WHERE too.
+    """
+    last = last_name if last_name is not None else ""
+    op = ">" if last_name is not None else ">="
+    where = f'WHERE `Entity`.name {op} "{escape_ngql(last)}" '
     return (
         f"LOOKUP ON `Entity` {where}"
         "YIELD id(vertex) AS vid, `Entity`.name AS name, "
         "`Entity`.label AS label, `Entity`.description AS description, "
         "`Entity`.mention_count AS mc "
-        f"| ORDER BY $-.name | LIMIT {int(page)}"
+        f"| LIMIT {int(page)}"
     )
 
 

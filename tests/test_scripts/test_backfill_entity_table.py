@@ -1,17 +1,21 @@
 from scripts.backfill_entity_table import backfill, build_page_query
 
 
-def test_first_page_has_no_range_filter():
+def test_first_page_starts_at_the_index_head():
+    """No ORDER BY: on the live store, sorting the full ~163k-row scan in
+    graphd memory before cutting page 1 is what caused GraphMemoryExceeded
+    (-2600). The index-range WHERE already returns name-sorted rows, so
+    `>= ""` (empty string sorts first) both starts the range and orders it."""
     q = build_page_query(None, 500)
-    assert "WHERE" not in q
-    assert "ORDER BY $-.name" in q
+    assert 'WHERE `Entity`.name >= "" ' in q
+    assert "ORDER BY" not in q
     assert "LIMIT 500" in q
 
 
 def test_resumed_page_filters_past_the_last_name():
     q = build_page_query("Кремль", 500)
     assert 'WHERE `Entity`.name > "Кремль"' in q
-    assert "ORDER BY $-.name" in q
+    assert "ORDER BY" not in q
 
 
 def test_page_query_never_uses_offset_pagination():
