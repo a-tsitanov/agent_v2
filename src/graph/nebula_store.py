@@ -192,6 +192,26 @@ class NebulaGraphStore:
             )
             self._exec(stmt)
 
+            # Search mirror (fail-soft). Same nodes, same entity_vid key.
+            from src.graph.entity_table import mirror_entities
+
+            mirror_entities(
+                [
+                    {
+                        "vid": entity_vid(getattr(n, "name", "")),
+                        "name": getattr(n, "name", ""),
+                        "label": getattr(n, "label", "") or "",
+                        "description": (getattr(n, "properties", {}) or {}).get(
+                            "description", "",
+                        ),
+                        "mention_count": (getattr(n, "properties", {}) or {}).get(
+                            "mention_count", 1,
+                        ),
+                    }
+                    for n in chunk
+                ],
+            )
+
     def upsert_relations(self, relations: list[Any]) -> None:
         # Neo4j allows dynamic relationship types; Nebula needs declared
         # edge types. Entity-entity relations all become `RELATED`, with
