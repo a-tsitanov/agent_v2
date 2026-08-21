@@ -250,6 +250,60 @@ async def test_aretrieve_unions_vector_and_table_seeds(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_aretrieve_vector_outage_does_not_blank_the_lexical_path(monkeypatch):
+    """A naive try/except around the whole seeding block would blank both
+    paths on a kNN raise. The kNN raise must be caught alone — the table
+    seed still reaches the walk."""
+    monkeypatch.setattr(
+        "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
+    )
+    walked: list[str] = []
+
+    class _Store:
+        def structured_query(self, q, param_map=None):
+            return []
+
+    r = GraphRetriever.for_store(_Store())
+
+    async def _boom_knn(_q):
+        raise RuntimeError("embed down")
+
+    async def _fake_table(_q):
+        return [{"name": "Таблица-сущность"}]
+
+    async def _fake_walk(name, *, hops=1):
+        walked.append(name)
+        return RoundGraphData()
+
+    monkeypatch.setattr(r, "_nebula_knn_names", _boom_knn, raising=False)
+    monkeypatch.setattr(r, "_entity_table_names", _fake_table, raising=False)
+    monkeypatch.setattr(r, "awalk", _fake_walk)
+    await r.aretrieve("зерно")
+    assert walked == ["Таблица-сущность"]
+
+
+@pytest.mark.asyncio
+async def test_entity_table_names_catches_repository_failure(monkeypatch):
+    """Exercise `_entity_table_names`'s OWN try/except (not an outer mock
+    of the seam itself) — a Postgres/repository failure must not
+    propagate, just return []."""
+
+    async def _boom_search(self, query, *, mode="substring", label=None, limit=10):
+        raise RuntimeError("pg down")
+
+    monkeypatch.setattr(
+        "src.storage.entity_search.EntitySearchRepository.search", _boom_search,
+    )
+
+    class _Store:
+        def structured_query(self, q, param_map=None):
+            return []
+
+    r = GraphRetriever.for_store(_Store())
+    assert await r._entity_table_names("q") == []
+
+
+@pytest.mark.asyncio
 async def test_awalk_nebula_fails_open(monkeypatch):
     monkeypatch.setattr(
         "src.graph.retriever.settings.graph.backend", "nebula", raising=False,
