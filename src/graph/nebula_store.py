@@ -18,7 +18,7 @@ from typing import Any
 from loguru import logger
 
 from src.config import settings
-from src.graph.entity_table import mirror_entities
+from src.graph.entity_table import mirror_entities, node_to_row
 from src.graph.nebula_schema import ensure_schema
 
 _store: NebulaGraphStore | None = None
@@ -195,20 +195,7 @@ class NebulaGraphStore:
 
             # Search mirror (fail-soft). Same nodes, same entity_vid key.
             mirror_entities(
-                [
-                    {
-                        "vid": entity_vid(getattr(n, "name", "")),
-                        "name": getattr(n, "name", ""),
-                        "label": getattr(n, "label", "") or "",
-                        "description": (getattr(n, "properties", {}) or {}).get(
-                            "description", "",
-                        ),
-                        "mention_count": (getattr(n, "properties", {}) or {}).get(
-                            "mention_count", 1,
-                        ),
-                    }
-                    for n in chunk
-                ],
+                [node_to_row(n, entity_vid(getattr(n, "name", ""))) for n in chunk],
             )
 
     def upsert_relations(self, relations: list[Any]) -> None:

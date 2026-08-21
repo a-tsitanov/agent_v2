@@ -22,6 +22,25 @@ _UPSERT = (
 )
 
 
+def node_to_row(n: Any, vid: str) -> dict[str, Any]:
+    """Map a write-path node (as ``upsert_nodes`` iterates it: ``.name``,
+    ``.label``, ``.properties``) to a mirror row dict.
+
+    ``mention_count`` defaults to 0 here to match nebula_store's own
+    vertex write (``int(props.get('mention_count', 0) or 0)``) — this
+    helper is the one place both the graft in ``upsert_nodes`` and its
+    test go through, so the two writes can no longer drift on the default.
+    """
+    props = getattr(n, "properties", {}) or {}
+    return {
+        "vid": vid,
+        "name": getattr(n, "name", ""),
+        "label": getattr(n, "label", "") or "",
+        "description": props.get("description", ""),
+        "mention_count": props.get("mention_count", 0),
+    }
+
+
 def mirror_entities(rows: list[dict[str, Any]]) -> None:
     """Upsert entity rows into Postgres. Fail-soft, fail-FAST.
 
@@ -47,4 +66,4 @@ def mirror_entities(rows: list[dict[str, Any]]) -> None:
         logger.warning("entity mirror upsert failed (search only): {e}", e=exc)
 
 
-__all__ = ["mirror_entities"]
+__all__ = ["mirror_entities", "node_to_row"]

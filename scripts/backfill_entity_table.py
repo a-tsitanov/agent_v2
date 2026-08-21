@@ -99,7 +99,7 @@ def backfill(
         write([
             {"vid": r["vid"], "name": r["name"], "label": r.get("label") or "",
              "description": r.get("description") or "",
-             "mention_count": int(r.get("mc") or 1)}
+             "mention_count": int(r.get("mc") or 0)}
             for r in rows
         ])
         copied += len(rows)

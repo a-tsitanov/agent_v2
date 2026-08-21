@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 
 import src.storage.pg_sync_pool as pg_sync_pool_mod
-from src.graph.entity_table import mirror_entities
+from src.graph.entity_table import mirror_entities, node_to_row
 
 # ── stubs ────────────────────────────────────────────────────────────
 
@@ -124,6 +125,36 @@ def test_mention_count_defaults_to_zero_to_match_the_graph_vertex(mirror_with_po
     fn([{"vid": "v1", "name": "n", "label": "", "description": ""}])
     _sql, params = pool.executed[0]
     assert params[0][4] == 0
+
+
+def test_node_to_row_defaults_mention_count_to_zero_to_match_the_vertex_write():
+    """This is the REAL graft path: nebula_store.upsert_nodes builds
+    `mirror_entities([node_to_row(n, ...) for n in chunk])` from the same
+    node objects (.name/.label/.properties) it iterates for the vertex
+    INSERT. A node with no mention_count in its properties must map to
+    row mention_count 0, matching nebula_store.row()'s
+    `int(props.get('mention_count', 0) or 0)`.
+
+    The old test above (test_mention_count_defaults_to_zero_to_match_the_
+    graph_vertex) only calls mirror_entities directly with a hand-built
+    dict, so it never exercised the graft's own node->row mapping — that
+    mapping used to default to 1 instead of 0."""
+    node = SimpleNamespace(name="n", label="", properties={})
+    row = node_to_row(node, "v1")
+    assert row["mention_count"] == 0
+    assert row == {
+        "vid": "v1", "name": "n", "label": "", "description": "", "mention_count": 0,
+    }
+
+
+def test_node_to_row_reads_mention_count_when_present():
+    node = SimpleNamespace(
+        name="n", label="Person", properties={"description": "d", "mention_count": 5},
+    )
+    row = node_to_row(node, "v1")
+    assert row["mention_count"] == 5
+    assert row["label"] == "Person"
+    assert row["description"] == "d"
 
 
 def test_connection_uses_a_short_timeout_decoupled_from_the_pool_budget(mirror_with_pool):

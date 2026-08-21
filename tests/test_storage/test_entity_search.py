@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 from psycopg.rows import dict_row
 
+import src.storage.entity_search as entity_search_mod
 from src.storage.entity_search import EntitySearchRepository, build_entity_search_query
 
 # ── query builders ──────────────────────────────────────────────────
@@ -124,6 +125,39 @@ async def test_search_reads_rows_with_dict_row_factory():
     # Honest stub: without dict_row this would come back as tuples and
     # break `row["name"]`-style access downstream.
     assert result == rows
+
+
+class _StubPool:
+    """Records every `timeout=` `.connection()` was called with."""
+
+    def __init__(self, conn: _StubConn) -> None:
+        self._conn = conn
+        self.connection_timeouts: list[float | None] = []
+
+    @asynccontextmanager
+    async def connection(self, timeout=None):
+        self.connection_timeouts.append(timeout)
+        yield self._conn
+
+
+async def test_conn_acquires_the_pool_connection_with_a_short_timeout(monkeypatch):
+    """FAIL-FAST: a Postgres outage must not stall entity search behind
+    the shared pool's full pool_timeout_s (~30s) — `_conn()` asks for a
+    connection with its own short (1s) budget instead, so
+    `_entity_table_names`'s fail-soft catch fires in ~1s. Mirrors
+    entity_table.mirror_entities' `timeout=1` on the write side."""
+    rows = [{"vid": "e1", "name": "x", "label": "", "description": "", "mention_count": 1}]
+    conn = _StubConn(cur=_StubCursor(rows=rows))
+    pool = _StubPool(conn)
+
+    async def _get_pool():
+        return pool
+
+    monkeypatch.setattr(entity_search_mod, "get_pg_pool", _get_pool)
+    repo = EntitySearchRepository()
+    result = await repo.search("x", mode="exact")
+    assert result == rows
+    assert pool.connection_timeouts == [1]
 
 
 async def test_search_passes_mode_label_limit_through_to_builder():

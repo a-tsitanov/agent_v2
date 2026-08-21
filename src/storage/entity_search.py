@@ -64,7 +64,11 @@ class EntitySearchRepository:
     async def _conn(self) -> AsyncIterator[psycopg.AsyncConnection]:
         if self._dsn is None:
             pool = await get_pg_pool()
-            async with pool.connection() as conn:
+            # timeout=1 bounds connection acquisition during a Postgres
+            # outage so `_entity_table_names`'s fail-soft catch fires in
+            # ~1s instead of stalling behind the pool's full pool_timeout_s
+            # (~30s) — mirrors entity_table.mirror_entities' timeout=1.
+            async with pool.connection(timeout=1) as conn:
                 yield conn
         else:
             async with await psycopg.AsyncConnection.connect(self._dsn) as conn:
